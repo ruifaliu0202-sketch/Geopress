@@ -86,6 +86,7 @@ type generateContentRequest struct {
 	Keywords        []string `json:"keywords"`
 	ContentType     string   `json:"contentType"`
 	KnowledgeBaseID string   `json:"knowledgeBaseId"`
+	PublishFormatID string   `json:"publishFormatId"`
 }
 
 type createContentRequest struct {
@@ -106,10 +107,11 @@ type createPublishScheduleRequest struct {
 }
 
 type preparePublishRequest struct {
-	ContentID      string   `json:"contentId"`
-	MediaAccountID string   `json:"mediaAccountId"`
-	AssetPaths     []string `json:"assetPaths"`
-	RunNow         bool     `json:"runNow"`
+	ContentID       string   `json:"contentId"`
+	MediaAccountID  string   `json:"mediaAccountId"`
+	PublishFormatID string   `json:"publishFormatId"`
+	AssetPaths      []string `json:"assetPaths"`
+	RunNow          bool     `json:"runNow"`
 }
 
 type confirmPublishRequest struct {
@@ -118,7 +120,8 @@ type confirmPublishRequest struct {
 }
 
 type runPublishJobRequest struct {
-	AssetPaths []string `json:"assetPaths"`
+	AssetPaths   []string                `json:"assetPaths"`
+	PreparedPost publishing.PreparedPost `json:"preparedPost"`
 }
 
 type createMediaPlatformRequest struct {
@@ -1020,7 +1023,9 @@ func (h *WorkspaceHandler) GenerateContent(c *gin.Context) {
 
 	now := time.Now().UTC()
 	knowledgeBaseID := strings.TrimSpace(req.KnowledgeBaseID)
-	skill := ai.SelectWritingSkill(req.ContentType)
+	contentType := publishFormatOrContentType(req.PublishFormatID, req.ContentType, ai.FormatGenericArticle)
+	skill := ai.SelectWritingSkill(contentType)
+	publishFormat := ai.SelectPublishFormat(skill.ContentType)
 
 	h.mu.RLock()
 	workspace, _ := h.workspaceByID(workspaceID)
@@ -1041,6 +1046,7 @@ func (h *WorkspaceHandler) GenerateContent(c *gin.Context) {
 			Tone:     workspace.Tone,
 		},
 		Skill:           skill,
+		PublishFormat:   publishFormat,
 		KnowledgeChunks: chunks,
 	}
 
@@ -1103,7 +1109,7 @@ func (h *WorkspaceHandler) GenerateContent(c *gin.Context) {
 		Keywords:        cleanKeywords(response.Draft.Keywords),
 		Status:          model.ContentDraft,
 		Author:          "AI Writer",
-		Source:          "ai_" + defaultString(response.Provider, "mock"),
+		Source:          "ai_" + defaultString(response.Provider, "mock") + ":" + publishFormat.ID,
 		UpdatedAt:       now,
 	}
 
@@ -1284,12 +1290,14 @@ func (h *WorkspaceHandler) PreparePublish(c *gin.Context) {
 		return
 	}
 
+	publishFormatID := publishFormatOrContentType(req.PublishFormatID, "", ai.FormatXiaohongshuLongArticle)
 	prepared, err := publisher.Prepare(c.Request.Context(), publishing.PrepareRequest{
-		Workspace:   workspace,
-		Content:     content,
-		Account:     account,
-		Platform:    platform,
-		RequestedAt: now,
+		Workspace:       workspace,
+		Content:         content,
+		Account:         account,
+		Platform:        platform,
+		PublishFormatID: publishFormatID,
+		RequestedAt:     now,
 	})
 	if err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
@@ -1303,7 +1311,7 @@ func (h *WorkspaceHandler) PreparePublish(c *gin.Context) {
 		MediaAccountID: account.ID,
 		Status:         model.PublishJobManual,
 		ScheduledAt:    now,
-		LastMessage:    "小红书发布包已生成，等待 Mock 真人接口发布。",
+		LastMessage:    "小红书长文发布内容已生成，等待确认后通过浏览器发布。",
 	}
 
 	h.mu.Lock()
@@ -1312,7 +1320,7 @@ func (h *WorkspaceHandler) PreparePublish(c *gin.Context) {
 	h.mu.Unlock()
 
 	if req.RunNow {
-		result, err := h.runPublish(c.Request.Context(), workspaceID, job.ID, prepared, req.AssetPaths)
+		result, err := h.runPublish(c.Request.Context(), workspace, account, platform, job.ID, prepared, req.AssetPaths)
 		if err != nil {
 			c.JSON(http.StatusBadGateway, gin.H{"error": err.Error(), "job": h.jobSnapshot(workspaceID, job.ID), "preparedPost": prepared})
 			return
@@ -1372,19 +1380,36 @@ func (h *WorkspaceHandler) RunPublishJob(c *gin.Context) {
 		return
 	}
 
-	prepared, err := publisher.Prepare(c.Request.Context(), publishing.PrepareRequest{
-		Workspace:   workspace,
-		Content:     content,
-		Account:     account,
-		Platform:    platform,
-		RequestedAt: time.Now().UTC(),
-	})
-	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
-		return
+	prepared := req.PreparedPost
+	if strings.TrimSpace(prepared.Title) == "" || strings.TrimSpace(prepared.Body) == "" {
+		var err error
+		prepared, err = publisher.Prepare(c.Request.Context(), publishing.PrepareRequest{
+			Workspace:       workspace,
+			Content:         content,
+			Account:         account,
+			Platform:        platform,
+			PublishFormatID: ai.FormatXiaohongshuLongArticle,
+			RequestedAt:     time.Now().UTC(),
+		})
+		if err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+			return
+		}
+	}
+	if prepared.PlatformType == "" {
+		prepared.PlatformType = platform.Type
+	}
+	if prepared.PlatformName == "" {
+		prepared.PlatformName = platform.Name
+	}
+	if prepared.PublishFormatID == "" {
+		prepared.PublishFormatID = ai.FormatXiaohongshuLongArticle
+	}
+	if prepared.PublishMode == "" {
+		prepared.PublishMode = "long_article"
 	}
 
-	result, err := h.runPublish(c.Request.Context(), workspaceID, jobID, prepared, req.AssetPaths)
+	result, err := h.runPublish(c.Request.Context(), workspace, account, platform, jobID, prepared, req.AssetPaths)
 	if err != nil {
 		c.JSON(http.StatusBadGateway, gin.H{"error": err.Error(), "job": h.jobSnapshot(workspaceID, jobID), "preparedPost": prepared})
 		return
@@ -1444,13 +1469,16 @@ func (h *WorkspaceHandler) ConfirmPublishJob(c *gin.Context) {
 
 func (h *WorkspaceHandler) runPublish(
 	ctx context.Context,
-	workspaceID string,
+	workspace model.Workspace,
+	account model.MediaAccount,
+	platform model.MediaPlatform,
 	jobID string,
 	prepared publishing.PreparedPost,
 	assetPaths []string,
 ) (publishing.PublishResult, error) {
+	workspaceID := workspace.ID
 	h.mu.Lock()
-	h.updateJobStatusLocked(workspaceID, jobID, model.PublishJobRunning, "", "正在调用小红书 Mock 真人接口发布。")
+	h.updateJobStatusLocked(workspaceID, jobID, model.PublishJobRunning, "", "正在通过已登录浏览器发布小红书长文。")
 	h.mu.Unlock()
 
 	publisher, supported := publisherForPlatform(prepared.PlatformType)
@@ -1458,9 +1486,15 @@ func (h *WorkspaceHandler) runPublish(
 		return publishing.PublishResult{}, fmt.Errorf("unsupported platform type: %s", prepared.PlatformType)
 	}
 
+	profileDir, stateFile := xiaohongshu.BrowserProfileMetadata(account, workspaceID)
 	result, err := publisher.Publish(ctx, publishing.PublishRequest{
+		Workspace:    workspace,
+		Account:      account,
+		Platform:     platform,
 		PreparedPost: prepared,
 		AssetPaths:   cleanKeywords(assetPaths),
+		ProfileDir:   profileDir,
+		StateFile:    stateFile,
 	})
 	if err != nil {
 		h.mu.Lock()
@@ -1473,6 +1507,11 @@ func (h *WorkspaceHandler) runPublish(
 	message := defaultString(result.Message, "已打开浏览器并完成小红书发布准备。")
 	if result.Status == "published" {
 		status = model.PublishJobSucceeded
+	} else if result.Status == "submitted_pending_verification" {
+		status = model.PublishJobManual
+		if strings.TrimSpace(message) == "" {
+			message = "已尝试浏览器发布，但未检测到小红书明确成功提示，请人工核对后确认。"
+		}
 	}
 
 	h.mu.Lock()
@@ -1980,10 +2019,20 @@ func defaultString(value, fallback string) string {
 	return value
 }
 
+func publishFormatOrContentType(values ...string) string {
+	for _, value := range values {
+		value = strings.TrimSpace(value)
+		if value != "" {
+			return value
+		}
+	}
+	return ai.FormatGenericArticle
+}
+
 func publisherForPlatform(platformType string) (publishing.Publisher, bool) {
 	switch platformType {
 	case xiaohongshu.PlatformType:
-		return xiaohongshu.NewMockHumanPublisher(), true
+		return xiaohongshu.NewBrowserLongArticlePublisher(), true
 	default:
 		return nil, false
 	}

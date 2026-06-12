@@ -117,6 +117,8 @@ export type PreparedPost = {
   mode: string;
   platformType: string;
   platformName: string;
+  publishFormatId: string;
+  publishMode: string;
   title: string;
   body: string;
   hashtags: string[];
@@ -207,6 +209,7 @@ export type GenerateContentPayload = {
   keywords: string[];
   contentType: string;
   knowledgeBaseId: string;
+  publishFormatId?: string;
 };
 
 export type CreateContentPayload = {
@@ -229,6 +232,7 @@ export type CreatePublishSchedulePayload = {
 export type PreparePublishPayload = {
   contentId: string;
   mediaAccountId: string;
+  publishFormatId?: string;
   assetPaths?: string[];
   runNow?: boolean;
 };
@@ -246,6 +250,7 @@ export type ConfirmPublishPayload = {
 
 export type RunPublishJobPayload = {
   assetPaths?: string[];
+  preparedPost?: PreparedPost;
 };
 
 export type RunPublishJobResponse = {

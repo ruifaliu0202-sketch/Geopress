@@ -40,7 +40,6 @@ import AccountTreeOutlinedIcon from '@mui/icons-material/AccountTreeOutlined';
 import AddIcon from '@mui/icons-material/Add';
 import ArticleOutlinedIcon from '@mui/icons-material/ArticleOutlined';
 import AutorenewIcon from '@mui/icons-material/Autorenew';
-import CheckCircleOutlineIcon from '@mui/icons-material/CheckCircleOutline';
 import ContentCopyIcon from '@mui/icons-material/ContentCopy';
 import DashboardOutlinedIcon from '@mui/icons-material/DashboardOutlined';
 import KeyOutlinedIcon from '@mui/icons-material/KeyOutlined';
@@ -59,7 +58,6 @@ import {
   fetchWorkspace,
   generateContent,
   login,
-  confirmPublishJob,
   preparePublish,
   runPublishJob,
   startMediaAccountBrowserLogin,
@@ -1134,7 +1132,7 @@ function GenerateDialog({
   bases: KnowledgeBase[];
 }) {
   const [keywords, setKeywords] = useState('内容营销, 增长');
-  const [contentType, setContentType] = useState('article');
+  const [contentType, setContentType] = useState('xiaohongshu_long_article');
   const [knowledgeBaseId, setKnowledgeBaseId] = useState('');
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -1155,7 +1153,7 @@ function GenerateDialog({
     setSubmitting(true);
     setError(null);
     try {
-      await generateContent(props.token, props.workspaceId, { keywords: values, contentType, knowledgeBaseId });
+      await generateContent(props.token, props.workspaceId, { keywords: values, contentType, knowledgeBaseId, publishFormatId: contentType });
       props.onCreated();
     } catch (err) {
       setError(err instanceof Error ? err.message : '生成失败');
@@ -1165,14 +1163,15 @@ function GenerateDialog({
   };
 
   return (
-    <FormDialog title="关键词生成文章" open={props.open} error={error} submitting={submitting} onClose={props.onClose} onSubmit={submit}>
+    <FormDialog title="关键词生成发布内容" open={props.open} error={error} submitting={submitting} onClose={props.onClose} onSubmit={submit}>
       <SelectField label="知识库上下文" value={knowledgeBaseId} onChange={setKnowledgeBaseId} items={bases.map((base) => ({ value: base.id, label: base.name }))} />
       <SelectField
         label="内容类型"
         value={contentType}
         onChange={setContentType}
         items={[
-          { value: 'article', label: '长文章' },
+          { value: 'xiaohongshu_long_article', label: '小红书长文' },
+          { value: 'article', label: '通用长文章' },
           { value: 'brief', label: '短文' },
           { value: 'case_study', label: '案例稿' },
           { value: 'product_intro', label: '产品介绍' },
@@ -1283,12 +1282,11 @@ function PublishPrepareDialog({
   const [mediaAccountId, setMediaAccountId] = useState('');
   const [prepared, setPrepared] = useState<PreparePublishResponse | null>(null);
   const [publishResult, setPublishResult] = useState<PreparePublishResponse['publishResult']>(undefined);
-  const [externalUrl, setExternalUrl] = useState('');
-  const [assetPaths, setAssetPaths] = useState('');
+  const [publishTitle, setPublishTitle] = useState('');
+  const [publishBody, setPublishBody] = useState('');
   const [copiedLabel, setCopiedLabel] = useState('');
   const [submitting, setSubmitting] = useState(false);
   const [running, setRunning] = useState(false);
-  const [confirming, setConfirming] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
@@ -1298,8 +1296,8 @@ function PublishPrepareDialog({
       setMediaAccountId(xiaohongshuAccounts[0]?.id ?? '');
       setPrepared(null);
       setPublishResult(undefined);
-      setExternalUrl('');
-      setAssetPaths('');
+      setPublishTitle('');
+      setPublishBody('');
       setCopiedLabel('');
       setError(null);
     }
@@ -1315,9 +1313,11 @@ function PublishPrepareDialog({
     setSubmitting(true);
     setError(null);
     try {
-      const result = await preparePublish(props.token, props.workspaceId, { contentId, mediaAccountId });
+      const result = await preparePublish(props.token, props.workspaceId, { contentId, mediaAccountId, publishFormatId: 'xiaohongshu_long_article' });
       setPrepared(result);
       setPublishResult(result.publishResult);
+      setPublishTitle(result.preparedPost.title);
+      setPublishBody(result.preparedPost.body);
     } catch (err) {
       setError(err instanceof Error ? err.message : '发布准备失败');
     } finally {
@@ -1332,16 +1332,22 @@ function PublishPrepareDialog({
     setRunning(true);
     setError(null);
     try {
+      const preparedPost: PreparedPost = {
+        ...prepared.preparedPost,
+        title: publishTitle.trim(),
+        body: publishBody.trim(),
+        characterCount: publishBody.trim().length,
+        publishFormatId: 'xiaohongshu_long_article',
+        publishMode: 'long_article',
+      };
       const result = await runPublishJob(props.token, props.workspaceId, prepared.job.id, {
-        assetPaths: splitLines(assetPaths),
+        preparedPost,
       });
       setPrepared({ job: result.job, preparedPost: result.preparedPost, publishResult: result.publishResult });
       setPublishResult(result.publishResult);
-      if (result.publishResult.externalUrl) {
-        setExternalUrl(result.publishResult.externalUrl);
-      }
+      props.onCreated();
     } catch (err) {
-      setError(err instanceof Error ? err.message : '模拟发布失败');
+      setError(err instanceof Error ? err.message : '小红书浏览器发布失败');
     } finally {
       setRunning(false);
     }
@@ -1357,34 +1363,23 @@ function PublishPrepareDialog({
     }
   };
 
-  const handleConfirm = async () => {
-    if (!prepared) {
-      return;
-    }
-    if (!externalUrl.trim()) {
-      setError('请填写小红书笔记链接');
-      return;
-    }
-    setConfirming(true);
-    setError(null);
-    try {
-      await confirmPublishJob(props.token, props.workspaceId, prepared.job.id, {
-        externalUrl: externalUrl.trim(),
-        message: '小红书笔记链接已回填。',
-      });
-      props.onCreated();
-    } catch (err) {
-      setError(err instanceof Error ? err.message : '确认发布失败');
-    } finally {
-      setConfirming(false);
-    }
-  };
-
-  const busy = submitting || running || confirming;
+  const busy = submitting || running;
+  const previewPost = prepared
+    ? {
+        ...prepared.preparedPost,
+        title: publishTitle,
+        body: publishBody,
+        characterCount: publishBody.length,
+        copyBlocks: [
+          { label: '长文标题', value: publishTitle },
+          { label: '长文正文', value: publishBody },
+        ],
+      }
+    : null;
 
   return (
     <Dialog open={props.open} onClose={busy ? undefined : props.onClose} fullWidth maxWidth="md">
-      <DialogTitle>发布到小红书</DialogTitle>
+      <DialogTitle>发布小红书长文</DialogTitle>
       <DialogContent>
         <Stack spacing={2} sx={{ pt: 1 }}>
           {error && <Alert severity="error">{error}</Alert>}
@@ -1427,19 +1422,25 @@ function PublishPrepareDialog({
             </Paper>
           )}
 
-          {prepared && <PreparedPostPanel post={prepared.preparedPost} copiedLabel={copiedLabel} onCopy={handleCopy} />}
+          {previewPost && <PreparedPostPanel post={previewPost} copiedLabel={copiedLabel} onCopy={handleCopy} />}
 
           {prepared && (
             <Stack spacing={1.5}>
               <TextField
-                label="素材路径"
-                value={assetPaths}
-                onChange={(event) => setAssetPaths(event.target.value)}
-                placeholder="/home/ruifa/Pictures/cover.png"
-                helperText="每行一个素材路径；Mock 接口会记录素材数量，不会上传真实文件。"
+                label="小红书长文标题"
+                value={publishTitle}
+                onChange={(event) => setPublishTitle(event.target.value.slice(0, 64))}
+                helperText={`${publishTitle.length}/64`}
+                fullWidth
+              />
+              <TextField
+                label="小红书长文正文"
+                value={publishBody}
+                onChange={(event) => setPublishBody(event.target.value)}
+                helperText={`${publishBody.length} 字。确认后后台会用已登录浏览器打开小红书长文编辑器并点击发布。`}
                 fullWidth
                 multiline
-                minRows={2}
+                minRows={10}
               />
               {publishResult && (
                 <Alert severity={publishResult.status === 'published' ? 'success' : 'info'}>
@@ -1447,13 +1448,6 @@ function PublishPrepareDialog({
                   {publishResult.externalId ? ` 笔记 ID：${publishResult.externalId}` : ''}
                 </Alert>
               )}
-              <TextField
-                label="小红书笔记链接"
-                value={externalUrl}
-                onChange={(event) => setExternalUrl(event.target.value)}
-                placeholder="https://www.xiaohongshu.com/explore/..."
-                fullWidth
-              />
             </Stack>
           )}
         </Stack>
@@ -1468,13 +1462,8 @@ function PublishPrepareDialog({
           </Button>
         )}
         {prepared && (
-          <Button onClick={handleRun} disabled={busy} variant="outlined">
-            调用 Mock 发布接口
-          </Button>
-        )}
-        {prepared && (
-          <Button startIcon={<CheckCircleOutlineIcon />} onClick={handleConfirm} disabled={busy || !externalUrl.trim()} variant="contained">
-            确认已发布
+          <Button onClick={handleRun} disabled={busy || !publishTitle.trim() || !publishBody.trim()} variant="contained">
+            确认发布
           </Button>
         )}
       </DialogActions>
@@ -2009,12 +1998,6 @@ function splitKeywords(value: string) {
     .filter(Boolean);
 }
 
-function splitLines(value: string) {
-  return value
-    .split(/\n/)
-    .map((item) => item.trim())
-    .filter(Boolean);
-}
 
 function formatDate(value: string) {
   return new Intl.DateTimeFormat('zh-CN', {

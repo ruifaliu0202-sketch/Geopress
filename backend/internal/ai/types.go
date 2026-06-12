@@ -52,6 +52,7 @@ type GenerateRequest struct {
 	Keywords        []string
 	Workspace       WorkspaceContext
 	Skill           WritingSkill
+	PublishFormat   PublishFormat
 	KnowledgeChunks []KnowledgeChunk
 }
 
@@ -110,6 +111,22 @@ type GeneratedDraft struct {
 type GeneratedSection struct {
 	Heading string `json:"heading"`
 	Body    string `json:"body"`
+}
+
+type PublishFormat struct {
+	ID                string   `json:"id"`
+	PlatformType      string   `json:"platformType"`
+	PlatformName      string   `json:"platformName"`
+	Mode              string   `json:"mode"`
+	Name              string   `json:"name"`
+	Description       string   `json:"description"`
+	TitleMaxRunes     int      `json:"titleMaxRunes"`
+	BodyMaxRunes      int      `json:"bodyMaxRunes"`
+	RequiredFields    []string `json:"requiredFields"`
+	Structure         []string `json:"structure"`
+	StyleGuidelines   []string `json:"styleGuidelines"`
+	ValidationRules   []string `json:"validationRules"`
+	AutomationChannel string   `json:"automationChannel"`
 }
 
 func (draft GeneratedDraft) Validate() error {

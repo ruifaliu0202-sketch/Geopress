@@ -16,6 +16,7 @@ func BuildPrompt(req GenerateRequest) PromptTranscript {
 	}, "\n")
 
 	chunks, _ := json.MarshalIndent(req.KnowledgeChunks, "", "  ")
+	publishFormat, _ := json.MarshalIndent(req.PublishFormat, "", "  ")
 	user := fmt.Sprintf(`工作区：
 - 名称：%s
 - 类型：%s
@@ -29,13 +30,17 @@ func BuildPrompt(req GenerateRequest) PromptTranscript {
 - 技能合同：%s
 - 关键词：%s
 
+目标媒体平台发布格式 JSON：
+%s
+
 可用知识片段 JSON：
 %s
 
 生成要求：
-- title: 中文标题。
+- 必须严格匹配目标媒体平台发布格式，不要靠猜测平台格式。
+- title: 中文标题；如果发布格式设置了 titleMaxRunes，标题不得超过该限制。
 - summary: 80 字以内摘要。
-- body: 完整正文，使用自然段，必要时使用小标题。
+- body: 完整正文，使用自然段，必要时使用小标题；如果发布格式包含结构、风格、校验规则，正文必须满足这些要求。
 - sections: 从正文中抽取 3 到 6 个结构化章节。
 - keywords: 保留并补充关键词。
 - usedKnowledgeIds: 只填实际使用的知识片段 ID。
@@ -50,6 +55,7 @@ func BuildPrompt(req GenerateRequest) PromptTranscript {
 		req.Skill.Version,
 		req.Skill.Contract,
 		strings.Join(req.Keywords, "、"),
+		string(publishFormat),
 		string(chunks),
 	)
 

@@ -12,6 +12,14 @@ type WritingSkill struct {
 
 func SelectWritingSkill(contentType string) WritingSkill {
 	switch strings.TrimSpace(contentType) {
+	case FormatXiaohongshuLongArticle:
+		return WritingSkill{
+			ID:          "xiaohongshu-long-article-v1",
+			Version:     "2026-06-13",
+			Name:        "小红书长文创作",
+			ContentType: FormatXiaohongshuLongArticle,
+			Contract:    "输出适合小红书“写长文”的纯文本内容：标题不超过 64 字，正文短段落、强可读性、包含可执行建议，结尾自然附 2-5 个话题标签。",
+		}
 	case "brief":
 		return WritingSkill{
 			ID:          "brief-actionable",

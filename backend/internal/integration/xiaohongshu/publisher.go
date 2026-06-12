@@ -71,13 +71,15 @@ func (MockHumanPublisher) Prepare(ctx context.Context, req publisher.PrepareRequ
 	}
 
 	return publisher.PreparedPost{
-		Mode:         publisher.ModeMockHumanAPI,
-		PlatformType: PlatformType,
-		PlatformName: defaultString(req.Platform.Name, "小红书"),
-		Title:        title,
-		Body:         fullBody,
-		Hashtags:     hashtags,
-		CopyBlocks:   copyBlocks,
+		Mode:            publisher.ModeMockHumanAPI,
+		PlatformType:    PlatformType,
+		PlatformName:    defaultString(req.Platform.Name, "小红书"),
+		PublishFormatID: defaultString(req.PublishFormatID, "xiaohongshu_long_article"),
+		PublishMode:     "mock_manual",
+		Title:           title,
+		Body:            fullBody,
+		Hashtags:        hashtags,
+		CopyBlocks:      copyBlocks,
 		Checklist: []string{
 			"确认标题、正文、话题和素材满足小红书内容规范。",
 			"确认当前账号已授权给真人发布服务或运营人员。",
