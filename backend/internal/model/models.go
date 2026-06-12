@@ -67,14 +67,16 @@ type MediaPlatform struct {
 }
 
 type MediaAccount struct {
-	ID            string     `json:"id"`
-	WorkspaceID   string     `json:"workspaceId"`
-	PlatformID    string     `json:"platformId"`
-	Name          string     `json:"name"`
-	ExternalID    string     `json:"externalId"`
-	Status        string     `json:"status"`
-	ExpiresAt     *time.Time `json:"expiresAt,omitempty"`
-	LastCheckedAt time.Time  `json:"lastCheckedAt"`
+	ID             string            `json:"id"`
+	WorkspaceID    string            `json:"workspaceId"`
+	PlatformID     string            `json:"platformId"`
+	Name           string            `json:"name"`
+	ExternalID     string            `json:"externalId"`
+	LoginMethod    string            `json:"loginMethod"`
+	CredentialMeta map[string]string `json:"credentialMeta,omitempty"`
+	Status         string            `json:"status"`
+	ExpiresAt      *time.Time        `json:"expiresAt,omitempty"`
+	LastCheckedAt  time.Time         `json:"lastCheckedAt"`
 }
 
 type ContentStatus string
@@ -103,6 +105,31 @@ type Content struct {
 	UpdatedAt       time.Time     `json:"updatedAt"`
 }
 
+type GenerationRequest struct {
+	ID                    string    `json:"id"`
+	WorkspaceID           string    `json:"workspaceId"`
+	UserID                string    `json:"userId"`
+	KnowledgeBaseID       string    `json:"knowledgeBaseId"`
+	ContentID             string    `json:"contentId"`
+	Provider              string    `json:"provider"`
+	Model                 string    `json:"model"`
+	ContentType           string    `json:"contentType"`
+	Keywords              []string  `json:"keywords"`
+	Prompt                string    `json:"prompt"`
+	PromptVersion         string    `json:"promptVersion"`
+	SkillID               string    `json:"skillId"`
+	SkillVersion          string    `json:"skillVersion"`
+	RetrievedKnowledgeIDs []string  `json:"retrievedKnowledgeIds"`
+	RawOutput             string    `json:"rawOutput"`
+	ParsedOutput          string    `json:"parsedOutput"`
+	InputTokens           int       `json:"inputTokens"`
+	OutputTokens          int       `json:"outputTokens"`
+	TotalTokens           int       `json:"totalTokens"`
+	Status                string    `json:"status"`
+	ErrorMessage          string    `json:"errorMessage"`
+	CreatedAt             time.Time `json:"createdAt"`
+}
+
 type PublishScheduleFrequency string
 
 const (
@@ -129,6 +156,7 @@ type PublishJobStatus string
 const (
 	PublishJobQueued    PublishJobStatus = "queued"
 	PublishJobRunning   PublishJobStatus = "running"
+	PublishJobManual    PublishJobStatus = "manual_pending"
 	PublishJobSucceeded PublishJobStatus = "succeeded"
 	PublishJobFailed    PublishJobStatus = "failed"
 	PublishJobRetrying  PublishJobStatus = "retrying"

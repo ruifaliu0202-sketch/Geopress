@@ -19,6 +19,10 @@ import {
   IconButton,
   InputLabel,
   MenuItem,
+  Link,
+  List,
+  ListItem,
+  ListItemText,
   Paper,
   Select,
   Stack,
@@ -36,6 +40,8 @@ import AccountTreeOutlinedIcon from '@mui/icons-material/AccountTreeOutlined';
 import AddIcon from '@mui/icons-material/Add';
 import ArticleOutlinedIcon from '@mui/icons-material/ArticleOutlined';
 import AutorenewIcon from '@mui/icons-material/Autorenew';
+import CheckCircleOutlineIcon from '@mui/icons-material/CheckCircleOutline';
+import ContentCopyIcon from '@mui/icons-material/ContentCopy';
 import DashboardOutlinedIcon from '@mui/icons-material/DashboardOutlined';
 import KeyOutlinedIcon from '@mui/icons-material/KeyOutlined';
 import LoginOutlinedIcon from '@mui/icons-material/LoginOutlined';
@@ -53,6 +59,11 @@ import {
   fetchWorkspace,
   generateContent,
   login,
+  confirmPublishJob,
+  preparePublish,
+  runPublishJob,
+  startMediaAccountBrowserLogin,
+  completeMediaAccountBrowserLogin,
 } from './api';
 import { AdminConsole } from './admin/AdminConsole';
 import type {
@@ -62,6 +73,8 @@ import type {
   KnowledgeItem,
   MediaAccount,
   MediaPlatform,
+  PreparedPost,
+  PreparePublishResponse,
   PublishJobStatus,
   PublishScheduleFrequency,
   User,
@@ -74,9 +87,11 @@ type DialogKey =
   | 'knowledgeBase'
   | 'knowledgeItem'
   | 'mediaAccount'
+  | 'mediaAccountLogin'
   | 'content'
   | 'generate'
   | 'schedule'
+  | 'publishPrepare'
   | null;
 
 const navItems: Array<{ key: ViewKey; label: string; icon: ReactNode }> = [
@@ -109,6 +124,7 @@ const contentStatusMap: Record<ContentStatus, { label: string; color: 'default' 
 const jobStatusMap: Record<PublishJobStatus, { label: string; color: 'default' | 'info' | 'error' | 'success' | 'warning' }> = {
   queued: { label: '排队中', color: 'default' },
   running: { label: '发布中', color: 'info' },
+  manual_pending: { label: '待人工发布', color: 'warning' },
   retrying: { label: '重试中', color: 'warning' },
   succeeded: { label: '成功', color: 'success' },
   failed: { label: '失败', color: 'error' },
@@ -131,6 +147,8 @@ function App() {
   const [error, setError] = useState<string | null>(null);
   const [reloadKey, setReloadKey] = useState(0);
   const [dialog, setDialog] = useState<DialogKey>(null);
+  const [selectedContentId, setSelectedContentId] = useState('');
+  const [selectedMediaAccountId, setSelectedMediaAccountId] = useState('');
 
   useEffect(() => {
     if (!token || !workspaceId) {
@@ -328,6 +346,14 @@ function App() {
               workspace={workspace}
               currentWorkspace={currentWorkspace}
               openDialog={setDialog}
+              onLoginMediaAccount={(accountId) => {
+                setSelectedMediaAccountId(accountId);
+                setDialog('mediaAccountLogin');
+              }}
+              onPreparePublish={(contentId) => {
+                setSelectedContentId(contentId);
+                setDialog('publishPrepare');
+              }}
             />
           )}
         </Stack>
@@ -339,9 +365,15 @@ function App() {
           token={token}
           workspaceId={workspaceId}
           data={workspace}
-          onClose={() => setDialog(null)}
+          selectedContentId={selectedContentId}
+          selectedMediaAccountId={selectedMediaAccountId}
+          onClose={() => {
+            setDialog(null);
+            setSelectedMediaAccountId('');
+          }}
           onCreated={(nextView) => {
             setDialog(null);
+            setSelectedMediaAccountId('');
             if (nextView) {
               setActiveView(nextView);
             }
@@ -408,23 +440,27 @@ function ActiveView({
   workspace,
   currentWorkspace,
   openDialog,
+  onLoginMediaAccount,
+  onPreparePublish,
 }: {
   view: ViewKey;
   workspace: WorkspaceData;
   currentWorkspace: Workspace;
   openDialog: (dialog: DialogKey) => void;
+  onLoginMediaAccount: (accountId: string) => void;
+  onPreparePublish: (contentId: string) => void;
 }) {
   if (view === 'knowledge') {
     return <KnowledgeView data={workspace} openDialog={openDialog} />;
   }
   if (view === 'accounts') {
-    return <AccountsView data={workspace} openDialog={openDialog} />;
+    return <AccountsView data={workspace} openDialog={openDialog} onLoginMediaAccount={onLoginMediaAccount} />;
   }
   if (view === 'generate') {
     return <GenerateView data={workspace} openDialog={openDialog} />;
   }
   if (view === 'contents') {
-    return <ContentsView contents={workspace.contents} openDialog={openDialog} />;
+    return <ContentsView contents={workspace.contents} openDialog={openDialog} onPreparePublish={onPreparePublish} />;
   }
   if (view === 'schedules') {
     return <SchedulesView data={workspace} openDialog={openDialog} />;
@@ -511,7 +547,15 @@ function KnowledgeView({ data, openDialog }: { data: WorkspaceData; openDialog: 
   );
 }
 
-function AccountsView({ data, openDialog }: { data: WorkspaceData; openDialog: (dialog: DialogKey) => void }) {
+function AccountsView({
+  data,
+  openDialog,
+  onLoginMediaAccount,
+}: {
+  data: WorkspaceData;
+  openDialog: (dialog: DialogKey) => void;
+  onLoginMediaAccount: (accountId: string) => void;
+}) {
   return (
     <Stack spacing={2}>
       <Section
@@ -521,7 +565,7 @@ function AccountsView({ data, openDialog }: { data: WorkspaceData; openDialog: (
         <MediaPlatformTable platforms={data.mediaPlatforms} />
       </Section>
       <Section title="已绑定媒体账号">
-        <MediaAccountsTable accounts={data.mediaAccounts} platforms={data.mediaPlatforms} />
+        <MediaAccountsTable accounts={data.mediaAccounts} platforms={data.mediaPlatforms} onLogin={onLoginMediaAccount} />
       </Section>
     </Stack>
   );
@@ -535,7 +579,7 @@ function GenerateView({ data, openDialog }: { data: WorkspaceData; openDialog: (
     >
       <Stack spacing={1.5}>
         <Typography color="text.secondary">
-          现阶段使用 mock AI Provider。生成时会读取当前工作区知识库条目，先打通上下文选择、草稿生成和后续排程链路。
+          生成时会检索当前工作区知识库片段，选择写作技能并调用已配置的 AI Provider，输出结果先保存为草稿。
         </Typography>
         <ContentTable contents={data.contents.filter((item) => item.source !== 'manual')} />
       </Stack>
@@ -543,13 +587,21 @@ function GenerateView({ data, openDialog }: { data: WorkspaceData; openDialog: (
   );
 }
 
-function ContentsView({ contents, openDialog }: { contents: Content[]; openDialog: (dialog: DialogKey) => void }) {
+function ContentsView({
+  contents,
+  openDialog,
+  onPreparePublish,
+}: {
+  contents: Content[];
+  openDialog: (dialog: DialogKey) => void;
+  onPreparePublish: (contentId: string) => void;
+}) {
   return (
     <Section
       title="内容管理"
       action={<Button startIcon={<AddIcon />} variant="contained" onClick={() => openDialog('content')}>新建内容</Button>}
     >
-      <ContentTable contents={contents} />
+      <ContentTable contents={contents} onPreparePublish={onPreparePublish} />
     </Section>
   );
 }
@@ -599,6 +651,8 @@ function WorkspaceDialogs({
   token,
   workspaceId,
   data,
+  selectedContentId,
+  selectedMediaAccountId,
   onClose,
   onCreated,
 }: {
@@ -606,9 +660,13 @@ function WorkspaceDialogs({
   token: string;
   workspaceId: string;
   data: WorkspaceData;
+  selectedContentId: string;
+  selectedMediaAccountId: string;
   onClose: () => void;
   onCreated: (nextView?: ViewKey) => void;
 }) {
+  const selectedMediaAccount = data.mediaAccounts.find((account) => account.id === selectedMediaAccountId) ?? null;
+
   return (
     <>
       <KnowledgeBaseDialog
@@ -631,6 +689,15 @@ function WorkspaceDialogs({
         token={token}
         workspaceId={workspaceId}
         platforms={data.mediaPlatforms}
+        onClose={onClose}
+        onCreated={() => onCreated('accounts')}
+      />
+      <MediaAccountLoginDialog
+        open={dialog === 'mediaAccountLogin'}
+        token={token}
+        workspaceId={workspaceId}
+        account={selectedMediaAccount}
+        platform={selectedMediaAccount ? data.mediaPlatforms.find((platform) => platform.id === selectedMediaAccount.platformId) ?? null : null}
         onClose={onClose}
         onCreated={() => onCreated('accounts')}
       />
@@ -659,6 +726,15 @@ function WorkspaceDialogs({
         platforms={data.mediaPlatforms}
         onClose={onClose}
         onCreated={() => onCreated('schedules')}
+      />
+      <PublishPrepareDialog
+        open={dialog === 'publishPrepare'}
+        token={token}
+        workspaceId={workspaceId}
+        data={data}
+        selectedContentId={selectedContentId}
+        onClose={onClose}
+        onCreated={() => onCreated('jobs')}
       />
     </>
   );
@@ -769,23 +845,40 @@ function MediaAccountDialog({
 }: DialogBaseProps & {
   platforms: MediaPlatform[];
 }) {
-  const enabledPlatforms = platforms.filter((platform) => platform.enabled);
+  const enabledPlatforms = useMemo(() => platforms.filter((platform) => platform.enabled), [platforms]);
   const [platformId, setPlatformId] = useState('');
   const [name, setName] = useState('');
   const [externalId, setExternalId] = useState('');
+  const [loginMethod, setLoginMethod] = useState('phone');
+  const [phoneNumber, setPhoneNumber] = useState('');
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const selectedPlatform = enabledPlatforms.find((platform) => platform.id === platformId);
+  const requiresPhone = selectedPlatform?.credentialFields.includes('phoneNumber') ?? false;
+  const requiresQR = selectedPlatform?.credentialFields.includes('qrLogin') ?? false;
 
   useEffect(() => {
     if (props.open) {
-      setPlatformId(enabledPlatforms[0]?.id ?? '');
+      const defaultPlatform = enabledPlatforms.find((platform) => platform.type === 'xiaohongshu') ?? enabledPlatforms.find((platform) => platform.credentialFields.includes('phoneNumber')) ?? enabledPlatforms[0];
+      setPlatformId(defaultPlatform?.id ?? '');
+      setLoginMethod(defaultPlatform?.credentialFields.includes('qrLogin') ? 'qr' : defaultPlatform?.credentialFields.includes('phoneNumber') ? 'phone' : 'manual');
       setError(null);
     }
   }, [enabledPlatforms, props.open]);
 
+  const updatePlatform = (value: string) => {
+    const nextPlatform = enabledPlatforms.find((platform) => platform.id === value);
+    setPlatformId(value);
+    setLoginMethod(nextPlatform?.credentialFields.includes('qrLogin') ? 'qr' : nextPlatform?.credentialFields.includes('phoneNumber') ? 'phone' : 'manual');
+  };
+
   const submit = async () => {
     if (!platformId || !name.trim()) {
       setError('请选择平台并填写账号名称');
+      return;
+    }
+    if (loginMethod === 'phone' && !phoneNumber.trim()) {
+      setError('请填写手机号');
       return;
     }
     setSubmitting(true);
@@ -795,9 +888,12 @@ function MediaAccountDialog({
         platformId,
         name: name.trim(),
         externalId: externalId.trim(),
+        loginMethod,
+        phoneNumber: phoneNumber.trim(),
       });
       setName('');
       setExternalId('');
+      setPhoneNumber('');
       props.onCreated();
     } catch (err) {
       setError(err instanceof Error ? err.message : '创建失败');
@@ -808,10 +904,166 @@ function MediaAccountDialog({
 
   return (
     <FormDialog title="绑定媒体账号" open={props.open} error={error} submitting={submitting} onClose={props.onClose} onSubmit={submit}>
-      <SelectField label="媒体平台" value={platformId} onChange={setPlatformId} items={enabledPlatforms.map((platform) => ({ value: platform.id, label: platform.name }))} />
+      <SelectField label="媒体平台" value={platformId} onChange={updatePlatform} items={enabledPlatforms.map((platform) => ({ value: platform.id, label: platform.name }))} />
       <TextField label="账号名称" value={name} onChange={(event) => setName(event.target.value)} fullWidth required />
       <TextField label="外部账号标识" value={externalId} onChange={(event) => setExternalId(event.target.value)} fullWidth />
+      {requiresQR ? (
+        <Alert severity="info">小红书绑定将由服务端浏览器打开二维码登录页，扫码确认后保存服务端浏览器会话。</Alert>
+      ) : requiresPhone ? (
+        <Alert severity="info">本机发布平台仅支持手机号验证码登录。</Alert>
+      ) : (
+        <SelectField
+          label="登录方式"
+          value={loginMethod}
+          onChange={setLoginMethod}
+          items={[
+            { value: 'phone', label: '手机号登录' },
+            { value: 'manual', label: '手动授权' },
+          ]}
+        />
+      )}
+      {!requiresQR && (loginMethod === 'phone' || requiresPhone) && (
+        <TextField
+          label="登录手机号"
+          value={phoneNumber}
+          onChange={(event) => setPhoneNumber(event.target.value)}
+          fullWidth
+          required={loginMethod === 'phone'}
+          placeholder="+86 13800000000"
+        />
+      )}
     </FormDialog>
+  );
+}
+
+function MediaAccountLoginDialog({
+  account,
+  platform,
+  ...props
+}: DialogBaseProps & {
+  account: MediaAccount | null;
+  platform: MediaPlatform | null;
+}) {
+  const [sessionId, setSessionId] = useState('');
+  const [qrScreenshotData, setQRScreenshotData] = useState('');
+  const [qrLoginUrl, setQRLoginUrl] = useState('');
+  const [stateFile, setStateFile] = useState('');
+  const [sessionStarted, setSessionStarted] = useState(false);
+  const [submitting, setSubmitting] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (props.open) {
+      setSessionId('');
+      setQRScreenshotData('');
+      setQRLoginUrl('');
+      setStateFile('');
+      setSessionStarted(false);
+      setError(null);
+    }
+  }, [account, props.open]);
+
+  const startLogin = async () => {
+    if (!account) {
+      setError('请选择媒体账号');
+      return;
+    }
+    setSubmitting(true);
+    setError(null);
+    try {
+      const response = await startMediaAccountBrowserLogin(props.token, props.workspaceId, account.id, {});
+      setSessionStarted(true);
+      setSessionId(response.sessionId);
+      setQRScreenshotData(response.qrScreenshotData);
+      setQRLoginUrl(response.qrLoginUrl);
+      setStateFile(response.stateFile);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : '启动二维码登录失败');
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
+  const completeLogin = async () => {
+    if (!account) {
+      setError('请选择媒体账号');
+      return;
+    }
+    if (!sessionId) {
+      setError('请先启动二维码登录会话');
+      return;
+    }
+    setSubmitting(true);
+    setError(null);
+    try {
+      await completeMediaAccountBrowserLogin(props.token, props.workspaceId, account.id, {
+        sessionId,
+      });
+      props.onCreated();
+    } catch (err) {
+      const message = err instanceof Error ? err.message : '登录绑定失败';
+      setError(stateFile ? `${message}。可查看状态文件：${stateFile}` : message);
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
+  const canLogin = account && supportsBrowserLogin(platform?.type) && account.loginMethod === 'qr';
+
+  return (
+    <Dialog open={props.open} onClose={submitting ? undefined : props.onClose} fullWidth maxWidth="sm">
+      <DialogTitle>{platform?.type === 'xiaohongshu' ? '小红书二维码登录绑定' : '浏览器登录绑定'}</DialogTitle>
+      <DialogContent>
+        <Stack spacing={2} sx={{ pt: 1 }}>
+          {error && <Alert severity="error">{error}</Alert>}
+          {!canLogin && <Alert severity="warning">当前账号不支持服务端浏览器二维码登录。</Alert>}
+          {canLogin && platform?.type === 'xiaohongshu' && (
+            <Alert severity="info">
+              点击生成二维码后，请使用小红书 App 扫码并确认登录。确认后返回这里完成绑定。
+            </Alert>
+          )}
+          {account && (
+            <Paper variant="outlined" sx={{ p: 1.5, borderRadius: 1 }}>
+              <InfoRow label="媒体账号" value={account.name} />
+              <InfoRow label="平台" value={platform?.name ?? account.platformId} />
+              <InfoRow label="状态" value={mediaAccountStatusLabel(account.status)} />
+            </Paper>
+          )}
+          <Stack direction={{ xs: 'column', sm: 'row' }} spacing={1}>
+            <Button variant="outlined" onClick={startLogin} disabled={!canLogin || submitting} sx={{ minWidth: 160 }}>
+              生成二维码
+            </Button>
+            <Button variant="contained" onClick={completeLogin} disabled={!canLogin || submitting || !sessionStarted}>
+              我已扫码确认
+            </Button>
+          </Stack>
+          {qrScreenshotData && (
+            <Paper variant="outlined" sx={{ p: 2, borderRadius: 1, display: 'grid', justifyItems: 'center', gap: 1 }}>
+              <Box component="img" src={qrScreenshotData} alt="小红书登录二维码" sx={{ width: 240, height: 240 }} />
+              <Typography variant="caption" color="text.secondary" sx={{ overflowWrap: 'anywhere' }}>
+                {sessionId}
+              </Typography>
+              {stateFile && (
+                <Typography variant="caption" color="text.secondary" sx={{ overflowWrap: 'anywhere' }}>
+                  {stateFile}
+                </Typography>
+              )}
+              <Link href={qrLoginUrl} target="_blank" rel="noreferrer" variant="body2">
+                打开登录链接
+              </Link>
+            </Paper>
+          )}
+        </Stack>
+      </DialogContent>
+      <DialogActions>
+        <Button onClick={props.onClose} disabled={submitting}>
+          取消
+        </Button>
+        <Button onClick={completeLogin} disabled={!canLogin || submitting || !sessionStarted} variant="contained">
+          完成绑定
+        </Button>
+      </DialogActions>
+    </Dialog>
   );
 }
 
@@ -1015,6 +1267,290 @@ function ScheduleDialog({
   );
 }
 
+function PublishPrepareDialog({
+  data,
+  selectedContentId,
+  ...props
+}: DialogBaseProps & {
+  data: WorkspaceData;
+  selectedContentId: string;
+}) {
+  const xiaohongshuAccounts = useMemo(
+    () => data.mediaAccounts.filter((account) => platformType(data.mediaPlatforms, account.platformId) === 'xiaohongshu' && account.status === 'connected'),
+    [data.mediaAccounts, data.mediaPlatforms],
+  );
+  const [contentId, setContentId] = useState('');
+  const [mediaAccountId, setMediaAccountId] = useState('');
+  const [prepared, setPrepared] = useState<PreparePublishResponse | null>(null);
+  const [publishResult, setPublishResult] = useState<PreparePublishResponse['publishResult']>(undefined);
+  const [externalUrl, setExternalUrl] = useState('');
+  const [assetPaths, setAssetPaths] = useState('');
+  const [copiedLabel, setCopiedLabel] = useState('');
+  const [submitting, setSubmitting] = useState(false);
+  const [running, setRunning] = useState(false);
+  const [confirming, setConfirming] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (props.open) {
+      const requestedContent = data.contents.find((content) => content.id === selectedContentId);
+      setContentId(requestedContent?.id ?? data.contents[0]?.id ?? '');
+      setMediaAccountId(xiaohongshuAccounts[0]?.id ?? '');
+      setPrepared(null);
+      setPublishResult(undefined);
+      setExternalUrl('');
+      setAssetPaths('');
+      setCopiedLabel('');
+      setError(null);
+    }
+  }, [data.contents, props.open, selectedContentId, xiaohongshuAccounts]);
+
+  const selectedContent = data.contents.find((content) => content.id === contentId);
+
+  const handlePrepare = async () => {
+    if (!contentId || !mediaAccountId) {
+      setError('请选择内容和小红书账号');
+      return;
+    }
+    setSubmitting(true);
+    setError(null);
+    try {
+      const result = await preparePublish(props.token, props.workspaceId, { contentId, mediaAccountId });
+      setPrepared(result);
+      setPublishResult(result.publishResult);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : '发布准备失败');
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
+  const handleRun = async () => {
+    if (!prepared) {
+      return;
+    }
+    setRunning(true);
+    setError(null);
+    try {
+      const result = await runPublishJob(props.token, props.workspaceId, prepared.job.id, {
+        assetPaths: splitLines(assetPaths),
+      });
+      setPrepared({ job: result.job, preparedPost: result.preparedPost, publishResult: result.publishResult });
+      setPublishResult(result.publishResult);
+      if (result.publishResult.externalUrl) {
+        setExternalUrl(result.publishResult.externalUrl);
+      }
+    } catch (err) {
+      setError(err instanceof Error ? err.message : '模拟发布失败');
+    } finally {
+      setRunning(false);
+    }
+  };
+
+  const handleCopy = async (block: { label: string; value: string }) => {
+    try {
+      await navigator.clipboard.writeText(block.value);
+      setCopiedLabel(block.label);
+    } catch {
+      setCopiedLabel('');
+      setError('复制失败，请手动选中文案复制');
+    }
+  };
+
+  const handleConfirm = async () => {
+    if (!prepared) {
+      return;
+    }
+    if (!externalUrl.trim()) {
+      setError('请填写小红书笔记链接');
+      return;
+    }
+    setConfirming(true);
+    setError(null);
+    try {
+      await confirmPublishJob(props.token, props.workspaceId, prepared.job.id, {
+        externalUrl: externalUrl.trim(),
+        message: '小红书笔记链接已回填。',
+      });
+      props.onCreated();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : '确认发布失败');
+    } finally {
+      setConfirming(false);
+    }
+  };
+
+  const busy = submitting || running || confirming;
+
+  return (
+    <Dialog open={props.open} onClose={busy ? undefined : props.onClose} fullWidth maxWidth="md">
+      <DialogTitle>发布到小红书</DialogTitle>
+      <DialogContent>
+        <Stack spacing={2} sx={{ pt: 1 }}>
+          {error && <Alert severity="error">{error}</Alert>}
+          {xiaohongshuAccounts.length === 0 && (
+            <Alert severity="warning">当前工作区还没有绑定小红书账号。</Alert>
+          )}
+          <Grid container spacing={2}>
+            <Grid size={{ xs: 12, md: 7 }}>
+              <SelectField
+                label="内容"
+                value={contentId}
+                onChange={(value) => {
+                  setContentId(value);
+                  setPrepared(null);
+                }}
+                items={data.contents.map((content) => ({ value: content.id, label: content.title }))}
+              />
+            </Grid>
+            <Grid size={{ xs: 12, md: 5 }}>
+              <SelectField
+                label="小红书账号"
+                value={mediaAccountId}
+                onChange={(value) => {
+                  setMediaAccountId(value);
+                  setPrepared(null);
+                }}
+                items={xiaohongshuAccounts.map((account) => ({ value: account.id, label: account.name }))}
+              />
+            </Grid>
+          </Grid>
+
+          {selectedContent && (
+            <Paper variant="outlined" sx={{ p: 1.5, borderRadius: 1 }}>
+              <Stack spacing={0.5}>
+                <Typography fontWeight={700}>{selectedContent.title}</Typography>
+                <Typography variant="body2" color="text.secondary">
+                  {selectedContent.summary || selectedContent.body.slice(0, 120)}
+                </Typography>
+              </Stack>
+            </Paper>
+          )}
+
+          {prepared && <PreparedPostPanel post={prepared.preparedPost} copiedLabel={copiedLabel} onCopy={handleCopy} />}
+
+          {prepared && (
+            <Stack spacing={1.5}>
+              <TextField
+                label="素材路径"
+                value={assetPaths}
+                onChange={(event) => setAssetPaths(event.target.value)}
+                placeholder="/home/ruifa/Pictures/cover.png"
+                helperText="每行一个素材路径；Mock 接口会记录素材数量，不会上传真实文件。"
+                fullWidth
+                multiline
+                minRows={2}
+              />
+              {publishResult && (
+                <Alert severity={publishResult.status === 'published' ? 'success' : 'info'}>
+                  {publishResult.message}
+                  {publishResult.externalId ? ` 笔记 ID：${publishResult.externalId}` : ''}
+                </Alert>
+              )}
+              <TextField
+                label="小红书笔记链接"
+                value={externalUrl}
+                onChange={(event) => setExternalUrl(event.target.value)}
+                placeholder="https://www.xiaohongshu.com/explore/..."
+                fullWidth
+              />
+            </Stack>
+          )}
+        </Stack>
+      </DialogContent>
+      <DialogActions>
+        <Button onClick={props.onClose} disabled={busy}>
+          取消
+        </Button>
+        {!prepared && (
+          <Button onClick={handlePrepare} disabled={busy || xiaohongshuAccounts.length === 0} variant="contained">
+            生成发布包
+          </Button>
+        )}
+        {prepared && (
+          <Button onClick={handleRun} disabled={busy} variant="outlined">
+            调用 Mock 发布接口
+          </Button>
+        )}
+        {prepared && (
+          <Button startIcon={<CheckCircleOutlineIcon />} onClick={handleConfirm} disabled={busy || !externalUrl.trim()} variant="contained">
+            确认已发布
+          </Button>
+        )}
+      </DialogActions>
+    </Dialog>
+  );
+}
+
+function PreparedPostPanel({
+  post,
+  copiedLabel,
+  onCopy,
+}: {
+  post: PreparedPost;
+  copiedLabel: string;
+  onCopy: (block: { label: string; value: string }) => void;
+}) {
+  return (
+    <Stack spacing={2}>
+      {post.warnings.map((warning) => (
+        <Alert key={warning} severity="info">
+          {warning}
+        </Alert>
+      ))}
+      <Grid container spacing={2}>
+        <Grid size={{ xs: 12, md: 7 }}>
+          <Stack spacing={1.25}>
+            {post.copyBlocks.map((block) => (
+              <Paper key={block.label} variant="outlined" sx={{ p: 1.5, borderRadius: 1 }}>
+                <Stack direction="row" justifyContent="space-between" alignItems="center" spacing={1.5}>
+                  <Typography fontWeight={700}>{block.label}</Typography>
+                  <Tooltip title={`复制${block.label}`}>
+                    <span>
+                      <IconButton size="small" onClick={() => onCopy(block)}>
+                        <ContentCopyIcon fontSize="small" />
+                      </IconButton>
+                    </span>
+                  </Tooltip>
+                </Stack>
+                <Typography
+                  variant="body2"
+                  sx={{ mt: 1, whiteSpace: 'pre-wrap', overflowWrap: 'anywhere', maxHeight: 220, overflowY: 'auto' }}
+                >
+                  {block.value}
+                </Typography>
+                {copiedLabel === block.label && (
+                  <Typography variant="caption" color="success.main">
+                    已复制
+                  </Typography>
+                )}
+              </Paper>
+            ))}
+          </Stack>
+        </Grid>
+        <Grid size={{ xs: 12, md: 5 }}>
+          <Paper variant="outlined" sx={{ p: 1.5, borderRadius: 1 }}>
+            <Stack spacing={1}>
+              <Typography fontWeight={700}>发布检查</Typography>
+              <List dense disablePadding>
+                {post.checklist.map((item) => (
+                  <ListItem key={item} disableGutters>
+                    <ListItemText primary={item} />
+                  </ListItem>
+                ))}
+              </List>
+              <Divider />
+              <InfoRow label="平台" value={post.platformName} />
+              <InfoRow label="字数" value={`${post.characterCount}`} />
+              <InfoRow label="话题" value={post.hashtags.join(' ') || '未生成'} />
+            </Stack>
+          </Paper>
+        </Grid>
+      </Grid>
+    </Stack>
+  );
+}
+
 type DialogBaseProps = {
   open: boolean;
   token: string;
@@ -1190,7 +1726,7 @@ function MediaPlatformTable({ platforms }: { platforms: MediaPlatform[] }) {
             <TableCell>
               <Chip size="small" label={platform.enabled ? '启用' : '停用'} color={platform.enabled ? 'success' : 'default'} />
             </TableCell>
-            <TableCell>{platform.credentialFields.join(', ')}</TableCell>
+            <TableCell>{platform.credentialFields.map(credentialFieldLabel).join(', ')}</TableCell>
           </TableRow>
         ))}
       </TableBody>
@@ -1198,36 +1734,70 @@ function MediaPlatformTable({ platforms }: { platforms: MediaPlatform[] }) {
   );
 }
 
-function MediaAccountsTable({ accounts, platforms }: { accounts: MediaAccount[]; platforms: MediaPlatform[] }) {
+function MediaAccountsTable({
+  accounts,
+  platforms,
+  onLogin,
+}: {
+  accounts: MediaAccount[];
+  platforms: MediaPlatform[];
+  onLogin?: (accountId: string) => void;
+}) {
   return (
     <Table>
       <TableHead>
         <TableRow>
           <TableCell>账号</TableCell>
           <TableCell>平台</TableCell>
+          <TableCell>登录方式</TableCell>
+          <TableCell>登录凭证</TableCell>
           <TableCell>外部标识</TableCell>
           <TableCell>状态</TableCell>
           <TableCell>检查时间</TableCell>
+          {onLogin && <TableCell align="right">操作</TableCell>}
         </TableRow>
       </TableHead>
       <TableBody>
-        {accounts.map((account) => (
-          <TableRow key={account.id} hover>
-            <TableCell>{account.name}</TableCell>
-            <TableCell>{platformName(platforms, account.platformId)}</TableCell>
-            <TableCell>{account.externalId}</TableCell>
-            <TableCell>
-              <Chip size="small" label={account.status === 'connected' ? '已连接' : '需处理'} color={account.status === 'connected' ? 'success' : 'warning'} />
-            </TableCell>
-            <TableCell>{formatDate(account.lastCheckedAt)}</TableCell>
-          </TableRow>
-        ))}
+        {accounts.map((account) => {
+          const platform = platforms.find((item) => item.id === account.platformId);
+          const canLogin = supportsBrowserLogin(platform?.type) && account.loginMethod === 'qr' && account.status !== 'connected';
+          return (
+            <TableRow key={account.id} hover>
+              <TableCell>{account.name}</TableCell>
+              <TableCell>{platform?.name ?? account.platformId}</TableCell>
+              <TableCell>{loginMethodLabel(account.loginMethod)}</TableCell>
+              <TableCell>{account.loginMethod === 'qr' ? '服务端二维码' : account.credentialMeta?.phoneNumber ?? '-'}</TableCell>
+              <TableCell>{account.externalId}</TableCell>
+              <TableCell>
+                <Chip size="small" label={mediaAccountStatusLabel(account.status)} color={mediaAccountStatusColor(account.status)} />
+              </TableCell>
+              <TableCell>{formatDate(account.lastCheckedAt)}</TableCell>
+              {onLogin && (
+                <TableCell align="right">
+                  {canLogin ? (
+                    <Button size="small" startIcon={<LoginOutlinedIcon />} onClick={() => onLogin(account.id)}>
+                      登录绑定
+                    </Button>
+                  ) : (
+                    '-'
+                  )}
+                </TableCell>
+              )}
+            </TableRow>
+          );
+        })}
       </TableBody>
     </Table>
   );
 }
 
-function ContentTable({ contents }: { contents: Content[] }) {
+function ContentTable({
+  contents,
+  onPreparePublish,
+}: {
+  contents: Content[];
+  onPreparePublish?: (contentId: string) => void;
+}) {
   return (
     <Table>
       <TableHead>
@@ -1237,6 +1807,7 @@ function ContentTable({ contents }: { contents: Content[] }) {
           <TableCell>状态</TableCell>
           <TableCell>来源</TableCell>
           <TableCell>更新时间</TableCell>
+          {onPreparePublish && <TableCell align="right">操作</TableCell>}
         </TableRow>
       </TableHead>
       <TableBody>
@@ -1256,6 +1827,13 @@ function ContentTable({ contents }: { contents: Content[] }) {
               </TableCell>
               <TableCell>{content.source}</TableCell>
               <TableCell>{formatDate(content.updatedAt)}</TableCell>
+              {onPreparePublish && (
+                <TableCell align="right">
+                  <Button size="small" startIcon={<PublishOutlinedIcon />} onClick={() => onPreparePublish(content.id)}>
+                    小红书发布
+                  </Button>
+                </TableCell>
+              )}
             </TableRow>
           );
         })}
@@ -1305,6 +1883,7 @@ function JobsTable({ data, dense = false }: { data: WorkspaceData; dense?: boole
           <TableCell>状态</TableCell>
           <TableCell>计划时间</TableCell>
           <TableCell>消息</TableCell>
+          <TableCell>结果</TableCell>
         </TableRow>
       </TableHead>
       <TableBody>
@@ -1319,6 +1898,15 @@ function JobsTable({ data, dense = false }: { data: WorkspaceData; dense?: boole
               </TableCell>
               <TableCell>{formatDate(job.scheduledAt)}</TableCell>
               <TableCell>{job.lastMessage}</TableCell>
+              <TableCell>
+                {job.externalUrl ? (
+                  <Link href={job.externalUrl} target="_blank" rel="noreferrer">
+                    查看
+                  </Link>
+                ) : (
+                  '-'
+                )}
+              </TableCell>
             </TableRow>
           );
         })}
@@ -1346,6 +1934,66 @@ function platformName(items: MediaPlatform[], id: string) {
   return items.find((item) => item.id === id)?.name ?? id;
 }
 
+function platformType(items: MediaPlatform[], id: string) {
+  return items.find((item) => item.id === id)?.type ?? '';
+}
+
+function supportsBrowserLogin(platformTypeValue?: string) {
+  return platformTypeValue === 'xiaohongshu';
+}
+
+function loginMethodLabel(value?: string) {
+  if (value === 'qr') {
+    return '二维码登录';
+  }
+  if (value === 'phone') {
+    return '手机号登录';
+  }
+  if (value === 'manual' || !value) {
+    return '手动授权';
+  }
+  return value;
+}
+
+function mediaAccountStatusLabel(value: string) {
+  if (value === 'connected') {
+    return '已连接';
+  }
+  if (value === 'pending_login') {
+    return '待登录';
+  }
+  if (value === 'qr_waiting') {
+    return '等待扫码';
+  }
+  return '需处理';
+}
+
+function mediaAccountStatusColor(value: string): 'default' | 'success' | 'warning' {
+  if (value === 'connected') {
+    return 'success';
+  }
+  if (value === 'pending_login' || value === 'qr_waiting') {
+    return 'warning';
+  }
+  return 'default';
+}
+
+function credentialFieldLabel(value: string) {
+  const labels: Record<string, string> = {
+    accessToken: '访问令牌',
+    appId: 'App ID',
+    appSecret: 'App Secret',
+    applicationPassword: '应用密码',
+    nickname: '昵称',
+    phoneNumber: '手机号',
+    profileUrl: '主页链接',
+    qrLogin: '二维码登录',
+    siteUrl: '站点地址',
+    username: '用户名',
+  };
+  return labels[value] ?? value;
+}
+
 function accountName(items: MediaAccount[], id: string) {
   return items.find((item) => item.id === id)?.name ?? id;
 }
@@ -1357,6 +2005,13 @@ function contentName(items: Content[], id: string) {
 function splitKeywords(value: string) {
   return value
     .split(/[,，\n]/)
+    .map((item) => item.trim())
+    .filter(Boolean);
+}
+
+function splitLines(value: string) {
+  return value
+    .split(/\n/)
     .map((item) => item.trim())
     .filter(Boolean);
 }

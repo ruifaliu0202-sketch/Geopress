@@ -12,6 +12,14 @@ import type {
   MediaAccount,
   MediaPlatform,
   Overview,
+  ConfirmPublishPayload,
+  PreparePublishPayload,
+  PreparePublishResponse,
+  RunPublishJobPayload,
+  RunPublishJobResponse,
+  StartMediaAccountBrowserLoginPayload,
+  StartMediaAccountBrowserLoginResponse,
+  CompleteMediaAccountBrowserLoginPayload,
   PublishJob,
   PublishSchedule,
   User,
@@ -48,7 +56,17 @@ async function request<T>(path: string, token?: string, workspaceId?: string, in
   });
 
   if (!response.ok) {
-    throw new Error(`API request failed: ${response.status}`);
+    const message = await response.text();
+    let errorMessage = message;
+    try {
+      const data = JSON.parse(message) as { error?: string };
+      if (data.error) {
+        errorMessage = data.error;
+      }
+    } catch {
+      errorMessage = message;
+    }
+    throw new Error(errorMessage || `API request failed: ${response.status}`);
   }
 
   return response.json() as Promise<T>;
@@ -122,6 +140,30 @@ export async function createMediaAccount(
   });
 }
 
+export async function startMediaAccountBrowserLogin(
+  token: string,
+  workspaceId: string,
+  accountId: string,
+  payload: StartMediaAccountBrowserLoginPayload,
+): Promise<StartMediaAccountBrowserLoginResponse> {
+  return request<StartMediaAccountBrowserLoginResponse>(`/media-accounts/${accountId}/browser-login/start`, token, workspaceId, {
+    method: 'POST',
+    body: JSON.stringify(payload),
+  });
+}
+
+export async function completeMediaAccountBrowserLogin(
+  token: string,
+  workspaceId: string,
+  accountId: string,
+  payload: CompleteMediaAccountBrowserLoginPayload,
+): Promise<MediaAccount> {
+  return request<MediaAccount>(`/media-accounts/${accountId}/browser-login/complete`, token, workspaceId, {
+    method: 'POST',
+    body: JSON.stringify(payload),
+  });
+}
+
 export async function createContent(
   token: string,
   workspaceId: string,
@@ -150,6 +192,41 @@ export async function createPublishSchedule(
   payload: CreatePublishSchedulePayload,
 ): Promise<{ schedule: PublishSchedule; job: PublishJob }> {
   return request<{ schedule: PublishSchedule; job: PublishJob }>('/publish-schedules', token, workspaceId, {
+    method: 'POST',
+    body: JSON.stringify(payload),
+  });
+}
+
+export async function preparePublish(
+  token: string,
+  workspaceId: string,
+  payload: PreparePublishPayload,
+): Promise<PreparePublishResponse> {
+  return request<PreparePublishResponse>('/publish/prepare', token, workspaceId, {
+    method: 'POST',
+    body: JSON.stringify(payload),
+  });
+}
+
+export async function confirmPublishJob(
+  token: string,
+  workspaceId: string,
+  jobId: string,
+  payload: ConfirmPublishPayload,
+): Promise<PublishJob> {
+  return request<PublishJob>(`/publish-jobs/${jobId}/confirm`, token, workspaceId, {
+    method: 'POST',
+    body: JSON.stringify(payload),
+  });
+}
+
+export async function runPublishJob(
+  token: string,
+  workspaceId: string,
+  jobId: string,
+  payload: RunPublishJobPayload,
+): Promise<RunPublishJobResponse> {
+  return request<RunPublishJobResponse>(`/publish-jobs/${jobId}/run`, token, workspaceId, {
     method: 'POST',
     body: JSON.stringify(payload),
   });

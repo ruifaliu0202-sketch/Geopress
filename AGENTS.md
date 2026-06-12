@@ -49,6 +49,7 @@ docs/
 
 scripts/
   migrate.sh                       Migration runner
+  xiaohongshu-browser-login.mjs    Playwright worker for Xiaohongshu QR login
 ```
 
 ## Implemented Capabilities
@@ -60,14 +61,20 @@ scripts/
 - Knowledge item list/create.
 - Media platform list.
 - Tenant media account list/create.
+- Xiaohongshu media account QR binding via server-managed Playwright persistent browser context.
+- Xiaohongshu QR login watcher state file for debugging scan confirmation and cookie/page state.
 - Manual content create.
-- Mock keyword-based content generation.
+- Keyword-based draft generation through an `AIProvider` interface with mock and OpenAI-compatible providers.
+- Workspace knowledge chunk retrieval, writing skill selection, structured draft validation, and generation request logging.
 - Publish schedule create.
 - Publish job list.
+- Xiaohongshu publish preparation, manual publish confirmation, and run-now publish job execution through the publisher interface.
 - Platform admin authorization.
 - Platform admin resource lists for users, workspaces, members, media platforms, and tenant media accounts.
 - Platform admin create media platform.
+- Platform admin AI provider configuration.
 - Optional PostgreSQL health check via `DATABASE_URL`.
+- Optional PostgreSQL seed/save paths for demo workspace metadata, generated contents, and generation requests.
 - PostgreSQL migrations for users, workspaces, knowledge bases/items, media platforms/accounts, contents/versions, generation requests, publish schedules/jobs/results, and audit logs.
 
 ## Demo Auth
@@ -100,10 +107,15 @@ Main workspace APIs:
 - `GET|POST /api/knowledge-items`
 - `GET /api/media-platforms`
 - `GET|POST /api/media-accounts`
+- `POST /api/media-accounts/:accountId/browser-login/start`
+- `POST /api/media-accounts/:accountId/browser-login/complete`
 - `GET|POST /api/contents`
 - `POST /api/contents/generate`
 - `GET|POST /api/publish-schedules`
 - `GET /api/publish-jobs`
+- `POST /api/publish/prepare`
+- `POST /api/publish-jobs/:jobId/run`
+- `POST /api/publish-jobs/:jobId/confirm`
 
 Platform admin APIs:
 
@@ -113,6 +125,7 @@ Platform admin APIs:
 - `GET /api/admin/workspace-members`
 - `GET|POST /api/admin/media-platforms`
 - `GET /api/admin/media-accounts`
+- `GET|PUT /api/admin/ai-config`
 
 ## Local Development Commands
 
@@ -132,6 +145,8 @@ npm install
 npm run dev
 ```
 
+Frontend tooling uses the system-installed Node.js 26 runtime. Run `npm run dev`, `npm run build`, and `npm run lint` with Node 26. In nvm shells, make sure Node 26 is active before running npm scripts; otherwise the npm wrapper may still invoke an older Node binary.
+
 Validation:
 
 ```bash
@@ -144,6 +159,64 @@ npm run lint
 ```
 
 The frontend dev server defaults to `http://localhost:5173` and proxies `/api` to `http://localhost:8080`.
+
+Relevant environment variables:
+
+- `DATABASE_URL`: optional PostgreSQL connection string.
+- `AI_PROVIDER`: `mock` or `openai`.
+- `OPENAI_API_KEY`: OpenAI-compatible provider key.
+- `OPENAI_BASE_URL`: OpenAI-compatible API base URL.
+- `OPENAI_MODEL`: generation model name.
+- `AI_REQUEST_TIMEOUT_SECONDS`: generation request timeout.
+- `GEOPRESS_NODE_BIN`: Node.js binary used by the Xiaohongshu Playwright worker.
+- `GEOPRESS_CHROME_PATH`: Chromium/Chrome executable used by the Playwright worker.
+- `GEOPRESS_XHS_BROWSER_LOGIN_SCRIPT`: override path for the Xiaohongshu browser login script.
+- `GEOPRESS_BROWSER_HEADLESS`: set to `false` for visible local Playwright debugging.
+
+Service startup rule for agents:
+
+- If the user already has backend or frontend dev servers running, prefer those for validation and do not stop them.
+- If an agent must start temporary validation services, use alternate free ports, report the ports while testing, and stop the processes before finishing the turn unless the user explicitly asks to keep them running.
+- Do not leave background dev servers running as a side effect of validation.
+
+## Xiaohongshu Browser Login Notes
+
+Xiaohongshu account binding should use a server-managed browser session with QR login.
+
+Recommended flow:
+
+```text
+workspace user clicks bind/login -> backend starts browser login session -> backend opens Xiaohongshu QR login page -> frontend displays QR image -> user scans in Xiaohongshu app -> backend confirms session -> browser profile is saved -> media account becomes connected
+```
+
+Implementation direction:
+
+- Keep the backend boundary as `start browser QR login` and `complete browser QR login`.
+- Store the browser profile under `runtime/browser-profiles/{workspaceId}/{accountId}`.
+- Use a Playwright persistent browser context, not a mock QR session.
+- The backend starts a persistent Chromium context for the workspace/account profile, opens the Xiaohongshu login page, screenshots the visible login QR code, and returns that screenshot to the frontend.
+- The complete step must re-open/read the same persistent browser profile and confirm the platform login state before marking the media account connected.
+- Keep the QR login watcher browser alive while the user scans; do not close the browser immediately after taking the QR screenshot.
+- The watcher writes `geopress-login-state.json` inside the account browser profile. Use it to debug scan confirmation state, current URL, visible page text, and cookie names.
+- For local visual debugging, set `GEOPRESS_BROWSER_HEADLESS=false` before starting the backend so the Playwright browser window is visible.
+- Do not model or persist dynamic Xiaohongshu web headers such as `x-s`, `x-s-common`, or `x-t`; those should be generated naturally by the platform page running inside the managed browser.
+
+## Xiaohongshu Publish Notes
+
+- Current Xiaohongshu publish execution is represented by `internal/integration/xiaohongshu.MockHumanPublisher`.
+- The workspace console can prepare a Xiaohongshu post from a content item and a connected Xiaohongshu media account.
+- Prepared posts contain title, body, hashtags, copy blocks, checklist, warnings, character count, and prepared time.
+- `POST /api/publish/prepare` creates a manual publish job and optionally runs it immediately.
+- `POST /api/publish-jobs/:jobId/run` executes the current publisher path and records the returned external URL when available.
+- `POST /api/publish-jobs/:jobId/confirm` lets an operator paste a manually published URL and mark the job/content as published.
+- Later browser-based publish automation should reuse the saved Xiaohongshu browser profile instead of calling private web APIs directly.
+
+## AI Generation Implementation Notes
+
+- `internal/ai` defines the provider interface, runtime configuration, prompt contract, writing skill selection, mock provider, and OpenAI-compatible provider.
+- Workspace generation retrieves scoped knowledge chunks, builds a structured prompt, validates structured output, saves a draft, and records generation metadata.
+- Admin AI configuration is exposed in the platform admin and updates in-memory runtime config. API keys are accepted but not echoed back.
+- PostgreSQL persistence for generated contents and generation requests is optional and only used when `DATABASE_URL` is available.
 
 ## Database Guidance
 

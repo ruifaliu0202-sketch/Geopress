@@ -3,6 +3,24 @@ import type { CreateMediaPlatformPayload } from '../types';
 
 const API_BASE_URL = import.meta.env.VITE_API_BASE_URL ?? '/api';
 
+export type AdminAIConfig = {
+  provider: 'mock' | 'openai';
+  openAIBaseUrl: string;
+  openAIModel: string;
+  requestTimeoutSeconds: number;
+  apiKeyConfigured: boolean;
+  apiKeyPreview: string;
+};
+
+export type UpdateAdminAIConfigPayload = {
+  provider: 'mock' | 'openai';
+  openAIBaseUrl: string;
+  openAIModel: string;
+  openAIAPIKey?: string;
+  requestTimeoutSeconds: number;
+  clearAPIKey?: boolean;
+};
+
 type ListResponse<T> = {
   items: T[];
 };
@@ -27,6 +45,17 @@ async function request<T>(token: string, path: string, init?: RequestInit): Prom
     throw new Error(`Admin API request failed: ${response.status}`);
   }
   return response.json() as Promise<T>;
+}
+
+export async function fetchAdminAIConfig(token: string): Promise<AdminAIConfig> {
+  return request<AdminAIConfig>(token, '/admin/ai-config');
+}
+
+export async function updateAdminAIConfig(token: string, payload: UpdateAdminAIConfigPayload): Promise<AdminAIConfig> {
+  return request<AdminAIConfig>(token, '/admin/ai-config', {
+    method: 'PUT',
+    body: JSON.stringify(payload),
+  });
 }
 
 type AdminRecord = RaRecord & Record<string, unknown>;

@@ -3,6 +3,7 @@ package app
 import (
 	"log"
 
+	"geopress/backend/internal/ai"
 	"geopress/backend/internal/config"
 	"geopress/backend/internal/database"
 	"geopress/backend/internal/http/handler"
@@ -27,7 +28,14 @@ func NewServer(cfg config.Config) *gin.Engine {
 
 	api := router.Group("/api")
 	handler.NewHealthHandler(db).Register(api)
-	handler.NewWorkspaceHandler().Register(api, middleware.Auth())
+	aiConfig := ai.NewRuntimeConfig(ai.Config{
+		Provider:       cfg.AIProvider,
+		OpenAIAPIKey:   cfg.OpenAIAPIKey,
+		OpenAIBaseURL:  cfg.OpenAIBaseURL,
+		OpenAIModel:    cfg.OpenAIModel,
+		RequestTimeout: cfg.AIRequestTimeout,
+	})
+	handler.NewWorkspaceHandler(db, aiConfig).Register(api, middleware.Auth())
 
 	return router
 }

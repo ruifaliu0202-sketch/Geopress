@@ -1,13 +1,23 @@
 package handler
 
 import (
+	"context"
+	"encoding/json"
 	"fmt"
+	"log"
 	"net/http"
+	"net/url"
+	"sort"
 	"strings"
 	"sync"
 	"time"
+	"unicode"
 
+	"geopress/backend/internal/ai"
+	"geopress/backend/internal/database"
 	"geopress/backend/internal/http/middleware"
+	publishing "geopress/backend/internal/integration/publisher"
+	"geopress/backend/internal/integration/xiaohongshu"
 	"geopress/backend/internal/model"
 
 	"github.com/gin-gonic/gin"
@@ -15,6 +25,8 @@ import (
 
 type WorkspaceHandler struct {
 	mu             sync.RWMutex
+	db             *database.DB
+	aiConfig       *ai.RuntimeConfig
 	users          []model.User
 	workspaces     []model.Workspace
 	members        []model.WorkspaceMember
@@ -25,6 +37,17 @@ type WorkspaceHandler struct {
 	contents       []model.Content
 	schedules      []model.PublishSchedule
 	jobs           []model.PublishJob
+	generations    []model.GenerationRequest
+	loginSessions  map[string]mediaAccountLoginSession
+	browserLogin   xiaohongshu.BrowserLoginService
+}
+
+type mediaAccountLoginSession struct {
+	ID         string
+	ExpiresAt  time.Time
+	ProfileDir string
+	LoginURL   string
+	StateFile  string
 }
 
 type loginRequest struct {
@@ -45,9 +68,18 @@ type createKnowledgeItemRequest struct {
 }
 
 type createMediaAccountRequest struct {
-	PlatformID string `json:"platformId"`
-	Name       string `json:"name"`
-	ExternalID string `json:"externalId"`
+	PlatformID  string `json:"platformId"`
+	Name        string `json:"name"`
+	ExternalID  string `json:"externalId"`
+	LoginMethod string `json:"loginMethod"`
+	PhoneNumber string `json:"phoneNumber"`
+}
+
+type startMediaAccountBrowserLoginRequest struct {
+}
+
+type completeMediaAccountBrowserLoginRequest struct {
+	SessionID string `json:"sessionId"`
 }
 
 type generateContentRequest struct {
@@ -73,6 +105,22 @@ type createPublishScheduleRequest struct {
 	NextRunAt      time.Time                      `json:"nextRunAt"`
 }
 
+type preparePublishRequest struct {
+	ContentID      string   `json:"contentId"`
+	MediaAccountID string   `json:"mediaAccountId"`
+	AssetPaths     []string `json:"assetPaths"`
+	RunNow         bool     `json:"runNow"`
+}
+
+type confirmPublishRequest struct {
+	ExternalURL string `json:"externalUrl"`
+	Message     string `json:"message"`
+}
+
+type runPublishJobRequest struct {
+	AssetPaths []string `json:"assetPaths"`
+}
+
 type createMediaPlatformRequest struct {
 	Name               string   `json:"name"`
 	Type               string   `json:"type"`
@@ -83,11 +131,28 @@ type createMediaPlatformRequest struct {
 	CredentialFields   []string `json:"credentialFields"`
 }
 
-func NewWorkspaceHandler() *WorkspaceHandler {
+type updateAIConfigRequest struct {
+	Provider              string `json:"provider"`
+	OpenAIAPIKey          string `json:"openAIAPIKey"`
+	OpenAIBaseURL         string `json:"openAIBaseUrl"`
+	OpenAIModel           string `json:"openAIModel"`
+	RequestTimeoutSeconds int    `json:"requestTimeoutSeconds"`
+	ClearAPIKey           bool   `json:"clearAPIKey"`
+}
+
+func NewWorkspaceHandler(db *database.DB, aiConfig *ai.RuntimeConfig) *WorkspaceHandler {
+	if aiConfig == nil {
+		aiConfig = ai.NewRuntimeConfig(ai.Config{Provider: ai.ProviderMock})
+	}
+
 	now := time.Now().UTC()
 	expiresAt := now.AddDate(0, 2, 0)
 
-	return &WorkspaceHandler{
+	h := &WorkspaceHandler{
+		db:            db,
+		aiConfig:      aiConfig,
+		loginSessions: map[string]mediaAccountLoginSession{},
+		browserLogin:  xiaohongshu.NewPlaywrightBrowserLoginService(),
 		users: []model.User{
 			{
 				ID:              "usr_demo",
@@ -214,6 +279,26 @@ func NewWorkspaceHandler() *WorkspaceHandler {
 				SupportsScheduling: false,
 				CredentialFields:   []string{"accessToken"},
 			},
+			{
+				ID:                 "plt_xiaohongshu",
+				Name:               "小红书",
+				Type:               xiaohongshu.PlatformType,
+				Enabled:            true,
+				SupportsArticle:    true,
+				SupportsImage:      true,
+				SupportsScheduling: false,
+				CredentialFields:   []string{"qrLogin"},
+			},
+			{
+				ID:                 "plt_local_publisher",
+				Name:               "本机发布平台",
+				Type:               "local_publisher",
+				Enabled:            true,
+				SupportsArticle:    true,
+				SupportsImage:      true,
+				SupportsScheduling: false,
+				CredentialFields:   []string{"phoneNumber"},
+			},
 		},
 		accounts: []model.MediaAccount{
 			{
@@ -235,6 +320,28 @@ func NewWorkspaceHandler() *WorkspaceHandler {
 				Status:        "connected",
 				ExpiresAt:     &expiresAt,
 				LastCheckedAt: now.Add(-6 * time.Hour),
+			},
+			{
+				ID:             "acc_xhs_acme",
+				WorkspaceID:    "wks_acme",
+				PlatformID:     "plt_xiaohongshu",
+				Name:           "Acme 小红书",
+				ExternalID:     "AcmeGrowth",
+				LoginMethod:    "qr",
+				CredentialMeta: map[string]string{},
+				Status:         "pending_login",
+				LastCheckedAt:  now.Add(-90 * time.Minute),
+			},
+			{
+				ID:             "acc_xhs_personal",
+				WorkspaceID:    "wks_personal",
+				PlatformID:     "plt_xiaohongshu",
+				Name:           "Ava 小红书",
+				ExternalID:     "AvaCreator",
+				LoginMethod:    "qr",
+				CredentialMeta: map[string]string{},
+				Status:         "pending_login",
+				LastCheckedAt:  now.Add(-3 * time.Hour),
 			},
 		},
 		contents: []model.Content{
@@ -291,6 +398,9 @@ func NewWorkspaceHandler() *WorkspaceHandler {
 			},
 		},
 	}
+
+	h.seedDatabase(context.Background())
+	return h
 }
 
 func (h *WorkspaceHandler) Register(router gin.IRouter, auth gin.HandlerFunc) {
@@ -308,12 +418,17 @@ func (h *WorkspaceHandler) Register(router gin.IRouter, auth gin.HandlerFunc) {
 	protected.GET("/media-platforms", h.ListMediaPlatforms)
 	protected.GET("/media-accounts", h.ListMediaAccounts)
 	protected.POST("/media-accounts", h.CreateMediaAccount)
+	protected.POST("/media-accounts/:accountId/browser-login/start", h.StartMediaAccountBrowserLogin)
+	protected.POST("/media-accounts/:accountId/browser-login/complete", h.CompleteMediaAccountBrowserLogin)
 	protected.GET("/contents", h.ListContents)
 	protected.POST("/contents", h.CreateContent)
 	protected.POST("/contents/generate", h.GenerateContent)
 	protected.GET("/publish-schedules", h.ListPublishSchedules)
 	protected.POST("/publish-schedules", h.CreatePublishSchedule)
 	protected.GET("/publish-jobs", h.ListPublishJobs)
+	protected.POST("/publish/prepare", h.PreparePublish)
+	protected.POST("/publish-jobs/:jobId/run", h.RunPublishJob)
+	protected.POST("/publish-jobs/:jobId/confirm", h.ConfirmPublishJob)
 
 	admin := protected.Group("/admin")
 	admin.Use(h.requirePlatformAdmin())
@@ -324,6 +439,8 @@ func (h *WorkspaceHandler) Register(router gin.IRouter, auth gin.HandlerFunc) {
 	admin.GET("/media-platforms", h.AdminListMediaPlatforms)
 	admin.POST("/media-platforms", h.AdminCreateMediaPlatform)
 	admin.GET("/media-accounts", h.AdminListMediaAccounts)
+	admin.GET("/ai-config", h.AdminGetAIConfig)
+	admin.PUT("/ai-config", h.AdminUpdateAIConfig)
 }
 
 func (h *WorkspaceHandler) Login(c *gin.Context) {
@@ -545,20 +662,290 @@ func (h *WorkspaceHandler) CreateMediaAccount(c *gin.Context) {
 	}
 
 	now := time.Now().UTC()
+	h.mu.RLock()
+	platform, platformOK := h.mediaPlatformByID(platformID)
+	h.mu.RUnlock()
+	if !platformOK {
+		c.JSON(http.StatusNotFound, gin.H{"error": "media platform not found"})
+		return
+	}
+	if !platform.Enabled {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "media platform is not enabled"})
+		return
+	}
+
+	phoneNumber, phoneOK := cleanPhoneNumber(req.PhoneNumber)
+	if !phoneOK {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "phoneNumber is invalid"})
+		return
+	}
+
+	requiresPhone := platformRequiresCredential(platform, "phoneNumber")
+	requiresQR := platformRequiresCredential(platform, "qrLogin")
+	loginMethod := strings.TrimSpace(strings.ToLower(req.LoginMethod))
+	if loginMethod == "" {
+		if requiresQR {
+			loginMethod = "qr"
+		} else if phoneNumber != "" || requiresPhone {
+			loginMethod = "phone"
+		} else {
+			loginMethod = "manual"
+		}
+	}
+	if loginMethod != "manual" && loginMethod != "phone" && loginMethod != "qr" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "loginMethod is invalid"})
+		return
+	}
+	if requiresQR && loginMethod != "qr" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "qr login is required for this media platform"})
+		return
+	}
+	if requiresPhone && loginMethod != "phone" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "phone login is required for this media platform"})
+		return
+	}
+	if loginMethod == "phone" && phoneNumber == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "phoneNumber is required for phone login"})
+		return
+	}
+
+	credentialMeta := map[string]string{}
+	if loginMethod == "phone" && phoneNumber != "" {
+		credentialMeta["phoneNumber"] = phoneNumber
+	}
+	status := "connected"
+	if loginMethod == "phone" || loginMethod == "qr" {
+		status = "pending_login"
+	}
+
 	account := model.MediaAccount{
-		ID:            fmt.Sprintf("acc_%d", now.UnixNano()),
-		WorkspaceID:   workspaceID,
-		PlatformID:    platformID,
-		Name:          name,
-		ExternalID:    strings.TrimSpace(req.ExternalID),
-		Status:        "connected",
-		LastCheckedAt: now,
+		ID:             fmt.Sprintf("acc_%d", now.UnixNano()),
+		WorkspaceID:    workspaceID,
+		PlatformID:     platformID,
+		Name:           name,
+		ExternalID:     strings.TrimSpace(req.ExternalID),
+		LoginMethod:    loginMethod,
+		CredentialMeta: credentialMeta,
+		Status:         status,
+		LastCheckedAt:  now,
 	}
 
 	h.mu.Lock()
 	h.accounts = append([]model.MediaAccount{account}, h.accounts...)
 	h.mu.Unlock()
 	c.JSON(http.StatusCreated, account)
+}
+
+func (h *WorkspaceHandler) StartMediaAccountBrowserLogin(c *gin.Context) {
+	h.startMediaAccountBrowserLogin(c)
+}
+
+func (h *WorkspaceHandler) CompleteMediaAccountBrowserLogin(c *gin.Context) {
+	h.completeMediaAccountBrowserLogin(c)
+}
+
+func (h *WorkspaceHandler) startMediaAccountBrowserLogin(c *gin.Context) {
+	workspaceID, ok := h.authorizedWorkspaceID(c)
+	if !ok {
+		return
+	}
+
+	accountID := strings.TrimSpace(c.Param("accountId"))
+	if accountID == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "account id is required"})
+		return
+	}
+
+	var req startMediaAccountBrowserLoginRequest
+	_ = c.ShouldBindJSON(&req)
+
+	now := time.Now().UTC()
+	expiresAt := now.Add(5 * time.Minute)
+	sessionID := fmt.Sprintf("xhs_login_%d", now.UnixNano())
+	profileDir := browserProfilePath(workspaceID, accountID)
+	stateFile := xiaohongshu.BrowserLoginStateFile(profileDir)
+
+	h.mu.RLock()
+	account, accountOK := h.mediaAccountByID(workspaceID, accountID)
+	if !accountOK {
+		h.mu.RUnlock()
+		c.JSON(http.StatusNotFound, gin.H{"error": "media account not found"})
+		return
+	}
+	platform, platformOK := h.mediaPlatformByID(account.PlatformID)
+	h.mu.RUnlock()
+
+	if !platformOK || !supportsBrowserLogin(platform.Type) {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "media account does not support browser login"})
+		return
+	}
+	if account.LoginMethod != "qr" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "media account login method is not qr"})
+		return
+	}
+
+	loginResult, err := h.browserLogin.Start(c.Request.Context(), xiaohongshu.BrowserLoginStartRequest{
+		WorkspaceID: workspaceID,
+		AccountID:   accountID,
+		SessionID:   sessionID,
+		ProfileDir:  profileDir,
+		LoginURL:    xiaohongshu.DefaultLoginURL,
+		StateFile:   stateFile,
+	})
+	if err != nil {
+		c.JSON(http.StatusBadGateway, gin.H{"error": err.Error()})
+		return
+	}
+
+	var updated model.MediaAccount
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	for index := range h.accounts {
+		if h.accounts[index].WorkspaceID != workspaceID || h.accounts[index].ID != accountID {
+			continue
+		}
+		account := &h.accounts[index]
+		if account.CredentialMeta == nil {
+			account.CredentialMeta = map[string]string{}
+		}
+
+		account.CredentialMeta["qrLoginStartedAt"] = loginResult.StartedAt.Format(time.RFC3339)
+		account.CredentialMeta["browserSessionMode"] = "playwright_persistent_context"
+		account.CredentialMeta["browserProfile"] = loginResult.ProfileDir
+		account.CredentialMeta["browserLoginStateFile"] = loginResult.StateFile
+		account.CredentialMeta["loginSessionId"] = loginResult.SessionID
+		account.Status = "qr_waiting"
+		if loginResult.AlreadyLoggedIn {
+			account.Status = "connected"
+			account.CredentialMeta["qrLoginCompletedAt"] = loginResult.StartedAt.Format(time.RFC3339)
+		}
+		account.LastCheckedAt = now
+		updated = *account
+		h.loginSessions[loginSessionKey(workspaceID, accountID)] = mediaAccountLoginSession{
+			ID:         loginResult.SessionID,
+			ExpiresAt:  expiresAt,
+			ProfileDir: loginResult.ProfileDir,
+			LoginURL:   loginResult.LoginURL,
+			StateFile:  loginResult.StateFile,
+		}
+		break
+	}
+	if updated.ID == "" {
+		c.JSON(http.StatusNotFound, gin.H{"error": "media account not found"})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{
+		"account":          updated,
+		"expiresAt":        expiresAt,
+		"mode":             "playwright_persistent_context",
+		"qrScreenshotData": loginResult.QRScreenshotData,
+		"qrLoginUrl":       loginResult.PageURL,
+		"sessionId":        loginResult.SessionID,
+		"browserProfile":   loginResult.ProfileDir,
+		"stateFile":        loginResult.StateFile,
+	})
+}
+
+func (h *WorkspaceHandler) completeMediaAccountBrowserLogin(c *gin.Context) {
+	workspaceID, ok := h.authorizedWorkspaceID(c)
+	if !ok {
+		return
+	}
+
+	accountID := strings.TrimSpace(c.Param("accountId"))
+	if accountID == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "account id is required"})
+		return
+	}
+
+	var req completeMediaAccountBrowserLoginRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid request body"})
+		return
+	}
+
+	sessionID := strings.TrimSpace(req.SessionID)
+	if sessionID == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "sessionId is required"})
+		return
+	}
+
+	now := time.Now().UTC()
+	key := loginSessionKey(workspaceID, accountID)
+
+	h.mu.RLock()
+	loginSession, sessionOK := h.loginSessions[key]
+	if !sessionOK {
+		h.mu.RUnlock()
+		c.JSON(http.StatusBadRequest, gin.H{"error": "qr login session was not started"})
+		return
+	}
+	if now.After(loginSession.ExpiresAt) {
+		h.mu.RUnlock()
+		h.mu.Lock()
+		delete(h.loginSessions, key)
+		h.mu.Unlock()
+		c.JSON(http.StatusBadRequest, gin.H{"error": "qr login session expired"})
+		return
+	}
+	if loginSession.ID != sessionID {
+		h.mu.RUnlock()
+		c.JSON(http.StatusBadRequest, gin.H{"error": "qr login session is invalid"})
+		return
+	}
+	account, accountOK := h.mediaAccountByID(workspaceID, accountID)
+	if !accountOK {
+		h.mu.RUnlock()
+		c.JSON(http.StatusNotFound, gin.H{"error": "media account not found"})
+		return
+	}
+	platform, platformOK := h.mediaPlatformByID(account.PlatformID)
+	h.mu.RUnlock()
+
+	if !platformOK || !supportsBrowserLogin(platform.Type) {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "media account does not support browser login"})
+		return
+	}
+
+	loginResult, err := h.browserLogin.Complete(c.Request.Context(), xiaohongshu.BrowserLoginCompleteRequest{
+		WorkspaceID: workspaceID,
+		AccountID:   accountID,
+		SessionID:   sessionID,
+		ProfileDir:  loginSession.ProfileDir,
+		LoginURL:    loginSession.LoginURL,
+		StateFile:   loginSession.StateFile,
+	})
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	for index := range h.accounts {
+		account := &h.accounts[index]
+		if account.WorkspaceID != workspaceID || account.ID != accountID {
+			continue
+		}
+		if account.CredentialMeta == nil {
+			account.CredentialMeta = map[string]string{}
+		}
+
+		account.CredentialMeta["qrLoginCompletedAt"] = loginResult.CompletedAt.Format(time.RFC3339)
+		account.CredentialMeta["browserSessionMode"] = "playwright_persistent_context"
+		account.CredentialMeta["browserProfile"] = loginResult.ProfileDir
+		account.CredentialMeta["browserLoginStateFile"] = loginResult.StateFile
+		account.CredentialMeta["loginSessionId"] = sessionID
+		account.Status = "connected"
+		account.LastCheckedAt = now
+		delete(h.loginSessions, key)
+
+		c.JSON(http.StatusOK, *account)
+		return
+	}
+
+	c.JSON(http.StatusNotFound, gin.H{"error": "media account not found"})
 }
 
 func (h *WorkspaceHandler) ListContents(c *gin.Context) {
@@ -617,6 +1004,7 @@ func (h *WorkspaceHandler) GenerateContent(c *gin.Context) {
 	if !ok {
 		return
 	}
+	userID := middleware.CurrentUserID(c)
 
 	var req generateContentRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
@@ -631,28 +1019,126 @@ func (h *WorkspaceHandler) GenerateContent(c *gin.Context) {
 	}
 
 	now := time.Now().UTC()
-	knowledgeSummary := h.knowledgeSummary(workspaceID, req.KnowledgeBaseID)
-	title := fmt.Sprintf("%s：从策略到执行", keywords[0])
-	summary := fmt.Sprintf("围绕 %s 的 mock AI 草稿，已结合当前工作区知识库上下文。", strings.Join(keywords, "、"))
-	body := fmt.Sprintf("关键词：%s\n\n知识库上下文：%s\n\n这是一篇 mock AI 生成草稿，用于先打通生成、编辑、排程和发布流程。后续接入真实模型时，将在这里替换 AI Provider。", strings.Join(keywords, "、"), knowledgeSummary)
+	knowledgeBaseID := strings.TrimSpace(req.KnowledgeBaseID)
+	skill := ai.SelectWritingSkill(req.ContentType)
+
+	h.mu.RLock()
+	workspace, _ := h.workspaceByID(workspaceID)
+	chunks := h.retrieveKnowledgeChunksLocked(workspaceID, knowledgeBaseID, keywords, 8)
+	h.mu.RUnlock()
+
+	aiReq := ai.GenerateRequest{
+		WorkspaceID:     workspaceID,
+		UserID:          userID,
+		KnowledgeBaseID: knowledgeBaseID,
+		ContentType:     skill.ContentType,
+		Keywords:        keywords,
+		Workspace: ai.WorkspaceContext{
+			Name:     workspace.Name,
+			Type:     workspace.Type,
+			Industry: workspace.Industry,
+			Language: workspace.Language,
+			Tone:     workspace.Tone,
+		},
+		Skill:           skill,
+		KnowledgeChunks: chunks,
+	}
+
+	provider := h.aiConfig.Provider()
+	response, err := provider.Generate(c.Request.Context(), aiReq)
+	if err != nil {
+		h.recordGeneration(c.Request.Context(), model.GenerationRequest{
+			ID:                    fmt.Sprintf("gen_%d", now.UnixNano()),
+			WorkspaceID:           workspaceID,
+			UserID:                userID,
+			KnowledgeBaseID:       knowledgeBaseID,
+			Provider:              provider.Name(),
+			Model:                 provider.Model(),
+			ContentType:           skill.ContentType,
+			Keywords:              keywords,
+			Prompt:                encodeJSON(ai.BuildPrompt(aiReq)),
+			PromptVersion:         ai.PromptVersion,
+			SkillID:               skill.ID,
+			SkillVersion:          skill.Version,
+			RetrievedKnowledgeIDs: knowledgeChunkIDs(chunks),
+			Status:                "failed",
+			ErrorMessage:          err.Error(),
+			CreatedAt:             now,
+		})
+		c.JSON(http.StatusBadGateway, gin.H{"error": "content generation failed"})
+		return
+	}
+
+	if err := response.Draft.Validate(); err != nil {
+		h.recordGeneration(c.Request.Context(), model.GenerationRequest{
+			ID:                    fmt.Sprintf("gen_%d", now.UnixNano()),
+			WorkspaceID:           workspaceID,
+			UserID:                userID,
+			KnowledgeBaseID:       knowledgeBaseID,
+			Provider:              response.Provider,
+			Model:                 response.Model,
+			ContentType:           skill.ContentType,
+			Keywords:              keywords,
+			Prompt:                encodeJSON(response.Prompt),
+			PromptVersion:         response.PromptVersion,
+			SkillID:               response.SkillID,
+			SkillVersion:          response.SkillVersion,
+			RetrievedKnowledgeIDs: response.RetrievedIDs,
+			RawOutput:             string(response.RawOutput),
+			Status:                "failed",
+			ErrorMessage:          err.Error(),
+			CreatedAt:             now,
+		})
+		c.JSON(http.StatusBadGateway, gin.H{"error": "generated content is invalid"})
+		return
+	}
 
 	content := model.Content{
 		ID:              fmt.Sprintf("cnt_%d", now.UnixNano()),
 		WorkspaceID:     workspaceID,
-		KnowledgeBaseID: strings.TrimSpace(req.KnowledgeBaseID),
-		Title:           title,
-		Summary:         summary,
-		Body:            body,
-		Keywords:        keywords,
+		KnowledgeBaseID: knowledgeBaseID,
+		Title:           strings.TrimSpace(response.Draft.Title),
+		Summary:         strings.TrimSpace(response.Draft.Summary),
+		Body:            strings.TrimSpace(response.Draft.Body),
+		Keywords:        cleanKeywords(response.Draft.Keywords),
 		Status:          model.ContentDraft,
-		Author:          "Mock AI",
-		Source:          defaultString(strings.TrimSpace(req.ContentType), "mock_ai"),
+		Author:          "AI Writer",
+		Source:          "ai_" + defaultString(response.Provider, "mock"),
 		UpdatedAt:       now,
 	}
 
 	h.mu.Lock()
 	h.contents = append([]model.Content{content}, h.contents...)
 	h.mu.Unlock()
+
+	if err := h.saveContent(c.Request.Context(), content); err != nil {
+		log.Printf("generated content was not persisted: %v", err)
+	}
+
+	h.recordGeneration(c.Request.Context(), model.GenerationRequest{
+		ID:                    fmt.Sprintf("gen_%d", now.UnixNano()),
+		WorkspaceID:           workspaceID,
+		UserID:                userID,
+		KnowledgeBaseID:       knowledgeBaseID,
+		ContentID:             content.ID,
+		Provider:              response.Provider,
+		Model:                 response.Model,
+		ContentType:           skill.ContentType,
+		Keywords:              keywords,
+		Prompt:                encodeJSON(response.Prompt),
+		PromptVersion:         response.PromptVersion,
+		SkillID:               response.SkillID,
+		SkillVersion:          response.SkillVersion,
+		RetrievedKnowledgeIDs: response.RetrievedIDs,
+		RawOutput:             string(response.RawOutput),
+		ParsedOutput:          encodeJSON(response.Draft),
+		InputTokens:           response.TokenUsage.InputTokens,
+		OutputTokens:          response.TokenUsage.OutputTokens,
+		TotalTokens:           response.TokenUsage.TotalTokens,
+		Status:                "succeeded",
+		CreatedAt:             now,
+	})
+
 	c.JSON(http.StatusCreated, content)
 }
 
@@ -748,6 +1234,257 @@ func (h *WorkspaceHandler) ListPublishJobs(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"items": items})
 }
 
+func (h *WorkspaceHandler) PreparePublish(c *gin.Context) {
+	workspaceID, ok := h.authorizedWorkspaceID(c)
+	if !ok {
+		return
+	}
+
+	var req preparePublishRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid request body"})
+		return
+	}
+
+	contentID := strings.TrimSpace(req.ContentID)
+	accountID := strings.TrimSpace(req.MediaAccountID)
+	if contentID == "" || accountID == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "contentId and mediaAccountId are required"})
+		return
+	}
+
+	now := time.Now().UTC()
+	h.mu.RLock()
+	workspace, workspaceOK := h.workspaceByID(workspaceID)
+	content, contentOK := h.contentByID(workspaceID, contentID)
+	account, accountOK := h.mediaAccountByID(workspaceID, accountID)
+	platform, platformOK := h.mediaPlatformByID(account.PlatformID)
+	h.mu.RUnlock()
+
+	if !workspaceOK {
+		c.JSON(http.StatusNotFound, gin.H{"error": "workspace not found"})
+		return
+	}
+	if !contentOK {
+		c.JSON(http.StatusNotFound, gin.H{"error": "content not found"})
+		return
+	}
+	if !accountOK {
+		c.JSON(http.StatusNotFound, gin.H{"error": "media account not found"})
+		return
+	}
+	if !platformOK || !platform.Enabled {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "media platform is not enabled"})
+		return
+	}
+
+	publisher, supported := publisherForPlatform(platform.Type)
+	if !supported {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "media platform does not support publish preparation"})
+		return
+	}
+
+	prepared, err := publisher.Prepare(c.Request.Context(), publishing.PrepareRequest{
+		Workspace:   workspace,
+		Content:     content,
+		Account:     account,
+		Platform:    platform,
+		RequestedAt: now,
+	})
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+
+	job := model.PublishJob{
+		ID:             fmt.Sprintf("job_%d", now.UnixNano()),
+		WorkspaceID:    workspaceID,
+		ContentID:      content.ID,
+		MediaAccountID: account.ID,
+		Status:         model.PublishJobManual,
+		ScheduledAt:    now,
+		LastMessage:    "小红书发布包已生成，等待 Mock 真人接口发布。",
+	}
+
+	h.mu.Lock()
+	h.jobs = append([]model.PublishJob{job}, h.jobs...)
+	h.updateContentStatusLocked(workspaceID, content.ID, model.ContentScheduled)
+	h.mu.Unlock()
+
+	if req.RunNow {
+		result, err := h.runPublish(c.Request.Context(), workspaceID, job.ID, prepared, req.AssetPaths)
+		if err != nil {
+			c.JSON(http.StatusBadGateway, gin.H{"error": err.Error(), "job": h.jobSnapshot(workspaceID, job.ID), "preparedPost": prepared})
+			return
+		}
+		c.JSON(http.StatusCreated, gin.H{
+			"job":           h.jobSnapshot(workspaceID, job.ID),
+			"preparedPost":  prepared,
+			"publishResult": result,
+		})
+		return
+	}
+
+	c.JSON(http.StatusCreated, gin.H{
+		"job":          job,
+		"preparedPost": prepared,
+	})
+}
+
+func (h *WorkspaceHandler) RunPublishJob(c *gin.Context) {
+	workspaceID, ok := h.authorizedWorkspaceID(c)
+	if !ok {
+		return
+	}
+
+	jobID := strings.TrimSpace(c.Param("jobId"))
+	if jobID == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "job id is required"})
+		return
+	}
+
+	var req runPublishJobRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid request body"})
+		return
+	}
+
+	h.mu.RLock()
+	job, jobOK := h.publishJobByID(workspaceID, jobID)
+	content, contentOK := h.contentByID(workspaceID, job.ContentID)
+	account, accountOK := h.mediaAccountByID(workspaceID, job.MediaAccountID)
+	platform, platformOK := h.mediaPlatformByID(account.PlatformID)
+	workspace, workspaceOK := h.workspaceByID(workspaceID)
+	h.mu.RUnlock()
+
+	if !jobOK {
+		c.JSON(http.StatusNotFound, gin.H{"error": "publish job not found"})
+		return
+	}
+	if !contentOK || !accountOK || !platformOK || !workspaceOK {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "publish job references missing content or account"})
+		return
+	}
+
+	publisher, supported := publisherForPlatform(platform.Type)
+	if !supported {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "media platform does not support publish"})
+		return
+	}
+
+	prepared, err := publisher.Prepare(c.Request.Context(), publishing.PrepareRequest{
+		Workspace:   workspace,
+		Content:     content,
+		Account:     account,
+		Platform:    platform,
+		RequestedAt: time.Now().UTC(),
+	})
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+
+	result, err := h.runPublish(c.Request.Context(), workspaceID, jobID, prepared, req.AssetPaths)
+	if err != nil {
+		c.JSON(http.StatusBadGateway, gin.H{"error": err.Error(), "job": h.jobSnapshot(workspaceID, jobID), "preparedPost": prepared})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{
+		"job":           h.jobSnapshot(workspaceID, jobID),
+		"preparedPost":  prepared,
+		"publishResult": result,
+	})
+}
+
+func (h *WorkspaceHandler) ConfirmPublishJob(c *gin.Context) {
+	workspaceID, ok := h.authorizedWorkspaceID(c)
+	if !ok {
+		return
+	}
+
+	jobID := strings.TrimSpace(c.Param("jobId"))
+	if jobID == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "job id is required"})
+		return
+	}
+
+	var req confirmPublishRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid request body"})
+		return
+	}
+
+	externalURL := strings.TrimSpace(req.ExternalURL)
+	parsedURL, err := url.ParseRequestURI(externalURL)
+	if err != nil || parsedURL.Scheme == "" || parsedURL.Host == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "valid externalUrl is required"})
+		return
+	}
+
+	h.mu.Lock()
+	defer h.mu.Unlock()
+
+	for index := range h.jobs {
+		job := &h.jobs[index]
+		if job.WorkspaceID != workspaceID || job.ID != jobID {
+			continue
+		}
+
+		job.Status = model.PublishJobSucceeded
+		job.ExternalURL = externalURL
+		job.LastMessage = defaultString(strings.TrimSpace(req.Message), "已人工确认发布完成。")
+		h.updateContentStatusLocked(workspaceID, job.ContentID, model.ContentPublished)
+		c.JSON(http.StatusOK, job)
+		return
+	}
+
+	c.JSON(http.StatusNotFound, gin.H{"error": "publish job not found"})
+}
+
+func (h *WorkspaceHandler) runPublish(
+	ctx context.Context,
+	workspaceID string,
+	jobID string,
+	prepared publishing.PreparedPost,
+	assetPaths []string,
+) (publishing.PublishResult, error) {
+	h.mu.Lock()
+	h.updateJobStatusLocked(workspaceID, jobID, model.PublishJobRunning, "", "正在调用小红书 Mock 真人接口发布。")
+	h.mu.Unlock()
+
+	publisher, supported := publisherForPlatform(prepared.PlatformType)
+	if !supported {
+		return publishing.PublishResult{}, fmt.Errorf("unsupported platform type: %s", prepared.PlatformType)
+	}
+
+	result, err := publisher.Publish(ctx, publishing.PublishRequest{
+		PreparedPost: prepared,
+		AssetPaths:   cleanKeywords(assetPaths),
+	})
+	if err != nil {
+		h.mu.Lock()
+		h.updateJobStatusLocked(workspaceID, jobID, model.PublishJobFailed, "", err.Error())
+		h.mu.Unlock()
+		return publishing.PublishResult{}, err
+	}
+
+	status := model.PublishJobManual
+	message := defaultString(result.Message, "已打开浏览器并完成小红书发布准备。")
+	if result.Status == "published" {
+		status = model.PublishJobSucceeded
+	}
+
+	h.mu.Lock()
+	job := h.updateJobStatusLocked(workspaceID, jobID, status, result.ExternalURL, message)
+	if result.Status == "published" {
+		h.updateContentStatusLocked(workspaceID, job.ContentID, model.ContentPublished)
+	}
+	h.mu.Unlock()
+
+	return result, nil
+}
+
 func (h *WorkspaceHandler) AdminOverview(c *gin.Context) {
 	h.mu.RLock()
 	defer h.mu.RUnlock()
@@ -826,6 +1563,37 @@ func (h *WorkspaceHandler) AdminListMediaAccounts(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"items": items})
 }
 
+func (h *WorkspaceHandler) AdminGetAIConfig(c *gin.Context) {
+	c.JSON(http.StatusOK, h.aiConfig.Public())
+}
+
+func (h *WorkspaceHandler) AdminUpdateAIConfig(c *gin.Context) {
+	var req updateAIConfigRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid request body"})
+		return
+	}
+
+	provider := strings.TrimSpace(strings.ToLower(req.Provider))
+	if provider == "" {
+		provider = ai.ProviderMock
+	}
+	if provider != ai.ProviderMock && provider != ai.ProviderOpenAI {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "unsupported AI provider"})
+		return
+	}
+
+	updated := h.aiConfig.Update(ai.Config{
+		Provider:       provider,
+		OpenAIAPIKey:   strings.TrimSpace(req.OpenAIAPIKey),
+		OpenAIBaseURL:  strings.TrimSpace(req.OpenAIBaseURL),
+		OpenAIModel:    strings.TrimSpace(req.OpenAIModel),
+		RequestTimeout: req.RequestTimeoutSeconds,
+	}, req.ClearAPIKey)
+
+	c.JSON(http.StatusOK, ai.NewRuntimeConfig(updated).Public())
+}
+
 func (h *WorkspaceHandler) requirePlatformAdmin() gin.HandlerFunc {
 	return func(c *gin.Context) {
 		userID := middleware.CurrentUserID(c)
@@ -840,6 +1608,14 @@ func (h *WorkspaceHandler) requirePlatformAdmin() gin.HandlerFunc {
 		}
 
 		c.Next()
+	}
+}
+
+func (h *WorkspaceHandler) seedDatabase(ctx context.Context) {
+	dbCtx, cancel := context.WithTimeout(ctx, 3*time.Second)
+	defer cancel()
+	if err := h.db.SeedWorkspaceData(dbCtx, h.users, h.workspaces, h.members, h.knowledgeBases); err != nil {
+		log.Printf("database seed failed, continuing in memory mode: %v", err)
 	}
 }
 
@@ -876,6 +1652,58 @@ func (h *WorkspaceHandler) userByID(userID string) (model.User, bool) {
 	return model.User{}, false
 }
 
+func (h *WorkspaceHandler) workspaceByID(workspaceID string) (model.Workspace, bool) {
+	for _, workspace := range h.workspaces {
+		if workspace.ID == workspaceID {
+			return workspace, true
+		}
+	}
+	return model.Workspace{}, false
+}
+
+func (h *WorkspaceHandler) contentByID(workspaceID, contentID string) (model.Content, bool) {
+	for _, content := range h.contents {
+		if content.WorkspaceID == workspaceID && content.ID == contentID {
+			return content, true
+		}
+	}
+	return model.Content{}, false
+}
+
+func (h *WorkspaceHandler) mediaAccountByID(workspaceID, accountID string) (model.MediaAccount, bool) {
+	for _, account := range h.accounts {
+		if account.WorkspaceID == workspaceID && account.ID == accountID {
+			return account, true
+		}
+	}
+	return model.MediaAccount{}, false
+}
+
+func (h *WorkspaceHandler) mediaPlatformByID(platformID string) (model.MediaPlatform, bool) {
+	for _, platform := range h.platforms {
+		if platform.ID == platformID {
+			return platform, true
+		}
+	}
+	return model.MediaPlatform{}, false
+}
+
+func (h *WorkspaceHandler) publishJobByID(workspaceID, jobID string) (model.PublishJob, bool) {
+	for _, job := range h.jobs {
+		if job.WorkspaceID == workspaceID && job.ID == jobID {
+			return job, true
+		}
+	}
+	return model.PublishJob{}, false
+}
+
+func (h *WorkspaceHandler) jobSnapshot(workspaceID, jobID string) model.PublishJob {
+	h.mu.RLock()
+	defer h.mu.RUnlock()
+	job, _ := h.publishJobByID(workspaceID, jobID)
+	return job
+}
+
 func (h *WorkspaceHandler) workspacesForUser(userID string) []model.Workspace {
 	workspaceIDs := map[string]bool{}
 	for _, member := range h.members {
@@ -902,6 +1730,34 @@ func (h *WorkspaceHandler) userCanAccessWorkspace(userID, workspaceID string) bo
 	return false
 }
 
+func (h *WorkspaceHandler) updateContentStatusLocked(workspaceID, contentID string, status model.ContentStatus) {
+	for index := range h.contents {
+		content := &h.contents[index]
+		if content.WorkspaceID == workspaceID && content.ID == contentID {
+			content.Status = status
+			content.UpdatedAt = time.Now().UTC()
+			return
+		}
+	}
+}
+
+func (h *WorkspaceHandler) updateJobStatusLocked(workspaceID, jobID string, status model.PublishJobStatus, externalURL string, message string) model.PublishJob {
+	for index := range h.jobs {
+		job := &h.jobs[index]
+		if job.WorkspaceID == workspaceID && job.ID == jobID {
+			job.Status = status
+			if externalURL != "" {
+				job.ExternalURL = externalURL
+			}
+			if message != "" {
+				job.LastMessage = message
+			}
+			return *job
+		}
+	}
+	return model.PublishJob{}
+}
+
 func (h *WorkspaceHandler) bumpKnowledgeBaseCount(workspaceID, knowledgeBaseID string, delta int) {
 	for index := range h.knowledgeBases {
 		item := &h.knowledgeBases[index]
@@ -913,11 +1769,14 @@ func (h *WorkspaceHandler) bumpKnowledgeBaseCount(workspaceID, knowledgeBaseID s
 	}
 }
 
-func (h *WorkspaceHandler) knowledgeSummary(workspaceID, knowledgeBaseID string) string {
-	h.mu.RLock()
-	defer h.mu.RUnlock()
+func (h *WorkspaceHandler) retrieveKnowledgeChunksLocked(workspaceID, knowledgeBaseID string, keywords []string, limit int) []ai.KnowledgeChunk {
+	type scoredChunk struct {
+		score int
+		item  model.KnowledgeItem
+	}
 
-	parts := []string{}
+	scored := []scoredChunk{}
+	fallback := []model.KnowledgeItem{}
 	for _, item := range h.knowledgeItems {
 		if item.WorkspaceID != workspaceID || !item.Enabled {
 			continue
@@ -925,13 +1784,91 @@ func (h *WorkspaceHandler) knowledgeSummary(workspaceID, knowledgeBaseID string)
 		if knowledgeBaseID != "" && item.KnowledgeBaseID != knowledgeBaseID {
 			continue
 		}
-		parts = append(parts, item.Title+" - "+item.Content)
+		fallback = append(fallback, item)
+		score := knowledgeScore(item, keywords)
+		if score > 0 {
+			scored = append(scored, scoredChunk{score: score, item: item})
+		}
 	}
 
-	if len(parts) == 0 {
-		return "当前工作区尚未维护可用知识条目。"
+	if len(scored) == 0 {
+		for _, item := range fallback {
+			scored = append(scored, scoredChunk{score: 0, item: item})
+		}
 	}
-	return strings.Join(parts, "；")
+
+	sort.SliceStable(scored, func(i, j int) bool {
+		return scored[i].score > scored[j].score
+	})
+
+	if limit <= 0 || limit > len(scored) {
+		limit = len(scored)
+	}
+
+	chunks := make([]ai.KnowledgeChunk, 0, limit)
+	for _, item := range scored[:limit] {
+		chunks = append(chunks, ai.KnowledgeChunk{
+			ID:              item.item.ID,
+			KnowledgeBaseID: item.item.KnowledgeBaseID,
+			Type:            item.item.Type,
+			Title:           item.item.Title,
+			Content:         item.item.Content,
+		})
+	}
+	return chunks
+}
+
+func knowledgeScore(item model.KnowledgeItem, keywords []string) int {
+	title := strings.ToLower(item.Title)
+	content := strings.ToLower(item.Content)
+	score := 0
+	for _, keyword := range keywords {
+		keyword = strings.ToLower(strings.TrimSpace(keyword))
+		if keyword == "" {
+			continue
+		}
+		if strings.Contains(title, keyword) {
+			score += 3
+		}
+		if strings.Contains(content, keyword) {
+			score++
+		}
+	}
+	return score
+}
+
+func knowledgeChunkIDs(chunks []ai.KnowledgeChunk) []string {
+	ids := make([]string, 0, len(chunks))
+	for _, chunk := range chunks {
+		ids = append(ids, chunk.ID)
+	}
+	return ids
+}
+
+func (h *WorkspaceHandler) recordGeneration(ctx context.Context, item model.GenerationRequest) {
+	h.mu.Lock()
+	h.generations = append([]model.GenerationRequest{item}, h.generations...)
+	h.mu.Unlock()
+
+	dbCtx, cancel := context.WithTimeout(ctx, 2*time.Second)
+	defer cancel()
+	if err := h.db.SaveGenerationRequest(dbCtx, item); err != nil {
+		log.Printf("generation request log was not persisted: %v", err)
+	}
+}
+
+func (h *WorkspaceHandler) saveContent(ctx context.Context, item model.Content) error {
+	dbCtx, cancel := context.WithTimeout(ctx, 2*time.Second)
+	defer cancel()
+	return h.db.SaveContent(dbCtx, item)
+}
+
+func encodeJSON(value any) string {
+	data, err := json.Marshal(value)
+	if err != nil {
+		return "{}"
+	}
+	return string(data)
 }
 
 func filterByWorkspace[T any](items []T, workspaceID string, getWorkspaceID func(T) string) []T {
@@ -942,6 +1879,49 @@ func filterByWorkspace[T any](items []T, workspaceID string, getWorkspaceID func
 		}
 	}
 	return filtered
+}
+
+func cleanPhoneNumber(value string) (string, bool) {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return "", true
+	}
+
+	digits := 0
+	for _, char := range value {
+		switch {
+		case unicode.IsDigit(char):
+			digits++
+		case char == '+' || char == '-' || char == ' ' || char == '(' || char == ')':
+		default:
+			return "", false
+		}
+	}
+	if digits < 7 || digits > 20 {
+		return "", false
+	}
+	return value, true
+}
+
+func platformRequiresCredential(platform model.MediaPlatform, field string) bool {
+	for _, item := range platform.CredentialFields {
+		if item == field {
+			return true
+		}
+	}
+	return false
+}
+
+func loginSessionKey(workspaceID, accountID string) string {
+	return workspaceID + ":" + accountID
+}
+
+func supportsBrowserLogin(platformType string) bool {
+	return platformType == xiaohongshu.PlatformType
+}
+
+func browserProfilePath(workspaceID, accountID string) string {
+	return xiaohongshu.RuntimeBrowserProfilePath(workspaceID, accountID)
 }
 
 func countContents(contents []model.Content, status model.ContentStatus) int {
@@ -998,4 +1978,13 @@ func defaultString(value, fallback string) string {
 		return fallback
 	}
 	return value
+}
+
+func publisherForPlatform(platformType string) (publishing.Publisher, bool) {
+	switch platformType {
+	case xiaohongshu.PlatformType:
+		return xiaohongshu.NewMockHumanPublisher(), true
+	default:
+		return nil, false
+	}
 }

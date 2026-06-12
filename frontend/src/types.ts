@@ -57,6 +57,8 @@ export type MediaAccount = {
   platformId: string;
   name: string;
   externalId: string;
+  loginMethod: string;
+  credentialMeta?: Record<string, string>;
   status: string;
   expiresAt?: string;
   lastCheckedAt: string;
@@ -92,7 +94,7 @@ export type PublishSchedule = {
   createdAt: string;
 };
 
-export type PublishJobStatus = 'queued' | 'running' | 'succeeded' | 'failed' | 'retrying';
+export type PublishJobStatus = 'queued' | 'running' | 'manual_pending' | 'succeeded' | 'failed' | 'retrying';
 
 export type PublishJob = {
   id: string;
@@ -104,6 +106,33 @@ export type PublishJob = {
   scheduledAt: string;
   externalUrl: string;
   lastMessage: string;
+};
+
+export type PreparedPostCopyBlock = {
+  label: string;
+  value: string;
+};
+
+export type PreparedPost = {
+  mode: string;
+  platformType: string;
+  platformName: string;
+  title: string;
+  body: string;
+  hashtags: string[];
+  copyBlocks: PreparedPostCopyBlock[];
+  checklist: string[];
+  warnings: string[];
+  characterCount: number;
+  preparedAt: string;
+};
+
+export type PublishResult = {
+  status: string;
+  message: string;
+  externalId: string;
+  externalUrl: string;
+  rawResponse: Record<string, unknown>;
 };
 
 export type Overview = {
@@ -153,6 +182,25 @@ export type CreateMediaAccountPayload = {
   platformId: string;
   name: string;
   externalId: string;
+  loginMethod?: string;
+  phoneNumber?: string;
+};
+
+export type StartMediaAccountBrowserLoginPayload = Record<string, never>;
+
+export type StartMediaAccountBrowserLoginResponse = {
+  account: MediaAccount;
+  expiresAt: string;
+  mode?: string;
+  qrScreenshotData: string;
+  qrLoginUrl: string;
+  sessionId: string;
+  browserProfile: string;
+  stateFile: string;
+};
+
+export type CompleteMediaAccountBrowserLoginPayload = {
+  sessionId: string;
 };
 
 export type GenerateContentPayload = {
@@ -176,6 +224,34 @@ export type CreatePublishSchedulePayload = {
   mediaAccountId: string;
   frequency: PublishScheduleFrequency;
   nextRunAt: string;
+};
+
+export type PreparePublishPayload = {
+  contentId: string;
+  mediaAccountId: string;
+  assetPaths?: string[];
+  runNow?: boolean;
+};
+
+export type PreparePublishResponse = {
+  job: PublishJob;
+  preparedPost: PreparedPost;
+  publishResult?: PublishResult;
+};
+
+export type ConfirmPublishPayload = {
+  externalUrl: string;
+  message?: string;
+};
+
+export type RunPublishJobPayload = {
+  assetPaths?: string[];
+};
+
+export type RunPublishJobResponse = {
+  job: PublishJob;
+  preparedPost: PreparedPost;
+  publishResult: PublishResult;
 };
 
 export type CreateMediaPlatformPayload = {
