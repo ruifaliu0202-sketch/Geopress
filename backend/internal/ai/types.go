@@ -16,6 +16,8 @@ const (
 	ProviderOpenAI = "openai"
 	PromptVersion  = "content-generation-v1"
 
+	FormatTypeGenerationKeywords = "generation_keywords"
+
 	GenerationStageInputAnalysis = "input_analysis"
 	GenerationStageRetrieval     = "knowledge_retrieval"
 	GenerationStagePlan          = "content_plan"
@@ -78,6 +80,7 @@ type GenerateRequest struct {
 	KnowledgeBaseIDs []string
 	ContentType      string
 	Keywords         []string
+	KeywordPrompt    string
 	Workspace        WorkspaceContext
 	Skill            WritingSkill
 	PublishFormat    PublishFormat

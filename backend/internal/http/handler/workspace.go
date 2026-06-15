@@ -21,6 +21,7 @@ import (
 	publishing "geopress/backend/internal/integration/publisher"
 	"geopress/backend/internal/integration/xiaohongshu"
 	"geopress/backend/internal/model"
+	"geopress/backend/internal/systemconfig"
 
 	"github.com/gin-gonic/gin"
 	"golang.org/x/crypto/bcrypt"
@@ -46,16 +47,7 @@ type WorkspaceHandler struct {
 	generations            []model.GenerationRequest
 	tokenUsageEvents       []model.AITokenUsageEvent
 	userSessions           map[string]string
-	loginSessions          map[string]mediaAccountLoginSession
 	browserLogin           xiaohongshu.BrowserLoginService
-}
-
-type mediaAccountLoginSession struct {
-	ID         string
-	ExpiresAt  time.Time
-	ProfileDir string
-	LoginURL   string
-	StateFile  string
 }
 
 type loginRequest struct {
@@ -98,10 +90,12 @@ type formatKnowledgeItemRequest struct {
 }
 
 type formatKnowledgeItemResponse struct {
-	Content  string        `json:"content"`
-	Provider string        `json:"provider"`
-	Model    string        `json:"model"`
-	Usage    ai.TokenUsage `json:"tokenUsage"`
+	Content       string        `json:"content"`
+	Provider      string        `json:"provider"`
+	Model         string        `json:"model"`
+	Usage         ai.TokenUsage `json:"tokenUsage"`
+	Fallback      bool          `json:"fallback"`
+	FallbackError string        `json:"fallbackError,omitempty"`
 }
 
 type assignKnowledgeItemsToBasesRequest struct {
@@ -144,6 +138,7 @@ type completeMediaAccountBrowserLoginRequest struct {
 
 type generateContentRequest struct {
 	Keywords         []string `json:"keywords"`
+	KeywordPrompt    string   `json:"keywordPrompt"`
 	ContentType      string   `json:"contentType"`
 	KnowledgeBaseID  string   `json:"knowledgeBaseId"`
 	KnowledgeBaseIDs []string `json:"knowledgeBaseIds"`
@@ -237,11 +232,10 @@ func NewWorkspaceHandlerWithError(db *database.DB, aiConfig *ai.RuntimeConfig) (
 	demoSubscriptionExpiresAt := now.AddDate(1, 0, 0)
 
 	h := &WorkspaceHandler{
-		db:            db,
-		aiConfig:      aiConfig,
-		userSessions:  map[string]string{},
-		loginSessions: map[string]mediaAccountLoginSession{},
-		browserLogin:  xiaohongshu.NewPlaywrightBrowserLoginService(),
+		db:           db,
+		aiConfig:     aiConfig,
+		userSessions: map[string]string{},
+		browserLogin: xiaohongshu.NewPlaywrightBrowserLoginService(),
 		subscriptionPlans: []model.SubscriptionPlan{
 			{
 				ID:                      model.SubscriptionPlanFree,
@@ -1116,24 +1110,39 @@ func (h *WorkspaceHandler) FormatKnowledgeItem(c *gin.Context) {
 		return
 	}
 
-	provider := h.aiConfig.Provider()
-	response, err := provider.FormatKnowledgeContent(c.Request.Context(), ai.FormatKnowledgeContentRequest{
+	formatReq := ai.FormatKnowledgeContentRequest{
 		WorkspaceID: workspaceID,
 		UserID:      userID,
 		Type:        strings.TrimSpace(req.Type),
 		Title:       strings.TrimSpace(req.Title),
 		Content:     content,
-	})
+	}
+	provider := h.aiConfig.Provider()
+	response, err := provider.FormatKnowledgeContent(c.Request.Context(), formatReq)
+	fallback := false
+	fallbackError := ""
 	if err != nil {
-		c.JSON(http.StatusBadGateway, gin.H{"error": "knowledge content formatting failed"})
-		return
+		if provider.Name() == ai.ProviderMock {
+			c.JSON(http.StatusBadGateway, gin.H{"error": "knowledge content formatting failed"})
+			return
+		}
+		log.Printf("knowledge content formatting provider %s failed, falling back to mock: %v", provider.Name(), err)
+		fallback = true
+		fallbackError = err.Error()
+		response, err = ai.NewMockProvider().FormatKnowledgeContent(c.Request.Context(), formatReq)
+		if err != nil {
+			c.JSON(http.StatusBadGateway, gin.H{"error": "knowledge content formatting failed"})
+			return
+		}
 	}
 
 	c.JSON(http.StatusOK, formatKnowledgeItemResponse{
-		Content:  strings.TrimSpace(response.Content),
-		Provider: response.Provider,
-		Model:    response.Model,
-		Usage:    response.TokenUsage,
+		Content:       strings.TrimSpace(response.Content),
+		Provider:      response.Provider,
+		Model:         response.Model,
+		Usage:         response.TokenUsage,
+		Fallback:      fallback,
+		FallbackError: fallbackError,
 	})
 }
 
@@ -1395,8 +1404,10 @@ func (h *WorkspaceHandler) startMediaAccountBrowserLogin(c *gin.Context) {
 		account.CredentialMeta["qrLoginStartedAt"] = loginResult.StartedAt.Format(time.RFC3339)
 		account.CredentialMeta["browserSessionMode"] = "playwright_persistent_context"
 		account.CredentialMeta["browserProfile"] = loginResult.ProfileDir
+		account.CredentialMeta["browserLoginUrl"] = loginResult.LoginURL
 		account.CredentialMeta["browserLoginStateFile"] = loginResult.StateFile
 		account.CredentialMeta["loginSessionId"] = loginResult.SessionID
+		account.CredentialMeta["loginSessionExpiresAt"] = expiresAt.Format(time.RFC3339)
 		account.Status = "qr_waiting"
 		if loginResult.AlreadyLoggedIn {
 			account.Status = "connected"
@@ -1404,13 +1415,6 @@ func (h *WorkspaceHandler) startMediaAccountBrowserLogin(c *gin.Context) {
 		}
 		account.LastCheckedAt = now
 		updated = *account
-		h.loginSessions[loginSessionKey(workspaceID, accountID)] = mediaAccountLoginSession{
-			ID:         loginResult.SessionID,
-			ExpiresAt:  expiresAt,
-			ProfileDir: loginResult.ProfileDir,
-			LoginURL:   loginResult.LoginURL,
-			StateFile:  loginResult.StateFile,
-		}
 		break
 	}
 	h.mu.Unlock()
@@ -1420,6 +1424,22 @@ func (h *WorkspaceHandler) startMediaAccountBrowserLogin(c *gin.Context) {
 	}
 	if err := h.saveMediaAccount(c.Request.Context(), updated); err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "media account login state was not persisted"})
+		return
+	}
+	if err := h.saveMediaAccountLoginSession(c.Request.Context(), model.MediaAccountLoginSession{
+		ID:          loginResult.SessionID,
+		WorkspaceID: workspaceID,
+		AccountID:   accountID,
+		Platform:    platform.Type,
+		ProfileDir:  loginResult.ProfileDir,
+		LoginURL:    loginResult.LoginURL,
+		StateFile:   loginResult.StateFile,
+		Status:      "active",
+		ExpiresAt:   expiresAt,
+		CreatedAt:   now,
+		UpdatedAt:   now,
+	}); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "media account login session was not persisted"})
 		return
 	}
 
@@ -1460,28 +1480,8 @@ func (h *WorkspaceHandler) completeMediaAccountBrowserLogin(c *gin.Context) {
 	}
 
 	now := time.Now().UTC()
-	key := loginSessionKey(workspaceID, accountID)
 
 	h.mu.RLock()
-	loginSession, sessionOK := h.loginSessions[key]
-	if !sessionOK {
-		h.mu.RUnlock()
-		c.JSON(http.StatusBadRequest, gin.H{"error": "qr login session was not started"})
-		return
-	}
-	if now.After(loginSession.ExpiresAt) {
-		h.mu.RUnlock()
-		h.mu.Lock()
-		delete(h.loginSessions, key)
-		h.mu.Unlock()
-		c.JSON(http.StatusBadRequest, gin.H{"error": "qr login session expired"})
-		return
-	}
-	if loginSession.ID != sessionID {
-		h.mu.RUnlock()
-		c.JSON(http.StatusBadRequest, gin.H{"error": "qr login session is invalid"})
-		return
-	}
 	account, accountOK := h.mediaAccountByID(workspaceID, accountID)
 	if !accountOK {
 		h.mu.RUnlock()
@@ -1493,6 +1493,25 @@ func (h *WorkspaceHandler) completeMediaAccountBrowserLogin(c *gin.Context) {
 
 	if !platformOK || !supportsBrowserLogin(platform.Type) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "media account does not support browser login"})
+		return
+	}
+
+	loginSession, sessionOK, err := h.latestMediaAccountLoginSession(c.Request.Context(), workspaceID, accountID)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "media account login session lookup failed"})
+		return
+	}
+	if !sessionOK {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "qr login session was not started"})
+		return
+	}
+	if now.After(loginSession.ExpiresAt) {
+		_ = h.expireMediaAccountLoginSession(c.Request.Context(), loginSession.ID)
+		c.JSON(http.StatusBadRequest, gin.H{"error": "qr login session expired"})
+		return
+	}
+	if loginSession.ID != sessionID {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "qr login session is invalid"})
 		return
 	}
 
@@ -1523,11 +1542,11 @@ func (h *WorkspaceHandler) completeMediaAccountBrowserLogin(c *gin.Context) {
 		account.CredentialMeta["qrLoginCompletedAt"] = loginResult.CompletedAt.Format(time.RFC3339)
 		account.CredentialMeta["browserSessionMode"] = "playwright_persistent_context"
 		account.CredentialMeta["browserProfile"] = loginResult.ProfileDir
+		account.CredentialMeta["browserLoginUrl"] = loginSession.LoginURL
 		account.CredentialMeta["browserLoginStateFile"] = loginResult.StateFile
 		account.CredentialMeta["loginSessionId"] = sessionID
 		account.Status = "connected"
 		account.LastCheckedAt = now
-		delete(h.loginSessions, key)
 		updated = *account
 		break
 	}
@@ -1539,6 +1558,10 @@ func (h *WorkspaceHandler) completeMediaAccountBrowserLogin(c *gin.Context) {
 	}
 	if err := h.saveMediaAccount(c.Request.Context(), updated); err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "media account login state was not persisted"})
+		return
+	}
+	if err := h.completeMediaAccountLoginSession(c.Request.Context(), loginSession.ID); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "media account login session was not finalized"})
 		return
 	}
 
@@ -1615,6 +1638,10 @@ func (h *WorkspaceHandler) GenerateContent(c *gin.Context) {
 	}
 
 	keywords := cleanKeywords(req.Keywords)
+	keywordPrompt := strings.TrimSpace(req.KeywordPrompt)
+	if len(keywords) == 0 {
+		keywords = extractKeywordsFromMarkdownPrompt(keywordPrompt)
+	}
 	if len(keywords) == 0 {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "at least one keyword is required"})
 		return
@@ -1653,6 +1680,7 @@ func (h *WorkspaceHandler) GenerateContent(c *gin.Context) {
 		KnowledgeBaseIDs: knowledgeBaseIDs,
 		ContentType:      skill.ContentType,
 		Keywords:         keywords,
+		KeywordPrompt:    keywordPrompt,
 		Workspace: ai.WorkspaceContext{
 			Name:     workspace.Name,
 			Type:     workspace.Type,
@@ -2226,7 +2254,7 @@ func (h *WorkspaceHandler) runPublish(
 
 	status := model.PublishJobManual
 	message := defaultString(result.Message, "已打开浏览器并完成小红书发布准备。")
-	if result.Status == "published" {
+	if publishResultSucceeded(result) {
 		status = model.PublishJobSucceeded
 	} else if result.Status == "submitted_pending_verification" {
 		status = model.PublishJobManual
@@ -2238,7 +2266,7 @@ func (h *WorkspaceHandler) runPublish(
 	h.mu.Lock()
 	job := h.updateJobStatusLocked(workspaceID, jobID, status, result.ExternalURL, message)
 	var publishedContent model.Content
-	if result.Status == "published" {
+	if publishResultSucceeded(result) {
 		h.updateContentStatusLocked(workspaceID, job.ContentID, model.ContentPublished)
 		publishedContent, _ = h.contentByID(workspaceID, job.ContentID)
 	}
@@ -2726,14 +2754,31 @@ func (h *WorkspaceHandler) AdminUpdateAIConfig(c *gin.Context) {
 		return
 	}
 
-	updated := h.aiConfig.Update(ai.Config{
+	next := ai.Config{
 		Provider:           provider,
 		OpenAIAPIKey:       strings.TrimSpace(req.OpenAIAPIKey),
 		OpenAIBaseURL:      strings.TrimSpace(req.OpenAIBaseURL),
 		OpenAIModel:        strings.TrimSpace(req.OpenAIModel),
 		RequestTimeout:     req.RequestTimeoutSeconds,
 		GenerationPipeline: req.GenerationPipeline,
-	}, req.ClearAPIKey)
+	}
+	current := h.aiConfig.Snapshot()
+	if next.OpenAIAPIKey == "" && !req.ClearAPIKey {
+		next.OpenAIAPIKey = current.OpenAIAPIKey
+	}
+	if req.ClearAPIKey {
+		next.OpenAIAPIKey = ""
+	}
+	updated := ai.NewRuntimeConfig(next).Snapshot()
+	if h.db != nil && h.db.SQL() != nil {
+		persistCtx, cancel := context.WithTimeout(c.Request.Context(), 3*time.Second)
+		defer cancel()
+		if err := systemconfig.SaveAIConfig(persistCtx, h.db, updated, req.ClearAPIKey, middleware.CurrentUserID(c)); err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "AI config was not persisted"})
+			return
+		}
+	}
+	h.aiConfig.Update(updated, req.ClearAPIKey)
 
 	c.JSON(http.StatusOK, ai.NewRuntimeConfig(updated).Public())
 }
@@ -3264,6 +3309,49 @@ func (h *WorkspaceHandler) saveMediaAccount(ctx context.Context, item model.Medi
 	return h.db.SaveMediaAccount(dbCtx, item)
 }
 
+func (h *WorkspaceHandler) saveMediaAccountLoginSession(ctx context.Context, item model.MediaAccountLoginSession) error {
+	if h.db == nil || h.db.SQL() == nil {
+		return nil
+	}
+	dbCtx, cancel := context.WithTimeout(ctx, 2*time.Second)
+	defer cancel()
+	return h.db.SaveMediaAccountLoginSession(dbCtx, item)
+}
+
+func (h *WorkspaceHandler) latestMediaAccountLoginSession(ctx context.Context, workspaceID string, accountID string) (model.MediaAccountLoginSession, bool, error) {
+	if h.db != nil && h.db.SQL() != nil {
+		dbCtx, cancel := context.WithTimeout(ctx, 2*time.Second)
+		defer cancel()
+		return h.db.LatestMediaAccountLoginSession(dbCtx, workspaceID, accountID)
+	}
+
+	h.mu.RLock()
+	account, ok := h.mediaAccountByID(workspaceID, accountID)
+	h.mu.RUnlock()
+	if !ok {
+		return model.MediaAccountLoginSession{}, false, nil
+	}
+	return mediaAccountLoginSessionFromMetadata(account)
+}
+
+func (h *WorkspaceHandler) completeMediaAccountLoginSession(ctx context.Context, sessionID string) error {
+	if h.db == nil || h.db.SQL() == nil {
+		return nil
+	}
+	dbCtx, cancel := context.WithTimeout(ctx, 2*time.Second)
+	defer cancel()
+	return h.db.CompleteMediaAccountLoginSession(dbCtx, sessionID)
+}
+
+func (h *WorkspaceHandler) expireMediaAccountLoginSession(ctx context.Context, sessionID string) error {
+	if h.db == nil || h.db.SQL() == nil {
+		return nil
+	}
+	dbCtx, cancel := context.WithTimeout(ctx, 2*time.Second)
+	defer cancel()
+	return h.db.ExpireMediaAccountLoginSession(dbCtx, sessionID)
+}
+
 func (h *WorkspaceHandler) savePublishScheduleWithJob(ctx context.Context, schedule model.PublishSchedule, job model.PublishJob) error {
 	dbCtx, cancel := context.WithTimeout(ctx, 2*time.Second)
 	defer cancel()
@@ -3407,12 +3495,65 @@ func platformRequiresCredential(platform model.MediaPlatform, field string) bool
 	return false
 }
 
-func loginSessionKey(workspaceID, accountID string) string {
-	return workspaceID + ":" + accountID
-}
-
 func supportsBrowserLogin(platformType string) bool {
 	return platformType == xiaohongshu.PlatformType
+}
+
+func mediaAccountLoginSessionFromMetadata(account model.MediaAccount) (model.MediaAccountLoginSession, bool, error) {
+	meta := account.CredentialMeta
+	if meta == nil {
+		return model.MediaAccountLoginSession{}, false, nil
+	}
+	sessionID := strings.TrimSpace(meta["loginSessionId"])
+	if sessionID == "" {
+		return model.MediaAccountLoginSession{}, false, nil
+	}
+	expiresAt := time.Now().UTC().Add(5 * time.Minute)
+	if rawExpiresAt := strings.TrimSpace(meta["loginSessionExpiresAt"]); rawExpiresAt != "" {
+		parsed, err := time.Parse(time.RFC3339, rawExpiresAt)
+		if err != nil {
+			return model.MediaAccountLoginSession{}, false, err
+		}
+		expiresAt = parsed
+	}
+	return model.MediaAccountLoginSession{
+		ID:          sessionID,
+		WorkspaceID: account.WorkspaceID,
+		AccountID:   account.ID,
+		ProfileDir:  strings.TrimSpace(meta["browserProfile"]),
+		LoginURL:    firstNonEmptyString(strings.TrimSpace(meta["browserLoginUrl"]), xiaohongshu.DefaultLoginURL),
+		StateFile:   strings.TrimSpace(meta["browserLoginStateFile"]),
+		Status:      "active",
+		ExpiresAt:   expiresAt,
+	}, true, nil
+}
+
+func firstNonEmptyString(values ...string) string {
+	for _, value := range values {
+		if strings.TrimSpace(value) != "" {
+			return strings.TrimSpace(value)
+		}
+	}
+	return ""
+}
+
+func publishResultSucceeded(result publishing.PublishResult) bool {
+	if result.Status == "published" {
+		return true
+	}
+	if result.Status != "submitted_pending_verification" {
+		return false
+	}
+	rawStatus, ok := result.RawResponse["rawStatus"].(map[string]any)
+	if !ok {
+		return false
+	}
+	publishOutcome, ok := rawStatus["publishOutcome"].(map[string]any)
+	if !ok {
+		return false
+	}
+	leftEditor, ok := publishOutcome["leftEditor"].(bool)
+	return ok && leftEditor
 }
 
 func browserProfilePath(workspaceID, accountID string) string {
@@ -3529,6 +3670,39 @@ func cleanKeywords(values []string) []string {
 		}
 	}
 	return keywords
+}
+
+func extractKeywordsFromMarkdownPrompt(value string) []string {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return nil
+	}
+
+	lines := strings.Split(value, "\n")
+	inCoreThemes := false
+	keywords := []string{}
+	for _, line := range lines {
+		line = strings.TrimSpace(line)
+		if strings.HasPrefix(line, "## ") {
+			inCoreThemes = strings.Contains(line, "核心主题")
+			continue
+		}
+		if !inCoreThemes {
+			continue
+		}
+		line = strings.TrimSpace(strings.TrimPrefix(strings.TrimPrefix(line, "-"), "*"))
+		if line != "" {
+			keywords = append(keywords, line)
+		}
+	}
+	if len(keywords) > 0 {
+		return cleanKeywords(keywords)
+	}
+
+	parts := strings.FieldsFunc(value, func(r rune) bool {
+		return r == '\n' || r == '\r' || r == ',' || r == '，' || r == ';' || r == '；' || r == '、'
+	})
+	return cleanKeywords(parts)
 }
 
 func defaultString(value, fallback string) string {

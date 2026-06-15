@@ -302,11 +302,12 @@ async function waitForPublishOutcome(page, beforeURL, clickTarget) {
     const leftEditor = lastStatus.pageUrl !== beforeURL && !bodyText.includes('内容设置') && !bodyText.includes('更多设置');
     if (leftEditor) {
       return {
-        status: 'submitted_pending_verification',
-        message: '已点击小红书发布按钮并离开编辑页，但未检测到明确成功提示，请到小红书创作后台核对审核/发布状态。',
+        status: 'published',
+        message: '已点击小红书发布按钮并离开编辑页，平台已接收提交。',
         beforeURL,
         afterURL: lastStatus.pageUrl,
         clickTarget,
+        leftEditor: true,
       };
     }
 

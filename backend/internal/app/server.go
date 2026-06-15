@@ -1,6 +1,7 @@
 package app
 
 import (
+	"context"
 	"fmt"
 	"log"
 
@@ -9,6 +10,7 @@ import (
 	"geopress/backend/internal/database"
 	"geopress/backend/internal/http/handler"
 	"geopress/backend/internal/http/middleware"
+	"geopress/backend/internal/systemconfig"
 
 	"github.com/gin-gonic/gin"
 )
@@ -40,13 +42,21 @@ func NewServerWithError(cfg config.Config) (*gin.Engine, error) {
 
 	api := router.Group("/api")
 	handler.NewHealthHandler(db).Register(api)
-	aiConfig := ai.NewRuntimeConfig(ai.Config{
+	envAIConfig := ai.Config{
 		Provider:       cfg.AIProvider,
 		OpenAIAPIKey:   cfg.OpenAIAPIKey,
 		OpenAIBaseURL:  cfg.OpenAIBaseURL,
 		OpenAIModel:    cfg.OpenAIModel,
 		RequestTimeout: cfg.AIRequestTimeout,
-	})
+	}
+	if err := systemconfig.SeedAIConfigIfMissing(context.Background(), db, envAIConfig); err != nil {
+		return nil, fmt.Errorf("seed ai config: %w", err)
+	}
+	persistedAIConfig, err := systemconfig.LoadAIConfig(context.Background(), db, envAIConfig)
+	if err != nil {
+		return nil, fmt.Errorf("load ai config: %w", err)
+	}
+	aiConfig := ai.NewRuntimeConfig(persistedAIConfig)
 	workspaceHandler, err := handler.NewWorkspaceHandlerWithError(db, aiConfig)
 	if err != nil {
 		return nil, err

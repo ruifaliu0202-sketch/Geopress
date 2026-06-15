@@ -12,6 +12,7 @@ import (
 
 	"geopress/backend/internal/ai"
 	"geopress/backend/internal/http/middleware"
+	publishing "geopress/backend/internal/integration/publisher"
 	"geopress/backend/internal/integration/xiaohongshu"
 	"geopress/backend/internal/model"
 
@@ -463,6 +464,59 @@ func TestFormatKnowledgeItemForVIP(t *testing.T) {
 	}
 }
 
+func TestFormatGenerationKeywordsFallsBackToMockWhenOpenAIUnavailable(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	router := gin.New()
+	apiGroup := router.Group("/api")
+	handler := NewWorkspaceHandler(nil, ai.NewRuntimeConfig(ai.Config{Provider: ai.ProviderOpenAI}))
+	handler.Register(apiGroup, middleware.AuthWithTokenResolver(handler.ResolveUserSession))
+
+	body := bytes.NewBufferString(`{
+		"type": "generation_keywords",
+		"title": "发布内容关键词",
+		"content": "内容营销,增长,小红书长文"
+	}`)
+	req := httptest.NewRequest(http.MethodPost, "/api/knowledge-items/format", body)
+	req.Header.Set("Authorization", "Bearer demo-token")
+	req.Header.Set("X-Workspace-ID", "wks_acme")
+	req.Header.Set("Content-Type", "application/json")
+
+	rec := httptest.NewRecorder()
+	router.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d, body = %s", rec.Code, http.StatusOK, rec.Body.String())
+	}
+
+	var response struct {
+		Content       string `json:"content"`
+		Provider      string `json:"provider"`
+		Fallback      bool   `json:"fallback"`
+		FallbackError string `json:"fallbackError"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &response); err != nil {
+		t.Fatalf("unmarshal response: %v", err)
+	}
+	if response.Provider != ai.ProviderMock {
+		t.Fatalf("provider = %q, want %q", response.Provider, ai.ProviderMock)
+	}
+	if !response.Fallback || response.FallbackError == "" {
+		t.Fatalf("fallback marker not returned: %#v", response)
+	}
+	if !bytes.Contains([]byte(response.Content), []byte("## 生成目标")) ||
+		!bytes.Contains([]byte(response.Content), []byte("## 核心主题")) ||
+		!bytes.Contains([]byte(response.Content), []byte("## 事实边界")) {
+		t.Fatalf("formatted keywords are not a markdown prompt: %s", response.Content)
+	}
+}
+
+func TestExtractKeywordsFromMarkdownPromptUsesCoreThemes(t *testing.T) {
+	keywords := extractKeywordsFromMarkdownPrompt("## 生成目标\n\n- 写增长内容\n\n## 核心主题\n\n- 内容营销\n- 增长\n\n## 事实边界\n\n- 不编造")
+	if !sameStringSet(keywords, []string{"内容营销", "增长"}) {
+		t.Fatalf("keywords = %#v, want core themes", keywords)
+	}
+}
+
 func TestAdminCanUpgradeUserSubscriptionForFormatting(t *testing.T) {
 	router := testWorkspaceRouter()
 	upgradeBody := bytes.NewBufferString(`{
@@ -611,6 +665,33 @@ func traceHasStep(trace ai.GenerationTrace, id string, status string) bool {
 		}
 	}
 	return false
+}
+
+func TestPublishResultSucceededTreatsLeftEditorAsSubmitted(t *testing.T) {
+	result := publishing.PublishResult{
+		Status: "submitted_pending_verification",
+		RawResponse: map[string]any{
+			"rawStatus": map[string]any{
+				"publishOutcome": map[string]any{
+					"leftEditor": true,
+				},
+			},
+		},
+	}
+	if !publishResultSucceeded(result) {
+		t.Fatal("left-editor publish outcome should be treated as succeeded")
+	}
+
+	result.RawResponse = map[string]any{
+		"rawStatus": map[string]any{
+			"publishOutcome": map[string]any{
+				"stillOnFinalSettings": true,
+			},
+		},
+	}
+	if publishResultSucceeded(result) {
+		t.Fatal("still-on-settings publish outcome should not be treated as succeeded")
+	}
 }
 
 func TestXiaohongshuBrowserLoginFlow(t *testing.T) {

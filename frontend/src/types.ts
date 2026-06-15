@@ -290,6 +290,8 @@ export type FormatKnowledgeContentResponse = {
   content: string;
   provider: string;
   model: string;
+  fallback?: boolean;
+  fallbackError?: string;
   tokenUsage: {
     inputTokens: number;
     outputTokens: number;
@@ -347,6 +349,7 @@ export type CompleteMediaAccountBrowserLoginPayload = {
 
 export type GenerateContentPayload = {
   keywords: string[];
+  keywordPrompt?: string;
   contentType: string;
   knowledgeBaseId?: string;
   knowledgeBaseIds?: string[];

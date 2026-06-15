@@ -1,0 +1,20 @@
+import type { ReactNode } from 'react';
+
+export type ViewKey = 'overview' | 'knowledge' | 'accounts' | 'generate' | 'contents' | 'schedules' | 'jobs' | 'settings' | 'admin';
+
+export type DialogKey =
+  | 'knowledgeBase'
+  | 'knowledgeItem'
+  | 'mediaAccount'
+  | 'mediaAccountLogin'
+  | 'content'
+  | 'generate'
+  | 'schedule'
+  | 'publishPrepare'
+  | null;
+
+export type NavItem = {
+  key: ViewKey;
+  label: string;
+  icon: ReactNode;
+};

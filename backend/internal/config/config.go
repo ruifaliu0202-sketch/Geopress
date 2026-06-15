@@ -1,6 +1,9 @@
 package config
 
-import "os"
+import (
+	"os"
+	"strings"
+)
 
 type Config struct {
 	AppEnv           string
@@ -20,12 +23,19 @@ func Load() Config {
 		HTTPAddr:         getEnv("HTTP_ADDR", ":18080"),
 		FrontendOrigin:   getEnv("FRONTEND_ORIGIN", "http://localhost:5173"),
 		DatabaseURL:      getEnv("DATABASE_URL", "postgres://geopress:geopress@localhost:5432/geopress?sslmode=disable"),
-		AIProvider:       getEnv("AI_PROVIDER", "mock"),
+		AIProvider:       getEnv("AI_PROVIDER", defaultAIProvider()),
 		OpenAIAPIKey:     getEnv("OPENAI_API_KEY", ""),
 		OpenAIBaseURL:    getEnv("OPENAI_BASE_URL", "https://api.openai.com/v1"),
 		OpenAIModel:      getEnv("OPENAI_MODEL", "gpt-5.5"),
 		AIRequestTimeout: getEnvInt("AI_REQUEST_TIMEOUT_SECONDS", 45),
 	}
+}
+
+func defaultAIProvider() string {
+	if strings.TrimSpace(os.Getenv("OPENAI_API_KEY")) != "" {
+		return "openai"
+	}
+	return "mock"
 }
 
 func getEnv(key, fallback string) string {

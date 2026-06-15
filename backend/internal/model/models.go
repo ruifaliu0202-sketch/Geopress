@@ -183,6 +183,20 @@ type MediaAccount struct {
 	LastCheckedAt  time.Time         `json:"lastCheckedAt"`
 }
 
+type MediaAccountLoginSession struct {
+	ID          string
+	WorkspaceID string
+	AccountID   string
+	Platform    string
+	ProfileDir  string
+	LoginURL    string
+	StateFile   string
+	Status      string
+	ExpiresAt   time.Time
+	CreatedAt   time.Time
+	UpdatedAt   time.Time
+}
+
 type ContentStatus string
 
 const (

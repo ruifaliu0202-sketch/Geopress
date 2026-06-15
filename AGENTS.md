@@ -30,9 +30,14 @@ backend/
   internal/config/config.go        Environment config
   internal/database/database.go    PostgreSQL connection and seed helpers
   internal/database/snapshot.go    PostgreSQL snapshot/read-write persistence helpers
+  internal/database/system_config.go
+                                      PostgreSQL-backed system settings and secrets helpers
+  internal/database/media_account_login_session.go
+                                      PostgreSQL-backed media account login session helpers
   internal/http/handler/           HTTP handlers
   internal/http/middleware/        Auth, tenant, CORS middleware
   internal/model/models.go         Domain models
+  internal/systemconfig/           System configuration loaders/persistence adapters
   migrations/                      PostgreSQL schema migrations
 
 frontend/
@@ -40,8 +45,12 @@ frontend/
   src/admin/AdminConsole.tsx       Platform admin UI using react-admin
   src/admin/dataProvider.ts        react-admin dataProvider for admin APIs
   src/api.ts                       Workspace API client
+  src/appTypes.ts                  Workspace app navigation/dialog types
+  src/components/                  Shared workspace UI, data tables, AI Thinking, and tour components
+  src/features/workspace/          Workspace views and workflow dialogs
   src/types.ts                     Shared frontend types
   src/theme.ts                     MUI theme
+  src/utils/formatters.ts          Shared frontend formatting helpers
   vite.config.ts                   Vite config and API proxy
 
 docs/
@@ -51,6 +60,7 @@ docs/
 scripts/
   migrate.sh                       Migration runner
   xiaohongshu-browser-login.mjs    Playwright worker for Xiaohongshu QR login
+  xiaohongshu-browser-publish.mjs  Playwright worker for Xiaohongshu browser publishing
 ```
 
 ## Implemented Capabilities
@@ -68,20 +78,26 @@ scripts/
 - Media platform definitions are platform-admin managed; the tenant workspace only binds tenant accounts.
 - Tenant media account list/create.
 - Xiaohongshu media account QR binding via server-managed Playwright persistent browser context.
+- Xiaohongshu media account browser login sessions are persisted in PostgreSQL, not only process memory.
 - Xiaohongshu QR login watcher state file for debugging scan confirmation and cookie/page state.
 - Manual content create.
 - Keyword-based draft generation through an `AIProvider` interface with mock and OpenAI-compatible providers.
 - Workspace knowledge chunk retrieval, writing skill selection, structured draft validation, and generation request logging.
+- VIP-only AI formatting for knowledge entries and generation keywords; formatting uses the configured AI provider with a mock fallback and replaces the edited field instead of appending.
+- Shared AI Thinking drawer/overlay for generation and formatting traces. Formatting makes one backend request and uses a deterministic client trace timeline that defaults to 5 seconds across the configured nodes.
 - Publish schedule create.
 - Publish job list.
 - Xiaohongshu publish preparation, manual publish confirmation, and run-now publish job execution through the publisher interface.
+- Xiaohongshu browser publish success detection treats leaving the editor/settings screen after clicking publish as a submitted/published outcome.
 - Platform admin authorization.
 - Platform admin resource lists for users, workspaces, members, media platforms, tenant media accounts, platform knowledge bases, and platform knowledge items.
 - Platform admin create/update for media platforms and platform knowledge marketplace resources.
-- Platform admin AI provider configuration.
+- Platform admin AI provider configuration persisted through PostgreSQL system settings/secrets. Environment variables seed defaults and remain the fallback source.
 - PostgreSQL health check via `DATABASE_URL`.
 - PostgreSQL seed/save/read paths for demo workspace metadata and core business resources.
-- PostgreSQL migrations for users, sessions, subscription plans, AI token usage, workspaces, knowledge bases/items, platform knowledge resources, media platforms/accounts, contents/versions, generation requests, publish schedules/jobs/results, and audit logs.
+- PostgreSQL migrations for users, sessions, subscription plans, AI token usage, system settings/secrets, workspaces, knowledge bases/items, platform knowledge resources, media platforms/accounts, media account login sessions, contents/versions, generation requests, publish schedules/jobs/results, and audit logs.
+- Tenant workspace frontend is split into app shell, workspace views, workflow dialogs, common components, data tables, and utility formatters instead of keeping all workflow code in `App.tsx`.
+- Workspace console has an in-product onboarding tour with overlay, target highlighting, automatic page switching, Back/Next/Enter/ESC controls, and manual restart from the top bar. It teaches the full workflow: choose workspace, create knowledge base package, create guide item, connect Xiaohongshu, generate from keywords, create publish task, and confirm publish result.
 
 ## Demo Auth
 
@@ -213,6 +229,7 @@ Implementation direction:
 - Use a Playwright persistent browser context, not a mock QR session.
 - The backend starts a persistent Chromium context for the workspace/account profile, opens the Xiaohongshu login page, screenshots the visible login QR code, and returns that screenshot to the frontend.
 - The complete step must re-open/read the same persistent browser profile and confirm the platform login state before marking the media account connected.
+- Browser login session metadata is stored in `media_account_login_sessions` so the start/complete flow survives handler memory loss. Account credential metadata remains a compatibility fallback.
 - Keep the QR login watcher browser alive while the user scans; do not close the browser immediately after taking the QR screenshot.
 - The watcher writes `geopress-login-state.json` inside the account browser profile. Use it to debug scan confirmation state, current URL, visible page text, and cookie names.
 - For local visual debugging, set `GEOPRESS_BROWSER_HEADLESS=false` before starting the backend so the Playwright browser window is visible.
@@ -226,6 +243,7 @@ Implementation direction:
 - `POST /api/publish/prepare` creates a manual publish job and optionally runs it immediately.
 - `POST /api/publish-jobs/:jobId/run` executes the current publisher path and records the returned external URL when available.
 - `POST /api/publish-jobs/:jobId/confirm` lets an operator paste a manually published URL and mark the job/content as published.
+- The Playwright publish worker records `publishOutcome.leftEditor=true` when the page leaves the Xiaohongshu editor/settings surface after clicking publish. The backend treats that signal as successful submission/publish instead of leaving the job as manual pending.
 - Later browser-based publish automation should reuse the saved Xiaohongshu browser profile instead of calling private web APIs directly.
 
 ## AI Generation Implementation Notes
@@ -236,9 +254,18 @@ Implementation direction:
 - Pipeline settings can differ between free and VIP subscription tiers through the platform admin AI configuration.
 - The tenant user supplies keywords, selected knowledge packages, and content type; system templates own the output contract and prompt boundaries.
 - Generation responses include a trace drawer payload for the tenant UI.
+- Formatting knowledge entries and generation keywords uses a dedicated formatter prompt boundary. The model is asked to return structured markdown that improves prompt clarity without fabricating facts or overriding system-selected content type/output rules.
+- Formatting is gated by VIP subscription status. The frontend shows the VIP-marked formatting action and routes the formatter result back into the active content/keyword field as replacement text.
 - AI token usage is persisted to `generation_requests` and `ai_token_usage_events`; user monthly token usage totals are updated after successful generation.
-- Admin AI configuration is exposed in the platform admin and updates in-memory runtime config. API keys are accepted but not echoed back.
+- Admin AI configuration is exposed in the platform admin and persisted to `system_settings`; provider API keys are stored in `system_secrets` and are not echoed back. On startup, environment values seed missing database configuration and persisted configuration becomes the runtime source.
 - PostgreSQL persistence is used for generated contents, generation requests, knowledge resources, media accounts, contents, schedules, and publish jobs.
+
+## System Configuration Notes
+
+- Runtime AI configuration is stored as a typed JSON setting under `system_settings`.
+- Provider secrets such as OpenAI-compatible API keys are stored separately in `system_secrets`.
+- Environment variables remain useful for bootstrap and local fallback, but administrator changes should go through the platform admin UI and persist to the database.
+- Use dedicated system configuration helpers under `internal/systemconfig` instead of scattering direct env reads through handlers.
 
 ## Registration And Subscription Notes
 
@@ -298,10 +325,13 @@ Implementation notes:
 
 ## Frontend Boundaries
 
-- `frontend/src/App.tsx` is the tenant workspace console.
+- `frontend/src/App.tsx` is the tenant workspace console shell: authentication state, workspace fetch, active view routing, dialogs, AI Thinking overlay, and workspace tour wiring.
+- Tenant workspace feature code lives under `frontend/src/features/workspace/`.
+- Shared workspace UI lives under `frontend/src/components/`, including `AIThinkingOverlay`, `aiThinkingModel`, `OnboardingTour`, `common`, and `dataTables`.
 - `frontend/src/admin/AdminConsole.tsx` is the platform management backend.
 - The registration page is a simple login/register card; successful registration routes to the onboarding workflow when `user.onboardingCompleted` is false.
 - The onboarding workflow is three steps: industry, writing tone, subscription plan. The subscription step can be skipped.
+- The workspace onboarding tour is separate from account onboarding. It is a reusable overlay/highlight teaching component that targets `data-tour-id` anchors and stores completion in localStorage.
 - Keep tenant workflows out of the platform admin unless they are system/operator views.
 - Keep global platform configuration, users, workspace/member inspection, channel definitions, and audit resources in the platform admin.
 - Use MUI components and existing theme conventions.
@@ -338,7 +368,7 @@ internal/integration
 - Handler-level persistence should be refactored into repository/service layers.
 - Login uses bcrypt password checks and session tokens, but full password reset, email verification, logout, and session revocation are not implemented yet.
 - Payment collection is not implemented; subscription selection updates the plan and AI token budget directly.
-- AI generation is mock-only.
-- Publish execution is mock-only.
+- AI generation can use mock or OpenAI-compatible providers, but semantic embeddings/pgvector retrieval are still planned.
+- Publish execution has a browser-based Xiaohongshu path, but robust cross-platform queueing, retries, and external result reconciliation are still planned.
 - Admin delete operations are not implemented yet.
 - Bundle size is larger after adding `react-admin`; code splitting can be added later.
