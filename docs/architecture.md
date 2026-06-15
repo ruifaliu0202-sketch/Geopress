@@ -67,4 +67,4 @@ migrations             数据库迁移
 
 如果后续 AI 内容检索规模明显增大，再评估独立向量数据库或搜索引擎；在产品早期，PostgreSQL + `pgvector` 通常足够。
 
-当前项目已加入 `backend/migrations`，初始 schema 包含用户、工作区、知识库、媒体平台、媒体账号、内容、生成请求、发布计划、发布任务、发布结果和审计日志。业务接口暂时仍以内存数据运行，后续通过 repository 层切换到 PostgreSQL。
+当前项目已加入 `backend/migrations`，初始 schema 包含用户、工作区、知识库、媒体平台、媒体账号、内容、生成请求、发布计划、发布任务、发布结果和审计日志。核心业务接口已从 PostgreSQL 加载并持久化，后续需要继续把 handler 内的数据访问拆到 repository/service 层。

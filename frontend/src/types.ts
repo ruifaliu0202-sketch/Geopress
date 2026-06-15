@@ -3,7 +3,30 @@ export type User = {
   name: string;
   email: string;
   isPlatformAdmin: boolean;
+  subscriptionTier: 'free' | 'vip';
+  subscriptionPlanId: 'free' | 'vip' | string;
+  subscriptionStatus: 'active' | 'inactive' | 'expired' | 'canceled';
+  subscriptionExpiresAt?: string;
+  monthlyTokenBudgetCents: number;
+  monthlyTokenUsedCents: number;
+  monthlyTokenInputUsed: number;
+  monthlyTokenOutputUsed: number;
+  subscriptionCurrentPeriod: string;
+  onboardingCompleted: boolean;
+  onboardingCompletedAt?: string;
   createdAt: string;
+};
+
+export type SubscriptionPlan = {
+  id: 'free' | 'vip' | string;
+  name: string;
+  tier: 'free' | 'vip';
+  priceCents: number;
+  currency: string;
+  monthlyTokenBudgetCents: number;
+  inputTokenPricePer1k: number;
+  outputTokenPricePer1k: number;
+  enabled: boolean;
 };
 
 export type WorkspaceType = 'personal' | 'company';
@@ -31,8 +54,30 @@ export type KnowledgeBase = {
 
 export type KnowledgeItem = {
   id: string;
-  knowledgeBaseId: string;
+  knowledgeBaseIds: string[];
   workspaceId: string;
+  type: string;
+  title: string;
+  content: string;
+  enabled: boolean;
+  updatedAt: string;
+};
+
+export type PlatformKnowledgeBase = {
+  id: string;
+  name: string;
+  description: string;
+  category: string;
+  priceCents: number;
+  currency: string;
+  marketplaceListed: boolean;
+  itemCount: number;
+  updatedAt: string;
+};
+
+export type PlatformKnowledgeItem = {
+  id: string;
+  knowledgeBaseIds: string[];
   type: string;
   title: string;
   content: string;
@@ -78,6 +123,40 @@ export type Content = {
   author: string;
   source: string;
   updatedAt: string;
+};
+
+export type GenerationPipelinePlan = {
+  inputAnalysis: boolean;
+  contentPlan: boolean;
+  qualityCheck: boolean;
+  rewriteRounds: number;
+};
+
+export type GenerationPipelineSettings = {
+  free: GenerationPipelinePlan;
+  vip: GenerationPipelinePlan;
+};
+
+export type GenerationTraceStep = {
+  id: string;
+  label: string;
+  status: 'succeeded' | 'failed' | 'skipped' | string;
+  summary: string;
+  details: string[];
+  warnings: string[];
+};
+
+export type GenerationTrace = {
+  subscriptionTier: string;
+  pipeline: GenerationPipelinePlan;
+  steps: GenerationTraceStep[];
+  warnings: string[];
+  retrievedKnowledgeIds: string[];
+};
+
+export type GenerateContentResponse = {
+  content: Content;
+  trace: GenerationTrace;
 };
 
 export type PublishScheduleFrequency = 'once' | 'daily' | 'weekly' | 'monthly';
@@ -155,6 +234,26 @@ export type LoginResponse = {
   workspaces: Workspace[];
 };
 
+export type RegisterPayload = {
+  name: string;
+  email: string;
+  password: string;
+  workspaceName?: string;
+};
+
+export type CompleteOnboardingPayload = {
+  workspaceId: string;
+  industry: string;
+  tones: string[];
+  subscriptionPlanId?: string;
+  skipSubscription?: boolean;
+};
+
+export type CompleteOnboardingResponse = {
+  user: User;
+  workspace: Workspace;
+};
+
 export type WorkspaceData = {
   user: User;
   workspaces: Workspace[];
@@ -174,10 +273,51 @@ export type CreateKnowledgeBasePayload = {
 };
 
 export type CreateKnowledgeItemPayload = {
-  knowledgeBaseId: string;
+  knowledgeBaseId?: string;
+  knowledgeBaseIds?: string[];
   type: string;
   title: string;
   content: string;
+};
+
+export type FormatKnowledgeContentPayload = {
+  type: string;
+  title?: string;
+  content: string;
+};
+
+export type FormatKnowledgeContentResponse = {
+  content: string;
+  provider: string;
+  model: string;
+  tokenUsage: {
+    inputTokens: number;
+    outputTokens: number;
+    totalTokens: number;
+  };
+};
+
+export type AssignKnowledgeItemsToBasesPayload = {
+  knowledgeItemIds: string[];
+  knowledgeBaseIds: string[];
+};
+
+export type CreatePlatformKnowledgeBasePayload = {
+  name: string;
+  description: string;
+  category: string;
+  priceCents: number;
+  currency: string;
+  marketplaceListed: boolean;
+};
+
+export type CreatePlatformKnowledgeItemPayload = {
+  knowledgeBaseId?: string;
+  knowledgeBaseIds?: string[];
+  type: string;
+  title: string;
+  content: string;
+  enabled: boolean;
 };
 
 export type CreateMediaAccountPayload = {
@@ -208,7 +348,8 @@ export type CompleteMediaAccountBrowserLoginPayload = {
 export type GenerateContentPayload = {
   keywords: string[];
   contentType: string;
-  knowledgeBaseId: string;
+  knowledgeBaseId?: string;
+  knowledgeBaseIds?: string[];
   publishFormatId?: string;
 };
 

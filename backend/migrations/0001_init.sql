@@ -6,6 +6,10 @@ CREATE TABLE IF NOT EXISTS users (
     email TEXT NOT NULL UNIQUE,
     password_hash TEXT NOT NULL,
     status TEXT NOT NULL DEFAULT 'active',
+    is_platform_admin BOOLEAN NOT NULL DEFAULT FALSE,
+    subscription_tier TEXT NOT NULL DEFAULT 'free' CHECK (subscription_tier IN ('free', 'vip')),
+    subscription_status TEXT NOT NULL DEFAULT 'active' CHECK (subscription_status IN ('active', 'inactive', 'expired', 'canceled')),
+    subscription_expires_at TIMESTAMPTZ,
     created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
     updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
@@ -43,7 +47,6 @@ CREATE TABLE IF NOT EXISTS knowledge_bases (
 CREATE TABLE IF NOT EXISTS knowledge_items (
     id TEXT PRIMARY KEY,
     workspace_id TEXT NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
-    knowledge_base_id TEXT NOT NULL REFERENCES knowledge_bases(id) ON DELETE CASCADE,
     type TEXT NOT NULL,
     title TEXT NOT NULL,
     content TEXT NOT NULL,
@@ -51,6 +54,44 @@ CREATE TABLE IF NOT EXISTS knowledge_items (
     embedding VECTOR(1536),
     created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
     updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+CREATE TABLE IF NOT EXISTS knowledge_item_bases (
+    knowledge_item_id TEXT NOT NULL REFERENCES knowledge_items(id) ON DELETE CASCADE,
+    knowledge_base_id TEXT NOT NULL REFERENCES knowledge_bases(id) ON DELETE CASCADE,
+    workspace_id TEXT NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    PRIMARY KEY (knowledge_item_id, knowledge_base_id)
+);
+
+CREATE TABLE IF NOT EXISTS platform_knowledge_bases (
+    id TEXT PRIMARY KEY,
+    name TEXT NOT NULL,
+    description TEXT NOT NULL DEFAULT '',
+    category TEXT NOT NULL DEFAULT 'general',
+    price_cents INT NOT NULL DEFAULT 0,
+    currency TEXT NOT NULL DEFAULT 'CNY',
+    marketplace_listed BOOLEAN NOT NULL DEFAULT FALSE,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+CREATE TABLE IF NOT EXISTS platform_knowledge_items (
+    id TEXT PRIMARY KEY,
+    type TEXT NOT NULL,
+    title TEXT NOT NULL,
+    content TEXT NOT NULL,
+    enabled BOOLEAN NOT NULL DEFAULT TRUE,
+    embedding VECTOR(1536),
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+CREATE TABLE IF NOT EXISTS platform_knowledge_item_bases (
+    platform_knowledge_item_id TEXT NOT NULL REFERENCES platform_knowledge_items(id) ON DELETE CASCADE,
+    platform_knowledge_base_id TEXT NOT NULL REFERENCES platform_knowledge_bases(id) ON DELETE CASCADE,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    PRIMARY KEY (platform_knowledge_item_id, platform_knowledge_base_id)
 );
 
 CREATE TABLE IF NOT EXISTS media_platforms (
@@ -151,6 +192,7 @@ CREATE TABLE IF NOT EXISTS publish_jobs (
     scheduled_at TIMESTAMPTZ NOT NULL,
     started_at TIMESTAMPTZ,
     finished_at TIMESTAMPTZ,
+    external_url TEXT NOT NULL DEFAULT '',
     idempotency_key TEXT NOT NULL,
     retry_count INT NOT NULL DEFAULT 0,
     last_message TEXT NOT NULL DEFAULT '',
@@ -186,7 +228,11 @@ CREATE TABLE IF NOT EXISTS audit_logs (
 CREATE INDEX IF NOT EXISTS idx_workspace_members_user_id ON workspace_members(user_id);
 CREATE INDEX IF NOT EXISTS idx_knowledge_bases_workspace_id ON knowledge_bases(workspace_id);
 CREATE INDEX IF NOT EXISTS idx_knowledge_items_workspace_id ON knowledge_items(workspace_id);
-CREATE INDEX IF NOT EXISTS idx_knowledge_items_base_id ON knowledge_items(knowledge_base_id);
+CREATE INDEX IF NOT EXISTS idx_knowledge_item_bases_workspace_base ON knowledge_item_bases(workspace_id, knowledge_base_id);
+CREATE INDEX IF NOT EXISTS idx_knowledge_item_bases_item_id ON knowledge_item_bases(knowledge_item_id);
+CREATE INDEX IF NOT EXISTS idx_platform_knowledge_bases_marketplace ON platform_knowledge_bases(marketplace_listed);
+CREATE INDEX IF NOT EXISTS idx_platform_knowledge_item_bases_base_id ON platform_knowledge_item_bases(platform_knowledge_base_id);
+CREATE INDEX IF NOT EXISTS idx_platform_knowledge_item_bases_item_id ON platform_knowledge_item_bases(platform_knowledge_item_id);
 CREATE INDEX IF NOT EXISTS idx_media_accounts_workspace_id ON media_accounts(workspace_id);
 CREATE INDEX IF NOT EXISTS idx_contents_workspace_status ON contents(workspace_id, status);
 CREATE INDEX IF NOT EXISTS idx_generation_requests_workspace_id ON generation_requests(workspace_id);

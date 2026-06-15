@@ -5,7 +5,39 @@ import "strings"
 const (
 	FormatGenericArticle         = "article"
 	FormatXiaohongshuLongArticle = "xiaohongshu_long_article"
+	FormatBrief                  = "brief"
+	FormatCaseStudy              = "case_study"
+	FormatProductIntro           = "product_intro"
 )
+
+type ContentTypeOption struct {
+	ID          string `json:"id"`
+	Name        string `json:"name"`
+	Description string `json:"description"`
+}
+
+func SupportedContentTypes() []ContentTypeOption {
+	return []ContentTypeOption{
+		{ID: FormatXiaohongshuLongArticle, Name: "小红书长文", Description: "小红书写长文发布格式和移动端阅读结构。"},
+		{ID: FormatGenericArticle, Name: "通用长文章", Description: "结构化长文章草稿。"},
+		{ID: FormatBrief, Name: "短文", Description: "社媒或短博客草稿。"},
+		{ID: FormatCaseStudy, Name: "案例稿", Description: "背景、挑战、做法、结果和经验。"},
+		{ID: FormatProductIntro, Name: "产品介绍", Description: "受众、场景、能力和价值表达。"},
+	}
+}
+
+func NormalizeContentType(value string) (string, bool) {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return FormatGenericArticle, true
+	}
+	for _, item := range SupportedContentTypes() {
+		if item.ID == value {
+			return item.ID, true
+		}
+	}
+	return "", false
+}
 
 func SelectPublishFormat(contentType string) PublishFormat {
 	switch strings.TrimSpace(contentType) {

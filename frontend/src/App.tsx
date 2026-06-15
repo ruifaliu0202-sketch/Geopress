@@ -1,11 +1,15 @@
-import { useEffect, useMemo, useState, type ReactNode } from 'react';
+import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import {
   Alert,
+  Accordion,
+  AccordionDetails,
+  AccordionSummary,
   AppBar,
   Box,
   Button,
   Card,
   CardContent,
+  Checkbox,
   Chip,
   CircularProgress,
   Container,
@@ -14,6 +18,7 @@ import {
   DialogContent,
   DialogTitle,
   Divider,
+  Drawer,
   FormControl,
   Grid,
   IconButton,
@@ -40,8 +45,12 @@ import AccountTreeOutlinedIcon from '@mui/icons-material/AccountTreeOutlined';
 import AddIcon from '@mui/icons-material/Add';
 import ArticleOutlinedIcon from '@mui/icons-material/ArticleOutlined';
 import AutorenewIcon from '@mui/icons-material/Autorenew';
+import ChevronLeftIcon from '@mui/icons-material/ChevronLeft';
+import ChevronRightIcon from '@mui/icons-material/ChevronRight';
+import CloseIcon from '@mui/icons-material/Close';
 import ContentCopyIcon from '@mui/icons-material/ContentCopy';
 import DashboardOutlinedIcon from '@mui/icons-material/DashboardOutlined';
+import ExpandMoreIcon from '@mui/icons-material/ExpandMore';
 import KeyOutlinedIcon from '@mui/icons-material/KeyOutlined';
 import LoginOutlinedIcon from '@mui/icons-material/LoginOutlined';
 import ManageAccountsOutlinedIcon from '@mui/icons-material/ManageAccountsOutlined';
@@ -50,18 +59,23 @@ import PublishOutlinedIcon from '@mui/icons-material/PublishOutlined';
 import ScheduleOutlinedIcon from '@mui/icons-material/ScheduleOutlined';
 import SettingsOutlinedIcon from '@mui/icons-material/SettingsOutlined';
 import {
+  completeOnboarding,
   createContent,
   createKnowledgeBase,
   createKnowledgeItem,
   createMediaAccount,
   createPublishSchedule,
   fetchWorkspace,
+  fetchSubscriptionPlans,
+  formatKnowledgeContent,
   generateContent,
   login,
   preparePublish,
+  registerUser,
   runPublishJob,
   startMediaAccountBrowserLogin,
   completeMediaAccountBrowserLogin,
+  assignKnowledgeItemsToBases,
 } from './api';
 import { AdminConsole } from './admin/AdminConsole';
 import type {
@@ -69,16 +83,19 @@ import type {
   ContentStatus,
   KnowledgeBase,
   KnowledgeItem,
+  GenerationTrace,
   MediaAccount,
   MediaPlatform,
   PreparedPost,
   PreparePublishResponse,
   PublishJobStatus,
   PublishScheduleFrequency,
+  SubscriptionPlan,
   User,
   Workspace,
   WorkspaceData,
 } from './types';
+import vipGoldIconUrl from './assets/vip-gold.png';
 
 type ViewKey = 'overview' | 'knowledge' | 'accounts' | 'generate' | 'contents' | 'schedules' | 'jobs' | 'settings' | 'admin';
 type DialogKey =
@@ -135,6 +152,20 @@ const frequencyLabel: Record<PublishScheduleFrequency, string> = {
   monthly: '每月',
 };
 
+const knowledgePackageWidth = 280;
+const knowledgePackageGap = 12;
+
+const contentTypeOptions = [
+  { value: 'xiaohongshu_long_article', label: '小红书长文' },
+  { value: 'article', label: '通用长文章' },
+  { value: 'brief', label: '短文' },
+  { value: 'case_study', label: '案例稿' },
+  { value: 'product_intro', label: '产品介绍' },
+];
+
+const onboardingIndustries = ['本地生活', 'B2B SaaS', '教育培训', '美业医美', '电商零售', '企业服务', '个人创作者', '其他'];
+const onboardingTones = ['专业', '清晰', '克制', '亲和', '犀利', '种草感', '可信', '实用'];
+
 function App() {
   const [token, setToken] = useState('');
   const [user, setUser] = useState<User | null>(null);
@@ -147,6 +178,9 @@ function App() {
   const [dialog, setDialog] = useState<DialogKey>(null);
   const [selectedContentId, setSelectedContentId] = useState('');
   const [selectedMediaAccountId, setSelectedMediaAccountId] = useState('');
+  const [workbenchOpen, setWorkbenchOpen] = useState(true);
+  const [generationTrace, setGenerationTrace] = useState<GenerationTrace | null>(null);
+  const [traceDrawerOpen, setTraceDrawerOpen] = useState(false);
 
   useEffect(() => {
     if (!token || !workspaceId) {
@@ -195,6 +229,21 @@ function App() {
           setWorkspaceId(result.workspaces[0]?.id ?? '');
           setWorkspace(null);
           setActiveView('overview');
+        }}
+      />
+    );
+  }
+
+  if (user && !user.onboardingCompleted && workspaceId) {
+    return (
+      <OnboardingView
+        token={token}
+        workspaceId={workspaceId}
+        user={user}
+        onComplete={(result) => {
+          setUser(result.user);
+          setWorkspace(null);
+          setReloadKey((value) => value + 1);
         }}
       />
     );
@@ -284,77 +333,69 @@ function App() {
       </AppBar>
 
       <Container maxWidth="xl" sx={{ py: 3 }}>
-        <Stack spacing={3}>
-          <Paper
-            elevation={0}
-            sx={{ p: { xs: 2, md: 3 }, border: '1px solid', borderColor: 'divider', borderRadius: 2 }}
-          >
-            <Stack
-              direction={{ xs: 'column', md: 'row' }}
-              spacing={2}
-              alignItems={{ xs: 'flex-start', md: 'center' }}
-              justifyContent="space-between"
-            >
-              <Box>
-                <Typography variant="h1">工作区工作台</Typography>
-                <Typography color="text.secondary" sx={{ mt: 0.75 }}>
-                  {currentWorkspace
-                    ? `${currentWorkspace.name} / ${currentWorkspace.industry} / ${currentWorkspace.tone}`
-                    : '正在读取工作区信息'}
-                </Typography>
-              </Box>
-              <Stack direction="row" spacing={1} flexWrap="wrap" useFlexGap>
-                <Button startIcon={<PsychologyAltOutlinedIcon />} variant="outlined" onClick={() => setDialog('generate')}>
-                  关键词生成
-                </Button>
-                <Button startIcon={<ScheduleOutlinedIcon />} variant="outlined" onClick={() => setDialog('schedule')}>
-                  新建计划
-                </Button>
-                <Button startIcon={<AddIcon />} variant="contained" onClick={() => setDialog('content')}>
-                  新建内容
-                </Button>
+        <Box
+          sx={{
+            display: 'flex',
+            flexDirection: { xs: 'column', md: 'row' },
+            alignItems: 'flex-start',
+            gap: 3,
+          }}
+        >
+          <WorkspaceWorkbenchPanel
+            open={workbenchOpen}
+            currentWorkspace={currentWorkspace}
+            user={user}
+            onToggle={() => setWorkbenchOpen((value) => !value)}
+            onGenerate={() => setDialog('generate')}
+            onSchedule={() => setDialog('schedule')}
+            onContent={() => setDialog('content')}
+          />
+
+          <Box sx={{ flex: 1, minWidth: 0, width: '100%' }}>
+            <Stack spacing={3}>
+              <Stack direction="row" spacing={1} sx={{ display: { xs: 'flex', lg: 'none' }, overflowX: 'auto', pb: 0.5 }}>
+                {visibleNavItems.map((item) => (
+                  <Button
+                    key={item.key}
+                    startIcon={item.icon}
+                    variant={activeView === item.key ? 'contained' : 'outlined'}
+                    onClick={() => setActiveView(item.key)}
+                    sx={{ whiteSpace: 'nowrap' }}
+                  >
+                    {item.label}
+                  </Button>
+                ))}
               </Stack>
-            </Stack>
-          </Paper>
 
-          <Stack direction="row" spacing={1} sx={{ display: { xs: 'flex', lg: 'none' }, overflowX: 'auto', pb: 0.5 }}>
-            {visibleNavItems.map((item) => (
-              <Button
-                key={item.key}
-                startIcon={item.icon}
-                variant={activeView === item.key ? 'contained' : 'outlined'}
-                onClick={() => setActiveView(item.key)}
-                sx={{ whiteSpace: 'nowrap' }}
-              >
-                {item.label}
-              </Button>
-            ))}
-          </Stack>
-
-          {error && <Alert severity="error">{error}</Alert>}
-          {loading && (
-            <Stack direction="row" alignItems="center" spacing={1.5}>
-              <CircularProgress size={22} />
-              <Typography color="text.secondary">正在加载工作区数据</Typography>
+              {error && <Alert severity="error">{error}</Alert>}
+              {loading && (
+                <Stack direction="row" alignItems="center" spacing={1.5}>
+                  <CircularProgress size={22} />
+                  <Typography color="text.secondary">正在加载工作区数据</Typography>
+                </Stack>
+              )}
+              {!loading && workspace && currentWorkspace && (
+                <ActiveView
+                  view={activeView}
+                  token={token}
+                  workspaceId={workspaceId}
+                  workspace={workspace}
+                  currentWorkspace={currentWorkspace}
+                  openDialog={setDialog}
+                  onChanged={refresh}
+                  onLoginMediaAccount={(accountId) => {
+                    setSelectedMediaAccountId(accountId);
+                    setDialog('mediaAccountLogin');
+                  }}
+                  onPreparePublish={(contentId) => {
+                    setSelectedContentId(contentId);
+                    setDialog('publishPrepare');
+                  }}
+                />
+              )}
             </Stack>
-          )}
-          {!loading && workspace && currentWorkspace && (
-            <ActiveView
-              view={activeView}
-              workspace={workspace}
-              currentWorkspace={currentWorkspace}
-              openDialog={setDialog}
-              onLoginMediaAccount={(accountId) => {
-                setSelectedMediaAccountId(accountId);
-                setDialog('mediaAccountLogin');
-              }}
-              onPreparePublish={(contentId) => {
-                setSelectedContentId(contentId);
-                setDialog('publishPrepare');
-              }}
-            />
-          )}
-        </Stack>
+          </Box>
+        </Box>
       </Container>
 
       {workspace && (
@@ -377,26 +418,43 @@ function App() {
             }
             refresh();
           }}
+          onGeneratedTrace={(trace) => {
+            setGenerationTrace(trace);
+            setTraceDrawerOpen(true);
+          }}
         />
       )}
+      <GenerationTraceDrawer open={traceDrawerOpen} trace={generationTrace} onClose={() => setTraceDrawerOpen(false)} />
     </Box>
   );
 }
 
 function LoginView({ onLogin }: { onLogin: (result: Awaited<ReturnType<typeof login>>) => void }) {
+  const [mode, setMode] = useState<'login' | 'register'>('login');
+  const [name, setName] = useState('');
   const [email, setEmail] = useState('demo@geopress.local');
   const [password, setPassword] = useState('demo');
+  const [workspaceName, setWorkspaceName] = useState('');
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  const handleLogin = async () => {
+  const isRegister = mode === 'register';
+
+  const handleSubmit = async () => {
     setSubmitting(true);
     setError(null);
     try {
-      const result = await login(email, password);
+      const result = isRegister
+        ? await registerUser({
+            name,
+            email,
+            password,
+            workspaceName: workspaceName || undefined,
+          })
+        : await login(email, password);
       onLogin(result);
     } catch (err) {
-      setError(err instanceof Error ? err.message : '登录失败');
+      setError(err instanceof Error ? err.message : isRegister ? '注册失败' : '登录失败');
     } finally {
       setSubmitting(false);
     }
@@ -409,10 +467,11 @@ function LoginView({ onLogin }: { onLogin: (result: Awaited<ReturnType<typeof lo
           <Box>
             <Typography variant="h1">Geopress</Typography>
             <Typography color="text.secondary" sx={{ mt: 1 }}>
-              登录后进入个人或公司工作区。
+              {isRegister ? '注册后会自动创建个人工作区。' : '登录后进入个人或公司工作区。'}
             </Typography>
           </Box>
           {error && <Alert severity="error">{error}</Alert>}
+          {isRegister && <TextField label="姓名" value={name} onChange={(event) => setName(event.target.value)} fullWidth />}
           <TextField label="邮箱" value={email} onChange={(event) => setEmail(event.target.value)} fullWidth />
           <TextField
             label="密码"
@@ -421,11 +480,41 @@ function LoginView({ onLogin }: { onLogin: (result: Awaited<ReturnType<typeof lo
             onChange={(event) => setPassword(event.target.value)}
             fullWidth
           />
-          <Button startIcon={<LoginOutlinedIcon />} variant="contained" onClick={handleLogin} disabled={submitting}>
-            登录
+          {isRegister && (
+            <TextField
+              label="工作区名称"
+              value={workspaceName}
+              onChange={(event) => setWorkspaceName(event.target.value)}
+              placeholder="默认使用姓名创建个人工作区"
+              fullWidth
+            />
+          )}
+          <Button
+            startIcon={isRegister ? <AddIcon /> : <LoginOutlinedIcon />}
+            variant="contained"
+            onClick={handleSubmit}
+            disabled={submitting}
+          >
+            {isRegister ? '注册并进入' : '登录'}
+          </Button>
+          <Button
+            variant="text"
+            onClick={() => {
+              setMode(isRegister ? 'login' : 'register');
+              setError(null);
+              if (!isRegister) {
+                setEmail('');
+                setPassword('');
+              } else {
+                setEmail('demo@geopress.local');
+                setPassword('demo');
+              }
+            }}
+          >
+            {isRegister ? '已有账号，去登录' : '注册新账号'}
           </Button>
           <Typography variant="body2" color="text.secondary">
-            Demo 账号：demo@geopress.local 或 growth@geopress.local，任意密码。
+            Demo 账号：demo@geopress.local 或 growth@geopress.local，密码 demo。
           </Typography>
         </Stack>
       </Paper>
@@ -433,23 +522,329 @@ function LoginView({ onLogin }: { onLogin: (result: Awaited<ReturnType<typeof lo
   );
 }
 
+function OnboardingView({
+  token,
+  workspaceId,
+  user,
+  onComplete,
+}: {
+  token: string;
+  workspaceId: string;
+  user: User;
+  onComplete: (result: Awaited<ReturnType<typeof completeOnboarding>>) => void;
+}) {
+  const [step, setStep] = useState(0);
+  const [industry, setIndustry] = useState('');
+  const [tones, setTones] = useState<string[]>([]);
+  const [plans, setPlans] = useState<SubscriptionPlan[]>([]);
+  const [selectedPlanId, setSelectedPlanId] = useState('vip');
+  const [loadingPlans, setLoadingPlans] = useState(false);
+  const [submitting, setSubmitting] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    let mounted = true;
+    setLoadingPlans(true);
+    fetchSubscriptionPlans(token, workspaceId)
+      .then((items) => {
+        if (!mounted) {
+          return;
+        }
+        setPlans(items);
+        const vip = items.find((item) => item.id === 'vip');
+        setSelectedPlanId(vip?.id ?? items[0]?.id ?? 'free');
+      })
+      .catch((err: unknown) => {
+        if (mounted) {
+          setError(err instanceof Error ? err.message : '套餐加载失败');
+        }
+      })
+      .finally(() => {
+        if (mounted) {
+          setLoadingPlans(false);
+        }
+      });
+    return () => {
+      mounted = false;
+    };
+  }, [token, workspaceId]);
+
+  const toggleTone = (tone: string) => {
+    setTones((current) => {
+      if (current.includes(tone)) {
+        return current.filter((item) => item !== tone);
+      }
+      return [...current, tone];
+    });
+  };
+
+  const canContinue = step === 0 ? industry !== '' : step === 1 ? tones.length > 0 : true;
+  const submit = async (skipSubscription = false) => {
+    if (!industry || tones.length === 0) {
+      setError('请选择行业和语气');
+      return;
+    }
+    setSubmitting(true);
+    setError(null);
+    try {
+      const result = await completeOnboarding(token, workspaceId, {
+        workspaceId,
+        industry,
+        tones,
+        subscriptionPlanId: selectedPlanId,
+        skipSubscription,
+      });
+      onComplete(result);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : '保存失败');
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
+  return (
+    <Box sx={{ minHeight: '100vh', bgcolor: 'background.default', p: { xs: 2, md: 4 } }}>
+      <Container maxWidth="md">
+        <Paper sx={{ p: { xs: 2.5, md: 4 }, border: '1px solid', borderColor: 'divider' }} elevation={0}>
+          <Stack spacing={3}>
+            <Box>
+              <Typography variant="h1">欢迎，{user.name}</Typography>
+              <Typography color="text.secondary" sx={{ mt: 1 }}>
+                {step + 1} / 3
+              </Typography>
+            </Box>
+            {error && <Alert severity="error">{error}</Alert>}
+
+            {step === 0 && (
+              <Stack spacing={2}>
+                <Typography variant="h2">选择行业</Typography>
+                <Grid container spacing={1.25}>
+                  {onboardingIndustries.map((item) => (
+                    <Grid key={item} size={{ xs: 6, sm: 4 }}>
+                      <Button
+                        variant={industry === item ? 'contained' : 'outlined'}
+                        onClick={() => setIndustry(item)}
+                        fullWidth
+                        sx={{ minHeight: 44 }}
+                      >
+                        {item}
+                      </Button>
+                    </Grid>
+                  ))}
+                </Grid>
+              </Stack>
+            )}
+
+            {step === 1 && (
+              <Stack spacing={2}>
+                <Typography variant="h2">选择语气</Typography>
+                <Stack direction="row" spacing={1} flexWrap="wrap" useFlexGap>
+                  {onboardingTones.map((tone) => (
+                    <Chip
+                      key={tone}
+                      label={tone}
+                      color={tones.includes(tone) ? 'primary' : 'default'}
+                      variant={tones.includes(tone) ? 'filled' : 'outlined'}
+                      onClick={() => toggleTone(tone)}
+                      sx={{ minHeight: 36, borderRadius: 1 }}
+                    />
+                  ))}
+                </Stack>
+              </Stack>
+            )}
+
+            {step === 2 && (
+              <Stack spacing={2}>
+                <Typography variant="h2">选择订阅</Typography>
+                {loadingPlans ? (
+                  <Stack direction="row" spacing={1.5} alignItems="center">
+                    <CircularProgress size={22} />
+                    <Typography color="text.secondary">正在读取订阅计划</Typography>
+                  </Stack>
+                ) : (
+                  <Grid container spacing={1.5}>
+                    {plans.map((plan) => (
+                      <Grid key={plan.id} size={{ xs: 12, sm: 6 }}>
+                        <Paper
+                          elevation={0}
+                          onClick={() => setSelectedPlanId(plan.id)}
+                          sx={{
+                            p: 2,
+                            cursor: 'pointer',
+                            border: '1px solid',
+                            borderColor: selectedPlanId === plan.id ? 'primary.main' : 'divider',
+                            bgcolor: selectedPlanId === plan.id ? 'action.selected' : 'background.paper',
+                          }}
+                        >
+                          <Stack spacing={1}>
+                            <Stack direction="row" alignItems="center" justifyContent="space-between">
+                              <Typography variant="h2">{plan.name}</Typography>
+                              <Chip size="small" label={formatMoney(plan.priceCents, plan.currency)} color={plan.id === 'vip' ? 'primary' : 'default'} />
+                            </Stack>
+                            <Typography color="text.secondary">
+                              {plan.monthlyTokenBudgetCents > 0
+                                ? `${formatMoney(plan.monthlyTokenBudgetCents, plan.currency)} AI Token 额度`
+                                : '基础试用额度'}
+                            </Typography>
+                          </Stack>
+                        </Paper>
+                      </Grid>
+                    ))}
+                  </Grid>
+                )}
+              </Stack>
+            )}
+
+            <Stack direction={{ xs: 'column', sm: 'row' }} spacing={1} justifyContent="space-between">
+              <Button disabled={step === 0 || submitting} onClick={() => setStep((value) => Math.max(0, value - 1))}>
+                上一步
+              </Button>
+              <Stack direction={{ xs: 'column', sm: 'row' }} spacing={1}>
+                {step === 2 && (
+                  <Button variant="outlined" onClick={() => submit(true)} disabled={submitting}>
+                    跳过
+                  </Button>
+                )}
+                {step < 2 ? (
+                  <Button variant="contained" onClick={() => setStep((value) => value + 1)} disabled={!canContinue || submitting}>
+                    下一步
+                  </Button>
+                ) : (
+                  <Button variant="contained" onClick={() => submit(false)} disabled={submitting || loadingPlans}>
+                    完成
+                  </Button>
+                )}
+              </Stack>
+            </Stack>
+          </Stack>
+        </Paper>
+      </Container>
+    </Box>
+  );
+}
+
+function WorkspaceWorkbenchPanel({
+  open,
+  currentWorkspace,
+  user,
+  onToggle,
+  onGenerate,
+  onSchedule,
+  onContent,
+}: {
+  open: boolean;
+  currentWorkspace: Workspace | null;
+  user: User | null;
+  onToggle: () => void;
+  onGenerate: () => void;
+  onSchedule: () => void;
+  onContent: () => void;
+}) {
+  return (
+    <Paper
+      elevation={0}
+      sx={{
+        width: { xs: '100%', md: open ? 300 : 64 },
+        maxWidth: { xs: '100%', md: open ? 300 : 64 },
+        flex: { xs: '0 0 auto', md: `0 0 ${open ? 300 : 64}px` },
+        boxSizing: 'border-box',
+        position: { md: 'sticky' },
+        top: { md: 88 },
+        p: open ? 2 : 1,
+        border: '1px solid',
+        borderColor: 'divider',
+        borderRadius: 2,
+        overflow: 'hidden',
+        transition: (theme) =>
+          theme.transitions.create(['width', 'flex-basis', 'padding'], {
+            duration: theme.transitions.duration.shorter,
+          }),
+      }}
+    >
+      <Stack spacing={open ? 2 : 1} alignItems={open ? 'stretch' : 'center'}>
+        <Stack direction="row" alignItems="center" justifyContent={open ? 'space-between' : 'center'} spacing={1}>
+          {open && (
+            <Box sx={{ minWidth: 0 }}>
+              <Typography variant="h2">工作区工作台</Typography>
+              <Typography color="text.secondary" sx={{ mt: 0.75 }}>
+                {currentWorkspace ? currentWorkspace.name : '正在读取工作区信息'}
+              </Typography>
+            </Box>
+          )}
+          <Tooltip title={open ? '折叠工作台' : '展开工作台'}>
+            <IconButton size="small" onClick={onToggle} aria-label={open ? '折叠工作台' : '展开工作台'}>
+              {open ? <ChevronLeftIcon /> : <ChevronRightIcon />}
+            </IconButton>
+          </Tooltip>
+        </Stack>
+
+        {open ? (
+          <>
+            <Divider />
+            <Stack spacing={1}>
+              <InfoRow label="行业" value={currentWorkspace?.industry ?? '-'} />
+              <InfoRow label="语气" value={currentWorkspace?.tone ?? '-'} />
+              <InfoRow label="账号订阅" value={formatSubscription(user)} />
+            </Stack>
+            <Stack spacing={1}>
+              <Button startIcon={<PsychologyAltOutlinedIcon />} variant="outlined" onClick={onGenerate} fullWidth>
+                关键词生成
+              </Button>
+              <Button startIcon={<ScheduleOutlinedIcon />} variant="outlined" onClick={onSchedule} fullWidth>
+                新建计划
+              </Button>
+              <Button startIcon={<AddIcon />} variant="contained" onClick={onContent} fullWidth>
+                新建内容
+              </Button>
+            </Stack>
+          </>
+        ) : (
+          <Stack spacing={1} alignItems="center">
+            <Tooltip title="关键词生成">
+              <IconButton size="small" onClick={onGenerate} aria-label="关键词生成">
+                <PsychologyAltOutlinedIcon fontSize="small" />
+              </IconButton>
+            </Tooltip>
+            <Tooltip title="新建计划">
+              <IconButton size="small" onClick={onSchedule} aria-label="新建计划">
+                <ScheduleOutlinedIcon fontSize="small" />
+              </IconButton>
+            </Tooltip>
+            <Tooltip title="新建内容">
+              <IconButton size="small" color="primary" onClick={onContent} aria-label="新建内容">
+                <AddIcon fontSize="small" />
+              </IconButton>
+            </Tooltip>
+          </Stack>
+        )}
+      </Stack>
+    </Paper>
+  );
+}
+
 function ActiveView({
   view,
+  token,
+  workspaceId,
   workspace,
   currentWorkspace,
   openDialog,
+  onChanged,
   onLoginMediaAccount,
   onPreparePublish,
 }: {
   view: ViewKey;
+  token: string;
+  workspaceId: string;
   workspace: WorkspaceData;
   currentWorkspace: Workspace;
   openDialog: (dialog: DialogKey) => void;
+  onChanged: () => void;
   onLoginMediaAccount: (accountId: string) => void;
   onPreparePublish: (contentId: string) => void;
 }) {
   if (view === 'knowledge') {
-    return <KnowledgeView data={workspace} openDialog={openDialog} />;
+    return <KnowledgeView token={token} workspaceId={workspaceId} data={workspace} openDialog={openDialog} onChanged={onChanged} />;
   }
   if (view === 'accounts') {
     return <AccountsView data={workspace} openDialog={openDialog} onLoginMediaAccount={onLoginMediaAccount} />;
@@ -503,35 +898,189 @@ function OverviewView({ data, openDialog }: { data: WorkspaceData; openDialog: (
   );
 }
 
-function KnowledgeView({ data, openDialog }: { data: WorkspaceData; openDialog: (dialog: DialogKey) => void }) {
+function KnowledgeView({
+  token,
+  workspaceId,
+  data,
+  openDialog,
+  onChanged,
+}: {
+  token: string;
+  workspaceId: string;
+  data: WorkspaceData;
+  openDialog: (dialog: DialogKey) => void;
+  onChanged: () => void;
+}) {
+  const packageViewportRef = useRef<HTMLDivElement | null>(null);
+  const [selectedBaseId, setSelectedBaseId] = useState('');
+  const [packagePage, setPackagePage] = useState(0);
+  const [visiblePackageCount, setVisiblePackageCount] = useState(1);
+  const [search, setSearch] = useState('');
+  const [selectedItemIds, setSelectedItemIds] = useState<string[]>([]);
+  const [targetBaseIds, setTargetBaseIds] = useState<string[]>([]);
+  const [assigning, setAssigning] = useState(false);
+  const [assignError, setAssignError] = useState<string | null>(null);
+  const totalPackagePages = Math.max(1, Math.ceil(data.knowledgeBases.length / visiblePackageCount));
+  const packageStart = Math.min(packagePage, totalPackagePages - 1) * visiblePackageCount;
+  const visiblePackages = data.knowledgeBases.slice(packageStart, packageStart + visiblePackageCount);
+  const filteredItems = useMemo(() => {
+    const keyword = search.trim().toLowerCase();
+    return data.knowledgeItems.filter((item) => {
+      if (selectedBaseId && !item.knowledgeBaseIds.includes(selectedBaseId)) {
+        return false;
+      }
+      if (!keyword) {
+        return true;
+      }
+      return [item.title, item.content, item.type, knowledgeBaseNames(data.knowledgeBases, item.knowledgeBaseIds)]
+        .join(' ')
+        .toLowerCase()
+        .includes(keyword);
+    });
+  }, [data.knowledgeBases, data.knowledgeItems, search, selectedBaseId]);
+
+  useEffect(() => {
+    setSelectedItemIds((current) => current.filter((id) => filteredItems.some((item) => item.id === id)));
+  }, [filteredItems]);
+
+  useEffect(() => {
+    const viewport = packageViewportRef.current;
+    if (!viewport) {
+      return undefined;
+    }
+
+    const updateVisibleCount = () => {
+      const width = viewport.getBoundingClientRect().width;
+      setVisiblePackageCount(Math.max(1, Math.floor((width + knowledgePackageGap) / (knowledgePackageWidth + knowledgePackageGap))));
+    };
+
+    updateVisibleCount();
+    const observer = new ResizeObserver(updateVisibleCount);
+    observer.observe(viewport);
+    return () => observer.disconnect();
+  }, []);
+
+  useEffect(() => {
+    setPackagePage((value) => Math.min(value, totalPackagePages - 1));
+  }, [totalPackagePages]);
+
+  useEffect(() => {
+    setTargetBaseIds((current) => current.filter((id) => data.knowledgeBases.some((base) => base.id === id)));
+  }, [data.knowledgeBases]);
+
+  const submitAssign = async () => {
+    if (selectedItemIds.length === 0 || targetBaseIds.length === 0) {
+      setAssignError('请选择条目和目标知识库包');
+      return;
+    }
+    setAssigning(true);
+    setAssignError(null);
+    try {
+      await assignKnowledgeItemsToBases(token, workspaceId, {
+        knowledgeItemIds: selectedItemIds,
+        knowledgeBaseIds: targetBaseIds,
+      });
+      setSelectedItemIds([]);
+      onChanged();
+    } catch (err) {
+      setAssignError(err instanceof Error ? err.message : '批量添加失败');
+    } finally {
+      setAssigning(false);
+    }
+  };
+
   return (
-    <Stack spacing={2}>
-      <Grid container spacing={2}>
-        {data.knowledgeBases.map((base) => (
-          <Grid key={base.id} size={{ xs: 12, md: 6, lg: 4 }}>
-            <Card>
-              <CardContent>
-                <Stack spacing={1.25}>
-                  <Stack direction="row" justifyContent="space-between" spacing={2}>
-                    <Typography variant="h3">{base.name}</Typography>
-                    <Chip label={`${base.itemCount} 条`} size="small" color="info" />
-                  </Stack>
-                  <Typography color="text.secondary">{base.description}</Typography>
-                  <Typography variant="body2" color="text.secondary">
-                    更新于 {formatDate(base.updatedAt)}
-                  </Typography>
-                </Stack>
-              </CardContent>
-            </Card>
-          </Grid>
-        ))}
-      </Grid>
+    <Stack spacing={2.5}>
       <Section
-        title="知识条目"
+        title="知识库包"
         action={
           <Stack direction="row" spacing={1}>
-            <Button startIcon={<AddIcon />} onClick={() => openDialog('knowledgeBase')}>
-              新建知识库
+            <Button size="small" variant={selectedBaseId ? 'outlined' : 'contained'} onClick={() => setSelectedBaseId('')}>
+              全部
+            </Button>
+            <Button size="small" startIcon={<AddIcon />} onClick={() => openDialog('knowledgeBase')}>
+              新建包
+            </Button>
+          </Stack>
+        }
+      >
+        <Stack direction="row" alignItems="center" spacing={1.5}>
+          <IconButton
+            aria-label="上一页知识库包"
+            disabled={packagePage === 0}
+            onClick={() => setPackagePage((value) => Math.max(0, value - 1))}
+          >
+            <ChevronLeftIcon />
+          </IconButton>
+          <Box ref={packageViewportRef} sx={{ flex: 1, overflow: 'hidden' }}>
+            <Stack direction="row" spacing={1.5} sx={{ minHeight: 148 }}>
+              {visiblePackages.map((base) => (
+                <Card
+                  key={base.id}
+                  onClick={() => setSelectedBaseId((value) => (value === base.id ? '' : base.id))}
+                  sx={{
+                    width: knowledgePackageWidth,
+                    flex: `0 0 ${knowledgePackageWidth}px`,
+                    cursor: 'pointer',
+                    border: '1px solid',
+                    borderColor: selectedBaseId === base.id ? 'primary.main' : 'divider',
+                    boxShadow: selectedBaseId === base.id ? 2 : 0,
+                  }}
+                >
+                  <CardContent>
+                    <Stack spacing={1.25}>
+                      <Stack direction="row" justifyContent="space-between" spacing={2}>
+                        <Typography variant="h3" sx={{ overflowWrap: 'anywhere' }}>{base.name}</Typography>
+                        <Chip label={`${base.itemCount} 条`} size="small" color={selectedBaseId === base.id ? 'primary' : 'info'} />
+                      </Stack>
+                      <Typography color="text.secondary" sx={{ minHeight: 44 }}>
+                        {base.description || '暂无说明'}
+                      </Typography>
+                      <Typography variant="body2" color="text.secondary">
+                        更新于 {formatDate(base.updatedAt)}
+                      </Typography>
+                    </Stack>
+                  </CardContent>
+                </Card>
+              ))}
+            </Stack>
+          </Box>
+          <IconButton
+            aria-label="下一页知识库包"
+            disabled={packagePage >= totalPackagePages - 1}
+            onClick={() => setPackagePage((value) => Math.min(totalPackagePages - 1, value + 1))}
+          >
+            <ChevronRightIcon />
+          </IconButton>
+        </Stack>
+      </Section>
+
+      <Section
+        title="知识条目检索"
+        action={
+          <Stack direction={{ xs: 'column', md: 'row' }} spacing={1} alignItems={{ xs: 'stretch', md: 'center' }}>
+            <FormControl size="small" sx={{ minWidth: 220 }}>
+              <InputLabel>批量加入知识库包</InputLabel>
+              <Select
+                multiple
+                label="批量加入知识库包"
+                value={targetBaseIds}
+                onChange={(event) => {
+                  const value = event.target.value;
+                  setTargetBaseIds(typeof value === 'string' ? value.split(',') : value);
+                }}
+                renderValue={(selected) => knowledgeBaseNames(data.knowledgeBases, selected)}
+              >
+                {data.knowledgeBases.map((base) => (
+                  <MenuItem key={base.id} value={base.id}>
+                    <Checkbox checked={targetBaseIds.includes(base.id)} />
+                    <ListItemText primary={base.name} />
+                  </MenuItem>
+                ))}
+              </Select>
+            </FormControl>
+            <Button variant="outlined" disabled={assigning || selectedItemIds.length === 0 || targetBaseIds.length === 0} onClick={submitAssign}>
+              加入选中条目
             </Button>
             <Button startIcon={<AddIcon />} variant="contained" onClick={() => openDialog('knowledgeItem')}>
               新增条目
@@ -539,7 +1088,34 @@ function KnowledgeView({ data, openDialog }: { data: WorkspaceData; openDialog: 
           </Stack>
         }
       >
-        <KnowledgeItemsTable items={data.knowledgeItems} bases={data.knowledgeBases} />
+        <Stack spacing={2}>
+          {assignError && <Alert severity="error">{assignError}</Alert>}
+          <Stack direction={{ xs: 'column', md: 'row' }} spacing={1.5} alignItems={{ xs: 'stretch', md: 'center' }}>
+            <TextField
+              size="small"
+              label="检索条目"
+              value={search}
+              onChange={(event) => setSearch(event.target.value)}
+              fullWidth
+            />
+            {selectedBaseId && (
+              <Chip
+                label={`筛选：${knowledgeBaseName(data.knowledgeBases, selectedBaseId)}`}
+                onDelete={() => setSelectedBaseId('')}
+                color="primary"
+              />
+            )}
+            <Typography color="text.secondary" sx={{ whiteSpace: 'nowrap' }}>
+              {filteredItems.length} 条
+            </Typography>
+          </Stack>
+          <KnowledgeItemsTable
+            items={filteredItems}
+            bases={data.knowledgeBases}
+            selectedIds={selectedItemIds}
+            onSelectedIdsChange={setSelectedItemIds}
+          />
+        </Stack>
       </Section>
     </Stack>
   );
@@ -577,7 +1153,7 @@ function GenerateView({ data, openDialog }: { data: WorkspaceData; openDialog: (
     >
       <Stack spacing={1.5}>
         <Typography color="text.secondary">
-          生成时会检索当前工作区知识库片段，选择写作技能并调用已配置的 AI Provider，输出结果先保存为草稿。
+          生成时只接收关键词和知识库包上下文，内容类型由系统模板控制写作技能、发布格式和结构化输出边界，结果先保存为草稿。
         </Typography>
         <ContentTable contents={data.contents.filter((item) => item.source !== 'manual')} />
       </Stack>
@@ -634,7 +1210,8 @@ function SettingsView({ workspace, user }: { workspace: Workspace; user: User })
           <InfoRow label="类型" value={workspace.type === 'company' ? '公司' : '个人'} />
         </Grid>
         <Grid size={{ xs: 12, md: 6 }}>
-          <InfoRow label="套餐" value={workspace.plan} />
+          <InfoRow label="账号订阅" value={formatSubscription(user)} />
+          <InfoRow label="工作区方案" value={workspace.plan} />
           <InfoRow label="行业" value={workspace.industry} />
           <InfoRow label="语言" value={workspace.language} />
           <InfoRow label="默认语气" value={workspace.tone} />
@@ -653,6 +1230,7 @@ function WorkspaceDialogs({
   selectedMediaAccountId,
   onClose,
   onCreated,
+  onGeneratedTrace,
 }: {
   dialog: DialogKey;
   token: string;
@@ -662,6 +1240,7 @@ function WorkspaceDialogs({
   selectedMediaAccountId: string;
   onClose: () => void;
   onCreated: (nextView?: ViewKey) => void;
+  onGeneratedTrace: (trace: GenerationTrace) => void;
 }) {
   const selectedMediaAccount = data.mediaAccounts.find((account) => account.id === selectedMediaAccountId) ?? null;
 
@@ -679,6 +1258,7 @@ function WorkspaceDialogs({
         token={token}
         workspaceId={workspaceId}
         bases={data.knowledgeBases}
+        user={data.user}
         onClose={onClose}
         onCreated={() => onCreated('knowledge')}
       />
@@ -712,8 +1292,10 @@ function WorkspaceDialogs({
         token={token}
         workspaceId={workspaceId}
         bases={data.knowledgeBases}
+        user={data.user}
         onClose={onClose}
         onCreated={() => onCreated('contents')}
+        onGeneratedTrace={onGeneratedTrace}
       />
       <ScheduleDialog
         open={dialog === 'schedule'}
@@ -773,26 +1355,30 @@ function KnowledgeBaseDialog(props: DialogBaseProps) {
 
 function KnowledgeItemDialog({
   bases,
+  user,
   ...props
 }: DialogBaseProps & {
   bases: KnowledgeBase[];
+  user: User;
 }) {
-  const [knowledgeBaseId, setKnowledgeBaseId] = useState('');
+  const [knowledgeBaseIds, setKnowledgeBaseIds] = useState<string[]>([]);
   const [type, setType] = useState('brand');
   const [title, setTitle] = useState('');
   const [content, setContent] = useState('');
   const [submitting, setSubmitting] = useState(false);
+  const [formatting, setFormatting] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const isFormatAvailable = user.subscriptionTier === 'vip' && user.subscriptionStatus === 'active';
 
   useEffect(() => {
     if (props.open) {
-      setKnowledgeBaseId(bases[0]?.id ?? '');
+      setKnowledgeBaseIds(bases[0]?.id ? [bases[0].id] : []);
       setError(null);
     }
   }, [bases, props.open]);
 
   const submit = async () => {
-    if (!knowledgeBaseId || !title.trim() || !content.trim()) {
+    if (knowledgeBaseIds.length === 0 || !title.trim() || !content.trim()) {
       setError('请选择知识库并填写标题和内容');
       return;
     }
@@ -800,7 +1386,7 @@ function KnowledgeItemDialog({
     setError(null);
     try {
       await createKnowledgeItem(props.token, props.workspaceId, {
-        knowledgeBaseId,
+        knowledgeBaseIds,
         type,
         title: title.trim(),
         content: content.trim(),
@@ -815,9 +1401,56 @@ function KnowledgeItemDialog({
     }
   };
 
+  const formatContent = async () => {
+    if (!isFormatAvailable) {
+      setError('格式化是 VIP 功能，请升级订阅后使用');
+      return;
+    }
+    if (!content.trim()) {
+      setError('请先填写内容，再使用格式化');
+      return;
+    }
+    setFormatting(true);
+    setError(null);
+    try {
+      const response = await formatKnowledgeContent(props.token, props.workspaceId, {
+        type,
+        title: title.trim(),
+        content: content.trim(),
+      });
+      setContent(response.content);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : '格式化失败');
+    } finally {
+      setFormatting(false);
+    }
+  };
+
   return (
-    <FormDialog title="新增知识条目" open={props.open} error={error} submitting={submitting} onClose={props.onClose} onSubmit={submit}>
-      <SelectField label="知识库" value={knowledgeBaseId} onChange={setKnowledgeBaseId} items={bases.map((base) => ({ value: base.id, label: base.name }))} />
+    <FormDialog title="新增知识条目" open={props.open} error={error} submitting={submitting || formatting} onClose={props.onClose} onSubmit={submit}>
+      <Alert severity="info">
+        内容建议使用 Markdown 结构，例如标题、要点、适用场景、事实边界、禁用表达和待补充事项。结构越清晰，系统检索知识片段和 AI 生成草稿时越容易准确引用事实、减少误读和编造。散乱文本可以先填写，再用 VIP 格式化整理回内容栏。
+      </Alert>
+      <FormControl fullWidth disabled={bases.length === 0}>
+        <InputLabel>知识库包</InputLabel>
+        <Select
+          multiple
+          label="知识库包"
+          value={knowledgeBaseIds}
+          onChange={(event) => {
+            const value = event.target.value;
+            setKnowledgeBaseIds(typeof value === 'string' ? value.split(',') : value);
+          }}
+          renderValue={(selected) => knowledgeBaseNames(bases, selected)}
+        >
+          {bases.map((base) => (
+            <MenuItem key={base.id} value={base.id}>
+              <Checkbox checked={knowledgeBaseIds.includes(base.id)} />
+              <ListItemText primary={base.name} />
+            </MenuItem>
+          ))}
+        </Select>
+      </FormControl>
       <SelectField
         label="类型"
         value={type}
@@ -832,6 +1465,22 @@ function KnowledgeItemDialog({
         ]}
       />
       <TextField label="标题" value={title} onChange={(event) => setTitle(event.target.value)} fullWidth required />
+      <Stack direction={{ xs: 'column', sm: 'row' }} spacing={1} alignItems={{ xs: 'stretch', sm: 'center' }} justifyContent="space-between">
+        <Typography fontWeight={700}>内容</Typography>
+        <Tooltip title={isFormatAvailable ? '调用 AI 把散乱文本整理成适合检索的 Markdown' : 'VIP 用户可用 AI 格式化'}>
+          <span>
+            <Button
+              variant="outlined"
+              size="small"
+              onClick={formatContent}
+              disabled={formatting || submitting || !isFormatAvailable}
+              startIcon={<Box component="img" src={vipGoldIconUrl} alt="VIP" sx={{ width: 30, height: 15, objectFit: 'contain' }} />}
+            >
+              {formatting ? '格式化中' : '格式化'}
+            </Button>
+          </span>
+        </Tooltip>
+      </Stack>
       <TextField label="内容" value={content} onChange={(event) => setContent(event.target.value)} fullWidth multiline minRows={4} required />
     </FormDialog>
   );
@@ -1127,25 +1776,57 @@ function ContentDialog({
 
 function GenerateDialog({
   bases,
+  user,
+  onGeneratedTrace,
   ...props
 }: DialogBaseProps & {
   bases: KnowledgeBase[];
+  user: User;
+  onGeneratedTrace: (trace: GenerationTrace) => void;
 }) {
   const [keywords, setKeywords] = useState('内容营销, 增长');
   const [contentType, setContentType] = useState('xiaohongshu_long_article');
-  const [knowledgeBaseId, setKnowledgeBaseId] = useState('');
+  const [knowledgeBaseIds, setKnowledgeBaseIds] = useState<string[]>([]);
   const [submitting, setSubmitting] = useState(false);
+  const [formatting, setFormatting] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const keywordItems = useMemo(() => splitKeywords(keywords), [keywords]);
+  const isFormatAvailable = user.subscriptionTier === 'vip' && user.subscriptionStatus === 'active';
 
   useEffect(() => {
     if (props.open) {
-      setKnowledgeBaseId(bases[0]?.id ?? '');
+      setKnowledgeBaseIds(bases.map((base) => base.id));
       setError(null);
     }
   }, [bases, props.open]);
 
+  const formatKeywords = async () => {
+    if (!isFormatAvailable) {
+      setError('格式化是 VIP 功能，请升级订阅后使用');
+      return;
+    }
+    if (!keywords.trim()) {
+      setError('请先填写关键词和素材');
+      return;
+    }
+    setFormatting(true);
+    setError(null);
+    try {
+      const response = await formatKnowledgeContent(props.token, props.workspaceId, {
+        type: 'generation_keywords',
+        title: '发布内容关键词',
+        content: keywords.trim(),
+      });
+      setKeywords(response.content);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : '格式化失败');
+    } finally {
+      setFormatting(false);
+    }
+  };
+
   const submit = async () => {
-    const values = splitKeywords(keywords);
+    const values = keywordItems;
     if (values.length === 0) {
       setError('请至少填写一个关键词');
       return;
@@ -1153,7 +1834,8 @@ function GenerateDialog({
     setSubmitting(true);
     setError(null);
     try {
-      await generateContent(props.token, props.workspaceId, { keywords: values, contentType, knowledgeBaseId, publishFormatId: contentType });
+      const response = await generateContent(props.token, props.workspaceId, { keywords: values, contentType, knowledgeBaseIds, publishFormatId: contentType });
+      onGeneratedTrace(response.trace);
       props.onCreated();
     } catch (err) {
       setError(err instanceof Error ? err.message : '生成失败');
@@ -1163,22 +1845,92 @@ function GenerateDialog({
   };
 
   return (
-    <FormDialog title="关键词生成发布内容" open={props.open} error={error} submitting={submitting} onClose={props.onClose} onSubmit={submit}>
-      <SelectField label="知识库上下文" value={knowledgeBaseId} onChange={setKnowledgeBaseId} items={bases.map((base) => ({ value: base.id, label: base.name }))} />
-      <SelectField
-        label="内容类型"
-        value={contentType}
-        onChange={setContentType}
-        items={[
-          { value: 'xiaohongshu_long_article', label: '小红书长文' },
-          { value: 'article', label: '通用长文章' },
-          { value: 'brief', label: '短文' },
-          { value: 'case_study', label: '案例稿' },
-          { value: 'product_intro', label: '产品介绍' },
-        ]}
-      />
-      <TextField label="关键词" value={keywords} onChange={(event) => setKeywords(event.target.value)} fullWidth required />
-    </FormDialog>
+    <Dialog open={props.open} onClose={submitting || formatting ? undefined : props.onClose} fullWidth maxWidth="md">
+      <DialogTitle>关键词生成发布内容</DialogTitle>
+      <DialogContent>
+        <Stack spacing={2} sx={{ pt: 1 }}>
+          {error && <Alert severity="error">{error}</Alert>}
+          <FormControl fullWidth>
+            <InputLabel>知识库包上下文</InputLabel>
+            <Select
+              multiple
+              label="知识库包上下文"
+              value={knowledgeBaseIds}
+              onChange={(event) => {
+                const value = event.target.value;
+                setKnowledgeBaseIds(typeof value === 'string' ? value.split(',') : value);
+              }}
+              renderValue={(selected) => (selected.length === 0 ? '全部知识库包' : knowledgeBaseNames(bases, selected))}
+            >
+              {bases.map((base) => (
+                <MenuItem key={base.id} value={base.id}>
+                  <Checkbox checked={knowledgeBaseIds.includes(base.id)} />
+                  <ListItemText primary={base.name} />
+                </MenuItem>
+              ))}
+            </Select>
+          </FormControl>
+          <SelectField
+            label="内容类型"
+            value={contentType}
+            onChange={setContentType}
+            items={contentTypeOptions}
+          />
+          <Stack direction={{ xs: 'column', sm: 'row' }} spacing={1} alignItems={{ xs: 'stretch', sm: 'center' }} justifyContent="space-between">
+            <Typography fontWeight={700}>关键词与素材</Typography>
+            <Tooltip title={isFormatAvailable ? '调用 AI 把散乱关键词整理成可检索的文本条目' : 'VIP 用户可用 AI 格式化'}>
+              <span>
+                <Button
+                  variant="outlined"
+                  size="small"
+                  onClick={formatKeywords}
+                  disabled={formatting || submitting || !isFormatAvailable}
+                  startIcon={<Box component="img" src={vipGoldIconUrl} alt="VIP" sx={{ width: 30, height: 15, objectFit: 'contain' }} />}
+                >
+                  {formatting ? '格式化中' : '格式化'}
+                </Button>
+              </span>
+            </Tooltip>
+          </Stack>
+          <TextField
+            label="关键词"
+            value={keywords}
+            onChange={(event) => setKeywords(event.target.value)}
+            fullWidth
+            required
+            multiline
+            minRows={4}
+            helperText="每行、逗号或分号分隔一个关键词/素材点"
+          />
+          <Paper variant="outlined" sx={{ p: 1.5, borderRadius: 1 }}>
+            <Stack spacing={1}>
+              <Typography variant="body2" color="text.secondary">
+                已识别关键词
+              </Typography>
+              {keywordItems.length === 0 ? (
+                <Typography color="text.secondary">暂无关键词</Typography>
+              ) : (
+                <Stack spacing={0.75}>
+                  {keywordItems.map((item) => (
+                    <Typography key={item} variant="body2" sx={{ overflowWrap: 'anywhere' }}>
+                      {item}
+                    </Typography>
+                  ))}
+                </Stack>
+              )}
+            </Stack>
+          </Paper>
+        </Stack>
+      </DialogContent>
+      <DialogActions>
+        <Button onClick={props.onClose} disabled={submitting || formatting}>
+          取消
+        </Button>
+        <Button onClick={submit} disabled={submitting || formatting} variant="contained">
+          {submitting ? '生成中' : '确认'}
+        </Button>
+      </DialogActions>
+    </Dialog>
   );
 }
 
@@ -1540,6 +2292,100 @@ function PreparedPostPanel({
   );
 }
 
+function GenerationTraceDrawer({
+  open,
+  trace,
+  onClose,
+}: {
+  open: boolean;
+  trace: GenerationTrace | null;
+  onClose: () => void;
+}) {
+  return (
+    <Drawer anchor="right" open={open} onClose={onClose}>
+      <Box sx={{ width: { xs: '100vw', sm: 420 }, maxWidth: '100vw', p: 2 }}>
+        <Stack spacing={2}>
+          <Stack direction="row" alignItems="center" justifyContent="space-between" spacing={1}>
+            <Box>
+              <Typography variant="h2">思考过程</Typography>
+              <Typography variant="body2" color="text.secondary">
+                {trace ? `${trace.subscriptionTier || 'free'} 链路 / ${trace.steps.length} 个阶段` : '暂无生成记录'}
+              </Typography>
+            </Box>
+            <IconButton onClick={onClose} aria-label="关闭思考过程">
+              <CloseIcon />
+            </IconButton>
+          </Stack>
+          {trace?.warnings?.map((warning) => (
+            <Alert key={warning} severity="warning">
+              {warning}
+            </Alert>
+          ))}
+          {!trace || trace.steps.length === 0 ? (
+            <Typography color="text.secondary">生成后会显示本次使用的链路、知识检索、计划、校验和重写结果。</Typography>
+          ) : (
+            <Stack spacing={1}>
+              {trace.steps.map((step, index) => (
+                <Accordion key={`${step.id}-${index}`} defaultExpanded={index < 2} disableGutters>
+                  <AccordionSummary expandIcon={<ExpandMoreIcon />}>
+                    <Stack direction="row" spacing={1} alignItems="center" sx={{ minWidth: 0 }}>
+                      <Chip size="small" label={traceStepStatusLabel(step.status)} color={traceStepStatusColor(step.status)} />
+                      <Typography fontWeight={700} sx={{ overflowWrap: 'anywhere' }}>
+                        {step.label}
+                      </Typography>
+                    </Stack>
+                  </AccordionSummary>
+                  <AccordionDetails>
+                    <Stack spacing={1}>
+                      <Typography variant="body2">{step.summary}</Typography>
+                      {step.details.map((item) => (
+                        <Typography key={item} variant="body2" color="text.secondary" sx={{ overflowWrap: 'anywhere' }}>
+                          {item}
+                        </Typography>
+                      ))}
+                      {step.warnings.map((warning) => (
+                        <Alert key={warning} severity="warning">
+                          {warning}
+                        </Alert>
+                      ))}
+                    </Stack>
+                  </AccordionDetails>
+                </Accordion>
+              ))}
+            </Stack>
+          )}
+        </Stack>
+      </Box>
+    </Drawer>
+  );
+}
+
+function traceStepStatusLabel(status: string) {
+  if (status === 'succeeded') {
+    return '完成';
+  }
+  if (status === 'failed') {
+    return '失败';
+  }
+  if (status === 'skipped') {
+    return '跳过';
+  }
+  return status;
+}
+
+function traceStepStatusColor(status: string): 'default' | 'success' | 'error' | 'warning' {
+  if (status === 'succeeded') {
+    return 'success';
+  }
+  if (status === 'failed') {
+    return 'error';
+  }
+  if (status === 'skipped') {
+    return 'warning';
+  }
+  return 'default';
+}
+
 type DialogBaseProps = {
   open: boolean;
   token: string;
@@ -1654,13 +2500,51 @@ function Section({ title, action, children }: { title: string; action?: ReactNod
   );
 }
 
-function KnowledgeItemsTable({ items, bases }: { items: KnowledgeItem[]; bases: KnowledgeBase[] }) {
+function KnowledgeItemsTable({
+  items,
+  bases,
+  selectedIds = [],
+  onSelectedIdsChange,
+}: {
+  items: KnowledgeItem[];
+  bases: KnowledgeBase[];
+  selectedIds?: string[];
+  onSelectedIdsChange?: (ids: string[]) => void;
+}) {
+  const selectable = Boolean(onSelectedIdsChange);
+  const allSelected = selectable && items.length > 0 && items.every((item) => selectedIds.includes(item.id));
+  const toggleAll = (checked: boolean) => {
+    if (!onSelectedIdsChange) {
+      return;
+    }
+    if (checked) {
+      onSelectedIdsChange(uniqueValues([...selectedIds, ...items.map((item) => item.id)]));
+    } else {
+      onSelectedIdsChange(selectedIds.filter((id) => !items.some((item) => item.id === id)));
+    }
+  };
+  const toggleItem = (itemId: string, checked: boolean) => {
+    if (!onSelectedIdsChange) {
+      return;
+    }
+    onSelectedIdsChange(checked ? uniqueValues([...selectedIds, itemId]) : selectedIds.filter((id) => id !== itemId));
+  };
+
   return (
     <Table>
       <TableHead>
         <TableRow>
+          {selectable && (
+            <TableCell padding="checkbox">
+              <Checkbox
+                checked={allSelected}
+                indeterminate={selectedIds.length > 0 && !allSelected}
+                onChange={(event) => toggleAll(event.target.checked)}
+              />
+            </TableCell>
+          )}
           <TableCell>标题</TableCell>
-          <TableCell>知识库</TableCell>
+          <TableCell>知识库包</TableCell>
           <TableCell>类型</TableCell>
           <TableCell>状态</TableCell>
           <TableCell>更新时间</TableCell>
@@ -1669,13 +2553,21 @@ function KnowledgeItemsTable({ items, bases }: { items: KnowledgeItem[]; bases: 
       <TableBody>
         {items.map((item) => (
           <TableRow key={item.id} hover>
+            {selectable && (
+              <TableCell padding="checkbox">
+                <Checkbox
+                  checked={selectedIds.includes(item.id)}
+                  onChange={(event) => toggleItem(item.id, event.target.checked)}
+                />
+              </TableCell>
+            )}
             <TableCell>
               <Typography fontWeight={700}>{item.title}</Typography>
               <Typography variant="body2" color="text.secondary" sx={{ maxWidth: 520 }}>
                 {item.content}
               </Typography>
             </TableCell>
-            <TableCell>{knowledgeBaseName(bases, item.knowledgeBaseId)}</TableCell>
+            <TableCell>{knowledgeBaseNames(bases, item.knowledgeBaseIds)}</TableCell>
             <TableCell>{item.type}</TableCell>
             <TableCell>
               <Chip size="small" label={item.enabled ? '启用' : '停用'} color={item.enabled ? 'success' : 'default'} />
@@ -1915,8 +2807,42 @@ function InfoRow({ label, value }: { label: string; value: string }) {
   );
 }
 
+function formatSubscription(user: User | null) {
+  if (!user) {
+    return '-';
+  }
+  const tier = user.subscriptionTier === 'vip' ? 'VIP' : 'Free';
+  const statusMap: Record<User['subscriptionStatus'], string> = {
+    active: '有效',
+    inactive: '未激活',
+    expired: '已过期',
+    canceled: '已取消',
+  };
+  const status = statusMap[user.subscriptionStatus] ?? user.subscriptionStatus;
+  if (user.monthlyTokenBudgetCents > 0) {
+    const remaining = Math.max(0, user.monthlyTokenBudgetCents - user.monthlyTokenUsedCents);
+    return `${tier} / ${status} / ${formatMoney(remaining, 'USD')} 剩余`;
+  }
+  return `${tier} / ${status}`;
+}
+
+function formatMoney(cents: number, currency: string) {
+  return `${(Number(cents || 0) / 100).toFixed(0)} ${currency || 'USD'}`;
+}
+
 function knowledgeBaseName(items: KnowledgeBase[], id: string) {
   return items.find((item) => item.id === id)?.name ?? id;
+}
+
+function knowledgeBaseNames(items: KnowledgeBase[], ids: string[]) {
+  if (ids.length === 0) {
+    return '-';
+  }
+  return ids.map((id) => knowledgeBaseName(items, id)).join(', ');
+}
+
+function uniqueValues(values: string[]) {
+  return Array.from(new Set(values.filter(Boolean)));
 }
 
 function platformName(items: MediaPlatform[], id: string) {
@@ -1993,8 +2919,9 @@ function contentName(items: Content[], id: string) {
 
 function splitKeywords(value: string) {
   return value
-    .split(/[,，\n]/)
+    .split(/[,，;；\n]/)
     .map((item) => item.trim())
+    .map((item) => item.replace(/^[-*]\s*/, '').trim())
     .filter(Boolean);
 }
 

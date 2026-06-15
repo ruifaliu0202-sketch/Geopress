@@ -8,21 +8,31 @@ import {
   CustomRoutes,
   Datagrid,
   DateField,
+  DateTimeInput,
+  Edit,
+  EditButton,
   FunctionField,
   Layout,
   List,
   Menu,
+  NumberInput,
+  ReferenceArrayField,
+  ReferenceArrayInput,
   ReferenceField,
   required,
   Resource,
+  SelectArrayInput,
+  SelectInput,
   SimpleForm,
+  SingleFieldList,
   TextField,
   TextInput,
   useGetList,
   type CreateProps,
+  type EditProps,
   type ListProps,
 } from 'react-admin';
-import { Alert, Box, Button, Card, CardContent, FormControlLabel, Grid, MenuItem, Stack, Switch, TextField as MuiTextField, Typography } from '@mui/material';
+import { Alert, Box, Button, Card, CardContent, Divider, FormControlLabel, Grid, MenuItem, Stack, Switch, TextField as MuiTextField, Typography } from '@mui/material';
 import { Route } from 'react-router-dom';
 import ArrowBackIcon from '@mui/icons-material/ArrowBack';
 import ConnectedTvOutlinedIcon from '@mui/icons-material/ConnectedTvOutlined';
@@ -30,8 +40,11 @@ import AutoAwesomeOutlinedIcon from '@mui/icons-material/AutoAwesomeOutlined';
 import GroupOutlinedIcon from '@mui/icons-material/GroupOutlined';
 import LanOutlinedIcon from '@mui/icons-material/LanOutlined';
 import ManageAccountsOutlinedIcon from '@mui/icons-material/ManageAccountsOutlined';
+import Inventory2OutlinedIcon from '@mui/icons-material/Inventory2Outlined';
+import ArticleOutlinedIcon from '@mui/icons-material/ArticleOutlined';
 import WorkspacesOutlinedIcon from '@mui/icons-material/WorkspacesOutlined';
 import { createAdminDataProvider, fetchAdminAIConfig, updateAdminAIConfig, type AdminAIConfig } from './dataProvider';
+import type { GenerationPipelinePlan, GenerationPipelineSettings } from '../types';
 
 export function AdminConsole({ token, onBack }: { token: string; onBack: () => void }) {
   const dataProvider = useMemo(() => createAdminDataProvider(token), [token]);
@@ -53,8 +66,10 @@ export function AdminConsole({ token, onBack }: { token: string; onBack: () => v
         <CustomRoutes>
           <Route path="/ai-config" element={<AIConfigPage token={token} />} />
         </CustomRoutes>
-        <Resource name="mediaPlatforms" options={{ label: '媒体渠道' }} list={MediaPlatformList} create={MediaPlatformCreate} icon={LanOutlinedIcon} />
-        <Resource name="users" options={{ label: '用户' }} list={UserList} icon={GroupOutlinedIcon} />
+        <Resource name="platformKnowledgeBases" options={{ label: '平台知识库' }} list={PlatformKnowledgeBaseList} create={PlatformKnowledgeBaseCreate} edit={PlatformKnowledgeBaseEdit} icon={Inventory2OutlinedIcon} />
+        <Resource name="platformKnowledgeItems" options={{ label: '平台知识条目' }} list={PlatformKnowledgeItemList} create={PlatformKnowledgeItemCreate} edit={PlatformKnowledgeItemEdit} icon={ArticleOutlinedIcon} />
+        <Resource name="mediaPlatforms" options={{ label: '媒体平台' }} list={MediaPlatformList} edit={MediaPlatformEdit} icon={LanOutlinedIcon} />
+        <Resource name="users" options={{ label: '用户' }} list={UserList} edit={UserEdit} icon={GroupOutlinedIcon} />
         <Resource name="workspaces" options={{ label: '工作区' }} list={WorkspaceList} icon={WorkspacesOutlinedIcon} />
         <Resource name="members" options={{ label: '成员' }} list={MemberList} icon={ManageAccountsOutlinedIcon} />
         <Resource name="mediaAccounts" options={{ label: '租户账号' }} list={MediaAccountList} icon={ConnectedTvOutlinedIcon} />
@@ -72,6 +87,8 @@ function AdminMenu() {
     <Menu>
       <Menu.DashboardItem />
       <Menu.Item to="/ai-config" primaryText="AI 配置" leftIcon={<AutoAwesomeOutlinedIcon />} />
+      <Menu.ResourceItem name="platformKnowledgeBases" />
+      <Menu.ResourceItem name="platformKnowledgeItems" />
       <Menu.ResourceItem name="mediaPlatforms" />
       <Menu.ResourceItem name="users" />
       <Menu.ResourceItem name="workspaces" />
@@ -84,6 +101,8 @@ function AdminMenu() {
 function AdminDashboard() {
   const users = useGetList('users', { pagination: { page: 1, perPage: 1 } });
   const workspaces = useGetList('workspaces', { pagination: { page: 1, perPage: 1 } });
+  const platformKnowledgeBases = useGetList('platformKnowledgeBases', { pagination: { page: 1, perPage: 1 } });
+  const platformKnowledgeItems = useGetList('platformKnowledgeItems', { pagination: { page: 1, perPage: 1 } });
   const platforms = useGetList('mediaPlatforms', { pagination: { page: 1, perPage: 1 } });
   const accounts = useGetList('mediaAccounts', { pagination: { page: 1, perPage: 1 } });
 
@@ -93,12 +112,14 @@ function AdminDashboard() {
         <Box>
           <Typography variant="h1">平台管理后台</Typography>
           <Typography color="text.secondary" sx={{ mt: 1 }}>
-            维护全局媒体渠道、账号体系、工作区和租户账号资源。
+            维护平台知识市场、全局媒体渠道、账号体系、工作区和租户账号资源。
           </Typography>
         </Box>
         <Grid container spacing={2}>
           <AdminMetric label="用户" value={users.total ?? 0} />
           <AdminMetric label="工作区" value={workspaces.total ?? 0} />
+          <AdminMetric label="平台知识库" value={platformKnowledgeBases.total ?? 0} />
+          <AdminMetric label="平台知识条目" value={platformKnowledgeItems.total ?? 0} />
           <AdminMetric label="媒体渠道" value={platforms.total ?? 0} />
           <AdminMetric label="租户账号" value={accounts.total ?? 0} />
         </Grid>
@@ -114,6 +135,7 @@ function AIConfigPage({ token }: { token: string }) {
   const [openAIModel, setOpenAIModel] = useState('gpt-5.5');
   const [openAIAPIKey, setOpenAIAPIKey] = useState('');
   const [requestTimeoutSeconds, setRequestTimeoutSeconds] = useState(45);
+  const [generationPipeline, setGenerationPipeline] = useState<GenerationPipelineSettings>(defaultGenerationPipelineSettings);
   const [clearAPIKey, setClearAPIKey] = useState(false);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
@@ -133,6 +155,7 @@ function AIConfigPage({ token }: { token: string }) {
         setOpenAIBaseUrl(next.openAIBaseUrl);
         setOpenAIModel(next.openAIModel);
         setRequestTimeoutSeconds(next.requestTimeoutSeconds);
+        setGenerationPipeline(normalizeGenerationPipelineSettings(next.generationPipeline));
         setOpenAIAPIKey('');
         setClearAPIKey(false);
         setError(null);
@@ -172,12 +195,14 @@ function AIConfigPage({ token }: { token: string }) {
         openAIAPIKey: openAIAPIKey.trim() || undefined,
         requestTimeoutSeconds,
         clearAPIKey,
+        generationPipeline,
       });
       setConfig(updated);
       setProvider(updated.provider);
       setOpenAIBaseUrl(updated.openAIBaseUrl);
       setOpenAIModel(updated.openAIModel);
       setRequestTimeoutSeconds(updated.requestTimeoutSeconds);
+      setGenerationPipeline(normalizeGenerationPipelineSettings(updated.generationPipeline));
       setOpenAIAPIKey('');
       setClearAPIKey(false);
       setNotice('AI 配置已更新');
@@ -233,6 +258,20 @@ function AIConfigPage({ token }: { token: string }) {
                 control={<Switch checked={clearAPIKey} onChange={(event) => setClearAPIKey(event.target.checked)} disabled={loading || saving} />}
                 label="清除已保存的 API Key"
               />
+              <Divider />
+              <Typography fontWeight={700}>生成链路</Typography>
+              <PipelinePlanEditor
+                label="Free"
+                value={generationPipeline.free}
+                disabled={loading || saving}
+                onChange={(next) => setGenerationPipeline((current) => ({ ...current, free: next }))}
+              />
+              <PipelinePlanEditor
+                label="VIP"
+                value={generationPipeline.vip}
+                disabled={loading || saving}
+                onChange={(next) => setGenerationPipeline((current) => ({ ...current, vip: next }))}
+              />
               <Stack direction="row" spacing={1.5}>
                 <Button variant="contained" onClick={submit} disabled={loading || saving}>
                   保存配置
@@ -241,6 +280,61 @@ function AIConfigPage({ token }: { token: string }) {
             </Stack>
           </CardContent>
         </Card>
+      </Stack>
+    </Box>
+  );
+}
+
+const defaultGenerationPipelineSettings: GenerationPipelineSettings = {
+  free: { inputAnalysis: true, contentPlan: false, qualityCheck: false, rewriteRounds: 0 },
+  vip: { inputAnalysis: true, contentPlan: true, qualityCheck: true, rewriteRounds: 1 },
+};
+
+function normalizeGenerationPipelineSettings(value?: GenerationPipelineSettings): GenerationPipelineSettings {
+  return {
+    free: { ...defaultGenerationPipelineSettings.free, ...(value?.free ?? {}) },
+    vip: { ...defaultGenerationPipelineSettings.vip, ...(value?.vip ?? {}) },
+  };
+}
+
+function PipelinePlanEditor({
+  label,
+  value,
+  disabled,
+  onChange,
+}: {
+  label: string;
+  value: GenerationPipelinePlan;
+  disabled: boolean;
+  onChange: (value: GenerationPipelinePlan) => void;
+}) {
+  return (
+    <Box sx={{ border: '1px solid', borderColor: 'divider', borderRadius: 1, p: 1.5 }}>
+      <Stack spacing={1.25}>
+        <Typography fontWeight={700}>{label}</Typography>
+        <Stack direction={{ xs: 'column', sm: 'row' }} spacing={1.5}>
+          <FormControlLabel
+            control={<Switch checked={value.inputAnalysis} onChange={(event) => onChange({ ...value, inputAnalysis: event.target.checked })} disabled={disabled} />}
+            label="输入分析"
+          />
+          <FormControlLabel
+            control={<Switch checked={value.contentPlan} onChange={(event) => onChange({ ...value, contentPlan: event.target.checked })} disabled={disabled} />}
+            label="创作计划"
+          />
+          <FormControlLabel
+            control={<Switch checked={value.qualityCheck} onChange={(event) => onChange({ ...value, qualityCheck: event.target.checked })} disabled={disabled} />}
+            label="质量检查"
+          />
+        </Stack>
+        <MuiTextField
+          label="自动重写轮次"
+          type="number"
+          value={value.rewriteRounds}
+          onChange={(event) => onChange({ ...value, rewriteRounds: Math.max(0, Math.min(3, Number(event.target.value))) })}
+          inputProps={{ min: 0, max: 3 }}
+          fullWidth
+          disabled={disabled}
+        />
       </Stack>
     </Box>
   );
@@ -261,10 +355,104 @@ function AdminMetric({ label, value }: { label: string; value: number }) {
   );
 }
 
+function PlatformKnowledgeBaseList(props: ListProps) {
+  return (
+    <List {...props} perPage={25} sort={{ field: 'name', order: 'ASC' }}>
+      <Datagrid rowClick="edit" bulkActionButtons={false}>
+        <TextField source="name" label="知识库名称" />
+        <TextField source="category" label="分类" />
+        <FunctionField label="价格" render={(record) => formatPrice(record?.priceCents, record?.currency)} />
+        <BooleanField source="marketplaceListed" label="市场上架" />
+        <TextField source="itemCount" label="条目数" />
+        <DateField source="updatedAt" label="更新时间" showTime />
+        <EditButton label="编辑" />
+      </Datagrid>
+    </List>
+  );
+}
+
+function PlatformKnowledgeBaseCreate(props: CreateProps) {
+  return (
+    <Create {...props}>
+      <PlatformKnowledgeBaseForm />
+    </Create>
+  );
+}
+
+function PlatformKnowledgeBaseEdit(props: EditProps) {
+  return (
+    <Edit {...props} mutationMode="pessimistic">
+      <PlatformKnowledgeBaseForm />
+    </Edit>
+  );
+}
+
+function PlatformKnowledgeBaseForm() {
+  return (
+    <SimpleForm defaultValues={{ category: 'general', currency: 'CNY', priceCents: 0, marketplaceListed: false }}>
+      <TextInput source="name" label="知识库名称" validate={required()} fullWidth />
+      <TextInput source="description" label="说明" multiline minRows={3} fullWidth />
+      <TextInput source="category" label="分类" validate={required()} helperText="例如 小红书、SEO、本地生活、合规" fullWidth />
+      <NumberInput source="priceCents" label="价格（分）" min={0} step={100} fullWidth />
+      <TextInput source="currency" label="币种" helperText="例如 CNY、USD" fullWidth />
+      <BooleanInput source="marketplaceListed" label="上架到市场" />
+    </SimpleForm>
+  );
+}
+
+function PlatformKnowledgeItemList(props: ListProps) {
+  return (
+    <List {...props} perPage={25} sort={{ field: 'updatedAt', order: 'DESC' }}>
+      <Datagrid rowClick="edit" bulkActionButtons={false}>
+        <TextField source="title" label="条目标题" />
+        <ReferenceArrayField source="knowledgeBaseIds" reference="platformKnowledgeBases" label="知识库包">
+          <SingleFieldList linkType={false}>
+            <ChipField source="name" />
+          </SingleFieldList>
+        </ReferenceArrayField>
+        <ChipField source="type" label="类型" />
+        <BooleanField source="enabled" label="启用" />
+        <DateField source="updatedAt" label="更新时间" showTime />
+        <EditButton label="编辑" />
+      </Datagrid>
+    </List>
+  );
+}
+
+function PlatformKnowledgeItemCreate(props: CreateProps) {
+  return (
+    <Create {...props}>
+      <PlatformKnowledgeItemForm />
+    </Create>
+  );
+}
+
+function PlatformKnowledgeItemEdit(props: EditProps) {
+  return (
+    <Edit {...props} mutationMode="pessimistic">
+      <PlatformKnowledgeItemForm />
+    </Edit>
+  );
+}
+
+function PlatformKnowledgeItemForm() {
+  return (
+    <SimpleForm defaultValues={{ type: 'note', enabled: true }}>
+      <ReferenceArrayInput source="knowledgeBaseIds" reference="platformKnowledgeBases" label="所属平台知识库包" perPage={100}>
+        <SelectArrayInput optionText="name" validate={required()} fullWidth />
+      </ReferenceArrayInput>
+      <TextInput source="type" label="条目类型" validate={required()} helperText="例如 structure、template、compliance、style" fullWidth />
+      <TextInput source="title" label="标题" validate={required()} fullWidth />
+      <TextInput source="content" label="内容" validate={required()} multiline minRows={8} fullWidth />
+      <BooleanInput source="enabled" label="启用" />
+    </SimpleForm>
+  );
+}
+
 function MediaPlatformList(props: ListProps) {
   return (
     <List {...props} perPage={25} sort={{ field: 'name', order: 'ASC' }}>
-      <Datagrid rowClick={false} bulkActionButtons={false}>
+      <Datagrid rowClick="edit" bulkActionButtons={false}>
         <TextField source="name" label="渠道名称" />
         <TextField source="type" label="类型" />
         <BooleanField source="enabled" label="启用" />
@@ -272,37 +460,109 @@ function MediaPlatformList(props: ListProps) {
         <BooleanField source="supportsImage" label="图片" />
         <BooleanField source="supportsScheduling" label="定时" />
         <FunctionField label="凭证字段" render={(record) => (record.credentialFields ?? []).join(', ')} />
+        <EditButton label="编辑" />
       </Datagrid>
     </List>
   );
 }
 
-function MediaPlatformCreate(props: CreateProps) {
+function MediaPlatformEdit(props: EditProps) {
   return (
-    <Create {...props}>
-      <SimpleForm defaultValues={{ enabled: true, supportsArticle: true, supportsImage: true, supportsScheduling: false }}>
-        <TextInput source="name" label="渠道名称" validate={required()} fullWidth />
-        <TextInput source="type" label="渠道类型" validate={required()} fullWidth />
-        <TextInput source="credentialFields" label="凭证字段" helperText="用英文逗号分隔，例如 accessToken,appSecret" fullWidth />
-        <BooleanInput source="enabled" label="启用" />
-        <BooleanInput source="supportsArticle" label="支持文章" />
-        <BooleanInput source="supportsImage" label="支持图片" />
-        <BooleanInput source="supportsScheduling" label="支持定时发布" />
-      </SimpleForm>
-    </Create>
+    <Edit {...props} mutationMode="pessimistic">
+      <MediaPlatformForm />
+    </Edit>
   );
+}
+
+function MediaPlatformForm() {
+  return (
+    <SimpleForm defaultValues={{ name: '小红书', type: 'xiaohongshu', enabled: true, supportsArticle: true, supportsImage: true, supportsScheduling: false, credentialFields: ['qrLogin'] }}>
+      <TextInput source="name" label="平台名称" validate={required()} fullWidth />
+      <TextInput source="type" label="平台类型" validate={required()} helperText="当前仅支持 xiaohongshu" fullWidth />
+      <TextInput
+        source="credentialFields"
+        label="凭证字段"
+        format={formatCredentialFields}
+        parse={parseCredentialFields}
+        helperText="用英文逗号分隔，例如 qrLogin"
+        fullWidth
+      />
+      <BooleanInput source="enabled" label="启用" />
+      <BooleanInput source="supportsArticle" label="支持文章" />
+      <BooleanInput source="supportsImage" label="支持图片" />
+      <BooleanInput source="supportsScheduling" label="支持定时发布" />
+    </SimpleForm>
+  );
+}
+
+function formatCredentialFields(value: unknown) {
+  return Array.isArray(value) ? value.join(', ') : String(value ?? '');
+}
+
+function parseCredentialFields(value: unknown) {
+  if (Array.isArray(value)) {
+    return value.map(String).map((item) => item.trim()).filter(Boolean);
+  }
+  return String(value ?? '')
+    .split(/[,，\n]/)
+    .map((item) => item.trim())
+    .filter(Boolean);
+}
+
+function formatPrice(priceCents: unknown, currency: unknown) {
+  const value = Number(priceCents ?? 0) / 100;
+  const currencyCode = String(currency ?? 'CNY') || 'CNY';
+  return `${value.toFixed(2)} ${currencyCode}`;
 }
 
 function UserList(props: ListProps) {
   return (
     <List {...props} perPage={25} sort={{ field: 'email', order: 'ASC' }}>
-      <Datagrid rowClick={false} bulkActionButtons={false}>
+      <Datagrid rowClick="edit" bulkActionButtons={false}>
         <TextField source="name" label="姓名" />
         <TextField source="email" label="邮箱" />
+        <TextField source="subscriptionTier" label="订阅等级" />
+        <TextField source="subscriptionStatus" label="订阅状态" />
+        <DateField source="subscriptionExpiresAt" label="订阅到期" showTime />
         <BooleanField source="isPlatformAdmin" label="平台管理员" />
         <DateField source="createdAt" label="创建时间" showTime />
+        <EditButton label="编辑订阅" />
       </Datagrid>
     </List>
+  );
+}
+
+function UserEdit(props: EditProps) {
+  return (
+    <Edit {...props} mutationMode="pessimistic">
+      <SimpleForm>
+        <TextInput source="name" label="姓名" disabled fullWidth />
+        <TextInput source="email" label="邮箱" disabled fullWidth />
+        <SelectInput
+          source="subscriptionTier"
+          label="订阅等级"
+          choices={[
+            { id: 'free', name: 'free' },
+            { id: 'vip', name: 'vip' },
+          ]}
+          validate={required()}
+          fullWidth
+        />
+        <SelectInput
+          source="subscriptionStatus"
+          label="订阅状态"
+          choices={[
+            { id: 'active', name: 'active' },
+            { id: 'inactive', name: 'inactive' },
+            { id: 'expired', name: 'expired' },
+            { id: 'canceled', name: 'canceled' },
+          ]}
+          validate={required()}
+          fullWidth
+        />
+        <DateTimeInput source="subscriptionExpiresAt" label="订阅到期" fullWidth />
+      </SimpleForm>
+    </Edit>
   );
 }
 
@@ -312,7 +572,7 @@ function WorkspaceList(props: ListProps) {
       <Datagrid rowClick={false} bulkActionButtons={false}>
         <TextField source="name" label="名称" />
         <ChipField source="type" label="类型" />
-        <TextField source="plan" label="套餐" />
+        <TextField source="plan" label="工作区方案" />
         <TextField source="industry" label="行业" />
         <TextField source="language" label="语言" />
         <DateField source="createdAt" label="创建时间" showTime />

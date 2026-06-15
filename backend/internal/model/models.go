@@ -2,12 +2,94 @@ package model
 
 import "time"
 
+type SubscriptionTier string
+
+const (
+	SubscriptionTierFree SubscriptionTier = "free"
+	SubscriptionTierVIP  SubscriptionTier = "vip"
+)
+
+type SubscriptionStatus string
+
+const (
+	SubscriptionStatusActive   SubscriptionStatus = "active"
+	SubscriptionStatusInactive SubscriptionStatus = "inactive"
+	SubscriptionStatusExpired  SubscriptionStatus = "expired"
+	SubscriptionStatusCanceled SubscriptionStatus = "canceled"
+)
+
+type SubscriptionPlanID string
+
+const (
+	SubscriptionPlanFree SubscriptionPlanID = "free"
+	SubscriptionPlanVIP  SubscriptionPlanID = "vip"
+)
+
 type User struct {
-	ID              string    `json:"id"`
-	Name            string    `json:"name"`
-	Email           string    `json:"email"`
-	IsPlatformAdmin bool      `json:"isPlatformAdmin"`
-	CreatedAt       time.Time `json:"createdAt"`
+	ID                        string             `json:"id"`
+	Name                      string             `json:"name"`
+	Email                     string             `json:"email"`
+	IsPlatformAdmin           bool               `json:"isPlatformAdmin"`
+	SubscriptionTier          SubscriptionTier   `json:"subscriptionTier"`
+	SubscriptionPlanID        SubscriptionPlanID `json:"subscriptionPlanId"`
+	SubscriptionStatus        SubscriptionStatus `json:"subscriptionStatus"`
+	SubscriptionExpiresAt     *time.Time         `json:"subscriptionExpiresAt,omitempty"`
+	MonthlyTokenBudgetCents   int                `json:"monthlyTokenBudgetCents"`
+	MonthlyTokenUsedCents     int                `json:"monthlyTokenUsedCents"`
+	MonthlyTokenInputUsed     int                `json:"monthlyTokenInputUsed"`
+	MonthlyTokenOutputUsed    int                `json:"monthlyTokenOutputUsed"`
+	SubscriptionCurrentPeriod string             `json:"subscriptionCurrentPeriod"`
+	OnboardingCompleted       bool               `json:"onboardingCompleted"`
+	OnboardingCompletedAt     *time.Time         `json:"onboardingCompletedAt,omitempty"`
+	CreatedAt                 time.Time          `json:"createdAt"`
+}
+
+func (user User) HasActiveVIP(now time.Time) bool {
+	if user.SubscriptionTier != SubscriptionTierVIP || user.SubscriptionStatus != SubscriptionStatusActive {
+		return false
+	}
+	if user.SubscriptionExpiresAt != nil && !user.SubscriptionExpiresAt.After(now) {
+		return false
+	}
+	return true
+}
+
+func (user User) TokenBudgetRemainingCents() int {
+	remaining := user.MonthlyTokenBudgetCents - user.MonthlyTokenUsedCents
+	if remaining < 0 {
+		return 0
+	}
+	return remaining
+}
+
+type SubscriptionPlan struct {
+	ID                      SubscriptionPlanID `json:"id"`
+	Name                    string             `json:"name"`
+	Tier                    SubscriptionTier   `json:"tier"`
+	PriceCents              int                `json:"priceCents"`
+	Currency                string             `json:"currency"`
+	MonthlyTokenBudgetCents int                `json:"monthlyTokenBudgetCents"`
+	InputTokenPricePer1K    int                `json:"inputTokenPricePer1k"`
+	OutputTokenPricePer1K   int                `json:"outputTokenPricePer1k"`
+	Enabled                 bool               `json:"enabled"`
+}
+
+type AITokenUsageEvent struct {
+	ID                  string             `json:"id"`
+	UserID              string             `json:"userId"`
+	WorkspaceID         string             `json:"workspaceId"`
+	GenerationRequestID string             `json:"generationRequestId"`
+	Provider            string             `json:"provider"`
+	Model               string             `json:"model"`
+	SubscriptionPlanID  SubscriptionPlanID `json:"subscriptionPlanId"`
+	InputTokens         int                `json:"inputTokens"`
+	OutputTokens        int                `json:"outputTokens"`
+	TotalTokens         int                `json:"totalTokens"`
+	InputCostCents      int                `json:"inputCostCents"`
+	OutputCostCents     int                `json:"outputCostCents"`
+	TotalCostCents      int                `json:"totalCostCents"`
+	BillingPeriod       string             `json:"billingPeriod"`
+	CreatedAt           time.Time          `json:"createdAt"`
 }
 
 type WorkspaceType string
@@ -45,14 +127,36 @@ type KnowledgeBase struct {
 }
 
 type KnowledgeItem struct {
-	ID              string    `json:"id"`
-	KnowledgeBaseID string    `json:"knowledgeBaseId"`
-	WorkspaceID     string    `json:"workspaceId"`
-	Type            string    `json:"type"`
-	Title           string    `json:"title"`
-	Content         string    `json:"content"`
-	Enabled         bool      `json:"enabled"`
-	UpdatedAt       time.Time `json:"updatedAt"`
+	ID               string    `json:"id"`
+	KnowledgeBaseIDs []string  `json:"knowledgeBaseIds"`
+	WorkspaceID      string    `json:"workspaceId"`
+	Type             string    `json:"type"`
+	Title            string    `json:"title"`
+	Content          string    `json:"content"`
+	Enabled          bool      `json:"enabled"`
+	UpdatedAt        time.Time `json:"updatedAt"`
+}
+
+type PlatformKnowledgeBase struct {
+	ID                string    `json:"id"`
+	Name              string    `json:"name"`
+	Description       string    `json:"description"`
+	Category          string    `json:"category"`
+	PriceCents        int       `json:"priceCents"`
+	Currency          string    `json:"currency"`
+	MarketplaceListed bool      `json:"marketplaceListed"`
+	ItemCount         int       `json:"itemCount"`
+	UpdatedAt         time.Time `json:"updatedAt"`
+}
+
+type PlatformKnowledgeItem struct {
+	ID               string    `json:"id"`
+	KnowledgeBaseIDs []string  `json:"knowledgeBaseIds"`
+	Type             string    `json:"type"`
+	Title            string    `json:"title"`
+	Content          string    `json:"content"`
+	Enabled          bool      `json:"enabled"`
+	UpdatedAt        time.Time `json:"updatedAt"`
 }
 
 type MediaPlatform struct {

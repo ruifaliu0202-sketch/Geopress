@@ -1,5 +1,5 @@
 import type { DataProvider, Identifier, RaRecord } from 'react-admin';
-import type { CreateMediaPlatformPayload } from '../types';
+import type { CreateMediaPlatformPayload, CreatePlatformKnowledgeBasePayload, CreatePlatformKnowledgeItemPayload, GenerationPipelineSettings, User } from '../types';
 
 const API_BASE_URL = import.meta.env.VITE_API_BASE_URL ?? '/api';
 
@@ -10,6 +10,7 @@ export type AdminAIConfig = {
   requestTimeoutSeconds: number;
   apiKeyConfigured: boolean;
   apiKeyPreview: string;
+  generationPipeline: GenerationPipelineSettings;
 };
 
 export type UpdateAdminAIConfigPayload = {
@@ -19,6 +20,7 @@ export type UpdateAdminAIConfigPayload = {
   openAIAPIKey?: string;
   requestTimeoutSeconds: number;
   clearAPIKey?: boolean;
+  generationPipeline: GenerationPipelineSettings;
 };
 
 type ListResponse<T> = {
@@ -29,6 +31,8 @@ const resourcePath: Record<string, string> = {
   users: '/admin/users',
   workspaces: '/admin/workspaces',
   members: '/admin/workspace-members',
+  platformKnowledgeBases: '/admin/platform-knowledge-bases',
+  platformKnowledgeItems: '/admin/platform-knowledge-items',
   mediaPlatforms: '/admin/media-platforms',
   mediaAccounts: '/admin/media-accounts',
 };
@@ -124,23 +128,84 @@ export function createAdminDataProvider(token: string): DataProvider {
     },
 
     async create(resource, params) {
-      if (resource !== 'mediaPlatforms') {
-        throw new Error(`Create is not supported for ${resource}`);
+      if (resource === 'mediaPlatforms') {
+        const data = params.data as CreateMediaPlatformPayload;
+        const created = await request<AdminRecord>(token, '/admin/media-platforms', {
+          method: 'POST',
+          body: JSON.stringify({
+            ...data,
+            credentialFields: normalizeCredentialFields(data.credentialFields),
+          }),
+        });
+        return { data: created as never };
       }
 
-      const data = params.data as CreateMediaPlatformPayload;
-      const created = await request<AdminRecord>(token, '/admin/media-platforms', {
-        method: 'POST',
-        body: JSON.stringify({
-          ...data,
-          credentialFields: normalizeCredentialFields(data.credentialFields),
-        }),
-      });
-      return { data: created as never };
+      if (resource === 'platformKnowledgeBases') {
+        const data = params.data as CreatePlatformKnowledgeBasePayload;
+        const created = await request<AdminRecord>(token, '/admin/platform-knowledge-bases', {
+          method: 'POST',
+          body: JSON.stringify(normalizePlatformKnowledgeBase(data)),
+        });
+        return { data: created as never };
+      }
+
+      if (resource === 'platformKnowledgeItems') {
+        const data = params.data as CreatePlatformKnowledgeItemPayload;
+        const created = await request<AdminRecord>(token, '/admin/platform-knowledge-items', {
+          method: 'POST',
+          body: JSON.stringify(normalizePlatformKnowledgeItem(data)),
+        });
+        return { data: created as never };
+      }
+
+      throw new Error(`Create is not supported for ${resource}`);
     },
 
-    async update() {
-      throw new Error('Update is not implemented yet');
+    async update(resource, params) {
+      if (resource === 'mediaPlatforms') {
+        const data = params.data as CreateMediaPlatformPayload;
+        const updated = await request<AdminRecord>(token, `/admin/media-platforms/${String(params.id)}`, {
+          method: 'PUT',
+          body: JSON.stringify({
+            ...data,
+            credentialFields: normalizeCredentialFields(data.credentialFields),
+          }),
+        });
+        return { data: updated as never };
+      }
+
+      if (resource === 'platformKnowledgeBases') {
+        const data = params.data as CreatePlatformKnowledgeBasePayload;
+        const updated = await request<AdminRecord>(token, `/admin/platform-knowledge-bases/${String(params.id)}`, {
+          method: 'PUT',
+          body: JSON.stringify(normalizePlatformKnowledgeBase(data)),
+        });
+        return { data: updated as never };
+      }
+
+      if (resource === 'platformKnowledgeItems') {
+        const data = params.data as CreatePlatformKnowledgeItemPayload;
+        const updated = await request<AdminRecord>(token, `/admin/platform-knowledge-items/${String(params.id)}`, {
+          method: 'PUT',
+          body: JSON.stringify(normalizePlatformKnowledgeItem(data)),
+        });
+        return { data: updated as never };
+      }
+
+      if (resource === 'users') {
+        const data = params.data as User;
+        const updated = await request<AdminRecord>(token, `/admin/users/${String(params.id)}/subscription`, {
+          method: 'PUT',
+          body: JSON.stringify({
+            subscriptionTier: data.subscriptionTier,
+            subscriptionStatus: data.subscriptionStatus,
+            subscriptionExpiresAt: data.subscriptionExpiresAt || null,
+          }),
+        });
+        return { data: updated as never };
+      }
+
+      throw new Error(`Update is not supported for ${resource}`);
     },
 
     async updateMany() {
@@ -182,4 +247,43 @@ function normalizeCredentialFields(value: unknown) {
     .split(/[,，\n]/)
     .map((item) => item.trim())
     .filter(Boolean);
+}
+
+function normalizePlatformKnowledgeBase(data: CreatePlatformKnowledgeBasePayload) {
+  return {
+    ...data,
+    name: String(data.name ?? '').trim(),
+    description: String(data.description ?? '').trim(),
+    category: String(data.category ?? '').trim(),
+    priceCents: Number(data.priceCents ?? 0),
+    currency: String(data.currency ?? 'CNY').trim().toUpperCase(),
+    marketplaceListed: Boolean(data.marketplaceListed),
+  };
+}
+
+function normalizePlatformKnowledgeItem(data: CreatePlatformKnowledgeItemPayload) {
+  return {
+    ...data,
+    knowledgeBaseIds: normalizeStringList(data.knowledgeBaseIds ?? data.knowledgeBaseId),
+    type: String(data.type ?? '').trim(),
+    title: String(data.title ?? '').trim(),
+    content: String(data.content ?? '').trim(),
+    enabled: data.enabled !== false,
+  };
+}
+
+function normalizeStringList(value: unknown) {
+  if (Array.isArray(value)) {
+    return uniqueStrings(value.map(String).map((item) => item.trim()).filter(Boolean));
+  }
+  return uniqueStrings(
+    String(value ?? '')
+      .split(/[,，\n]/)
+      .map((item) => item.trim())
+      .filter(Boolean),
+  );
+}
+
+function uniqueStrings(values: string[]) {
+  return Array.from(new Set(values));
 }

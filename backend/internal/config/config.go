@@ -17,7 +17,7 @@ type Config struct {
 func Load() Config {
 	return Config{
 		AppEnv:           getEnv("APP_ENV", "development"),
-		HTTPAddr:         getEnv("HTTP_ADDR", ":8080"),
+		HTTPAddr:         getEnv("HTTP_ADDR", ":18080"),
 		FrontendOrigin:   getEnv("FRONTEND_ORIGIN", "http://localhost:5173"),
 		DatabaseURL:      getEnv("DATABASE_URL", "postgres://geopress:geopress@localhost:5432/geopress?sslmode=disable"),
 		AIProvider:       getEnv("AI_PROVIDER", "mock"),

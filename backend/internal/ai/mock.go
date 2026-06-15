@@ -66,11 +66,204 @@ func (p *MockProvider) Generate(_ context.Context, req GenerateRequest) (Generat
 		RawOutput:     raw,
 		Provider:      p.Name(),
 		Model:         p.Model(),
+		TokenUsage:    mockTokenUsage(prompt.User, body),
 		RetrievedIDs:  ids,
 		PromptVersion: PromptVersion,
 		SkillID:       req.Skill.ID,
 		SkillVersion:  req.Skill.Version,
 	}, nil
+}
+
+func (p *MockProvider) AnalyzeGenerationInput(_ context.Context, req GenerateRequest) (GenerationStageResponse, error) {
+	prompt := BuildGenerationStagePrompt(GenerationStageInputAnalysis, req, nil, nil)
+	details := []string{
+		"主题关键词：" + strings.Join(req.Keywords, "、"),
+		"内容类型由系统限定为：" + req.ContentType,
+		"用户输入只作为主题和素材线索，不会覆盖发布格式或安全边界。",
+	}
+	if len(req.KnowledgeBaseIDs) == 0 {
+		details = append(details, "知识库范围：全部可用知识库包。")
+	} else {
+		details = append(details, fmt.Sprintf("知识库范围：%d 个已选择知识库包。", len(req.KnowledgeBaseIDs)))
+	}
+	return mockStageResponse(p, prompt, "已完成关键词和输入边界分析。", details, nil)
+}
+
+func (p *MockProvider) PlanGeneration(_ context.Context, req GenerateRequest, _ GenerationStageResponse) (GenerationStageResponse, error) {
+	prompt := BuildGenerationStagePrompt(GenerationStagePlan, req, nil, nil)
+	details := []string{
+		"按发布格式组织标题、摘要、正文、章节和风险提示。",
+		"优先使用检索到的知识条目，不补写未确认事实。",
+		"正文会围绕读者问题、可执行建议和发布前检查组织。",
+	}
+	for _, item := range req.PublishFormat.Structure {
+		details = append(details, "结构要求："+item)
+		if len(details) >= 6 {
+			break
+		}
+	}
+	return mockStageResponse(p, prompt, "已生成受系统规则约束的创作计划。", details, nil)
+}
+
+func (p *MockProvider) CheckGeneratedDraft(_ context.Context, req GenerateRequest, draft GeneratedDraft) (GenerationStageResponse, error) {
+	prompt := BuildGenerationStagePrompt(GenerationStageQualityCheck, req, &draft, nil)
+	warnings := append([]string{}, draft.Warnings...)
+	if len(draft.UsedKnowledgeIDs) == 0 {
+		warnings = append(warnings, "草稿没有引用具体知识条目，请人工确认事实来源。")
+	}
+	details := []string{
+		"草稿标题、摘要、正文和关键词字段均已生成。",
+		fmt.Sprintf("实际使用知识条目：%d 个。", len(draft.UsedKnowledgeIDs)),
+		"内容仍保持 draft 状态，发布前需要人工审校。",
+	}
+	return mockStageResponse(p, prompt, "已完成草稿质量和事实边界检查。", details, warnings)
+}
+
+func (p *MockProvider) RewriteGeneratedDraft(_ context.Context, req GenerateRequest, draft GeneratedDraft, check GenerationStageResponse) (GenerateResponse, error) {
+	prompt := BuildPrompt(req)
+	if len(check.Warnings) > 0 {
+		draft.Warnings = uniqueStrings(append(draft.Warnings, check.Warnings...))
+	}
+	if !strings.Contains(draft.Body, "人工复核") {
+		draft.Body += "\n\n发布前请人工复核知识来源、事实边界和平台格式要求。"
+	}
+	raw, err := json.Marshal(draft)
+	if err != nil {
+		return GenerateResponse{}, err
+	}
+	return GenerateResponse{
+		Draft:         draft,
+		Prompt:        prompt,
+		RawOutput:     raw,
+		Provider:      p.Name(),
+		Model:         p.Model(),
+		TokenUsage:    mockTokenUsage(prompt.User, draft.Body),
+		RetrievedIDs:  knowledgeIDs(req.KnowledgeChunks),
+		PromptVersion: PromptVersion,
+		SkillID:       req.Skill.ID,
+		SkillVersion:  req.Skill.Version,
+	}, nil
+}
+
+func (p *MockProvider) FormatKnowledgeContent(_ context.Context, req FormatKnowledgeContentRequest) (FormatKnowledgeContentResponse, error) {
+	prompt := BuildKnowledgeContentFormatPrompt(req)
+	formatted := formatKnowledgeMarkdown(req)
+	raw, err := json.Marshal(map[string]string{"content": formatted})
+	if err != nil {
+		return FormatKnowledgeContentResponse{}, err
+	}
+	return FormatKnowledgeContentResponse{
+		Content:    formatted,
+		Prompt:     prompt,
+		RawOutput:  raw,
+		Provider:   p.Name(),
+		Model:      p.Model(),
+		TokenUsage: mockTokenUsage(prompt.User, formatted),
+	}, nil
+}
+
+func formatKnowledgeMarkdown(req FormatKnowledgeContentRequest) string {
+	title := strings.TrimSpace(req.Title)
+	if title == "" {
+		title = "未命名知识条目"
+	}
+	itemType := strings.TrimSpace(req.Type)
+	if itemType == "" {
+		itemType = "note"
+	}
+	content := normalizeKnowledgeContent(req.Content)
+	if content == "" {
+		content = "待补充。"
+	}
+
+	return strings.Join([]string{
+		"## " + title,
+		"",
+		"**类型**：" + itemType,
+		"",
+		"### 核心内容",
+		content,
+		"",
+		"### 使用边界",
+		"- 仅使用上方已确认信息生成内容。",
+		"- 未出现的数据、案例、承诺和效果不得补写。",
+		"",
+		"### 待补充",
+		"- 如需更稳定输出，请补充适用场景、禁用表达和可公开案例。",
+	}, "\n")
+}
+
+func normalizeKnowledgeContent(value string) string {
+	lines := strings.Split(strings.TrimSpace(value), "\n")
+	cleaned := make([]string, 0, len(lines))
+	for _, line := range lines {
+		line = strings.TrimSpace(line)
+		if line == "" {
+			continue
+		}
+		if strings.HasPrefix(line, "#") || strings.HasPrefix(line, "- ") || strings.HasPrefix(line, "* ") || strings.HasPrefix(line, ">") {
+			cleaned = append(cleaned, line)
+			continue
+		}
+		cleaned = append(cleaned, "- "+line)
+	}
+	return strings.Join(cleaned, "\n")
+}
+
+func mockStageResponse(p *MockProvider, prompt PromptTranscript, summary string, details []string, warnings []string) (GenerationStageResponse, error) {
+	if warnings == nil {
+		warnings = []string{}
+	}
+	raw, err := json.Marshal(map[string]any{
+		"summary":  summary,
+		"details":  details,
+		"warnings": warnings,
+	})
+	if err != nil {
+		return GenerationStageResponse{}, err
+	}
+	return GenerationStageResponse{
+		Summary:    summary,
+		Details:    details,
+		Warnings:   warnings,
+		Prompt:     prompt,
+		RawOutput:  raw,
+		Provider:   p.Name(),
+		Model:      p.Model(),
+		TokenUsage: mockTokenUsage(prompt.User, summary+strings.Join(details, "")),
+	}, nil
+}
+
+func mockTokenUsage(input string, output string) TokenUsage {
+	inputTokens := estimateTokens(input)
+	outputTokens := estimateTokens(output)
+	return TokenUsage{
+		InputTokens:  inputTokens,
+		OutputTokens: outputTokens,
+		TotalTokens:  inputTokens + outputTokens,
+	}
+}
+
+func estimateTokens(value string) int {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return 0
+	}
+	return len([]rune(value))/4 + len(strings.Fields(value)) + 1
+}
+
+func uniqueStrings(values []string) []string {
+	seen := map[string]bool{}
+	result := make([]string, 0, len(values))
+	for _, value := range values {
+		value = strings.TrimSpace(value)
+		if value == "" || seen[value] {
+			continue
+		}
+		seen[value] = true
+		result = append(result, value)
+	}
+	return result
 }
 
 func truncateRunes(value string, limit int) string {

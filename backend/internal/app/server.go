@@ -1,6 +1,7 @@
 package app
 
 import (
+	"fmt"
 	"log"
 
 	"geopress/backend/internal/ai"
@@ -13,13 +14,24 @@ import (
 )
 
 func NewServer(cfg config.Config) *gin.Engine {
+	server, err := NewServerWithError(cfg)
+	if err != nil {
+		log.Fatalf("create api server: %v", err)
+	}
+	return server
+}
+
+func NewServerWithError(cfg config.Config) (*gin.Engine, error) {
 	if cfg.AppEnv == "production" {
 		gin.SetMode(gin.ReleaseMode)
 	}
 
 	db, err := database.Open(cfg.DatabaseURL)
 	if err != nil {
-		log.Printf("database unavailable, continuing in memory mode: %v", err)
+		return nil, fmt.Errorf("database unavailable: %w", err)
+	}
+	if db == nil {
+		return nil, fmt.Errorf("DATABASE_URL is required")
 	}
 
 	router := gin.New()
@@ -35,7 +47,11 @@ func NewServer(cfg config.Config) *gin.Engine {
 		OpenAIModel:    cfg.OpenAIModel,
 		RequestTimeout: cfg.AIRequestTimeout,
 	})
-	handler.NewWorkspaceHandler(db, aiConfig).Register(api, middleware.Auth())
+	workspaceHandler, err := handler.NewWorkspaceHandlerWithError(db, aiConfig)
+	if err != nil {
+		return nil, err
+	}
+	workspaceHandler.Register(api, middleware.AuthWithDatabase(db))
 
-	return router
+	return router, nil
 }

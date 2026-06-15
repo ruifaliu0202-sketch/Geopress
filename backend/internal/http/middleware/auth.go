@@ -1,8 +1,12 @@
 package middleware
 
 import (
+	"context"
 	"net/http"
 	"strings"
+	"time"
+
+	"geopress/backend/internal/database"
 
 	"github.com/gin-gonic/gin"
 )
@@ -14,7 +18,19 @@ const (
 	WorkspaceIDKey      = "workspaceID"
 )
 
+type TokenResolver func(ctx context.Context, token string) (string, bool, error)
+
 func Auth() gin.HandlerFunc {
+	return AuthWithTokenResolver(nil)
+}
+
+func AuthWithDatabase(db *database.DB) gin.HandlerFunc {
+	return AuthWithTokenResolver(func(ctx context.Context, token string) (string, bool, error) {
+		return databaseTokenUserID(ctx, db, token)
+	})
+}
+
+func AuthWithTokenResolver(resolve TokenResolver) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		header := c.GetHeader(AuthorizationHeader)
 		token := strings.TrimPrefix(header, "Bearer ")
@@ -25,8 +41,24 @@ func Auth() gin.HandlerFunc {
 
 		userID, ok := tokenUserID(token)
 		if !ok {
-			c.AbortWithStatusJSON(http.StatusUnauthorized, gin.H{"error": "invalid bearer token"})
-			return
+			if resolve == nil {
+				c.AbortWithStatusJSON(http.StatusUnauthorized, gin.H{"error": "invalid bearer token"})
+				return
+			}
+			var err error
+			userID, ok, err = resolve(c.Request.Context(), token)
+			if !ok {
+				if err != nil {
+					c.AbortWithStatusJSON(http.StatusUnauthorized, gin.H{"error": "session token lookup failed"})
+					return
+				}
+				c.AbortWithStatusJSON(http.StatusUnauthorized, gin.H{"error": "invalid bearer token"})
+				return
+			}
+			if err != nil {
+				c.AbortWithStatusJSON(http.StatusUnauthorized, gin.H{"error": "session token lookup failed"})
+				return
+			}
 		}
 
 		workspaceID := c.GetHeader(WorkspaceHeader)
@@ -34,6 +66,15 @@ func Auth() gin.HandlerFunc {
 		c.Set(WorkspaceIDKey, workspaceID)
 		c.Next()
 	}
+}
+
+func databaseTokenUserID(ctx context.Context, db *database.DB, token string) (string, bool, error) {
+	if db == nil || db.SQL() == nil {
+		return "", false, nil
+	}
+	dbCtx, cancel := context.WithTimeout(ctx, 2*time.Second)
+	defer cancel()
+	return db.UserIDBySessionToken(dbCtx, token)
 }
 
 func CurrentUserID(c *gin.Context) string {

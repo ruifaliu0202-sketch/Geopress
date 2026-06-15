@@ -1,11 +1,17 @@
 import type {
+  AssignKnowledgeItemsToBasesPayload,
+  CompleteOnboardingPayload,
+  CompleteOnboardingResponse,
   Content,
   CreateContentPayload,
   CreateKnowledgeBasePayload,
   CreateKnowledgeItemPayload,
   CreateMediaAccountPayload,
   CreatePublishSchedulePayload,
+  FormatKnowledgeContentPayload,
+  FormatKnowledgeContentResponse,
   GenerateContentPayload,
+  GenerateContentResponse,
   KnowledgeBase,
   KnowledgeItem,
   LoginResponse,
@@ -22,6 +28,8 @@ import type {
   CompleteMediaAccountBrowserLoginPayload,
   PublishJob,
   PublishSchedule,
+  RegisterPayload,
+  SubscriptionPlan,
   User,
   Workspace,
   WorkspaceData,
@@ -79,6 +87,29 @@ export async function login(email: string, password: string): Promise<LoginRespo
   });
 }
 
+export async function registerUser(payload: RegisterPayload): Promise<LoginResponse> {
+  return request<LoginResponse>('/auth/register', undefined, undefined, {
+    method: 'POST',
+    body: JSON.stringify(payload),
+  });
+}
+
+export async function fetchSubscriptionPlans(token: string, workspaceId: string): Promise<SubscriptionPlan[]> {
+  const response = await request<ListResponse<SubscriptionPlan>>('/subscription-plans', token, workspaceId);
+  return response.items;
+}
+
+export async function completeOnboarding(
+  token: string,
+  workspaceId: string,
+  payload: CompleteOnboardingPayload,
+): Promise<CompleteOnboardingResponse> {
+  return request<CompleteOnboardingResponse>('/onboarding/complete', token, workspaceId, {
+    method: 'POST',
+    body: JSON.stringify(payload),
+  });
+}
+
 export async function fetchWorkspace(token: string, workspaceId: string): Promise<WorkspaceData> {
   const [me, overview, knowledgeBases, knowledgeItems, mediaPlatforms, mediaAccounts, contents, schedules, jobs] =
     await Promise.all([
@@ -124,6 +155,28 @@ export async function createKnowledgeItem(
   payload: CreateKnowledgeItemPayload,
 ): Promise<KnowledgeItem> {
   return request<KnowledgeItem>('/knowledge-items', token, workspaceId, {
+    method: 'POST',
+    body: JSON.stringify(payload),
+  });
+}
+
+export async function formatKnowledgeContent(
+  token: string,
+  workspaceId: string,
+  payload: FormatKnowledgeContentPayload,
+): Promise<FormatKnowledgeContentResponse> {
+  return request<FormatKnowledgeContentResponse>('/knowledge-items/format', token, workspaceId, {
+    method: 'POST',
+    body: JSON.stringify(payload),
+  });
+}
+
+export async function assignKnowledgeItemsToBases(
+  token: string,
+  workspaceId: string,
+  payload: AssignKnowledgeItemsToBasesPayload,
+): Promise<ListResponse<KnowledgeItem>> {
+  return request<ListResponse<KnowledgeItem>>('/knowledge-items/assign-bases', token, workspaceId, {
     method: 'POST',
     body: JSON.stringify(payload),
   });
@@ -179,11 +232,24 @@ export async function generateContent(
   token: string,
   workspaceId: string,
   payload: GenerateContentPayload,
-): Promise<Content> {
-  return request<Content>('/contents/generate', token, workspaceId, {
+): Promise<GenerateContentResponse> {
+  const response = await request<GenerateContentResponse | Content>('/contents/generate', token, workspaceId, {
     method: 'POST',
     body: JSON.stringify(payload),
   });
+  if ('content' in response && 'trace' in response) {
+    return response;
+  }
+  return {
+    content: response,
+    trace: {
+      subscriptionTier: '',
+      pipeline: { inputAnalysis: false, contentPlan: false, qualityCheck: false, rewriteRounds: 0 },
+      steps: [],
+      warnings: [],
+      retrievedKnowledgeIds: [],
+    },
+  };
 }
 
 export async function createPublishSchedule(

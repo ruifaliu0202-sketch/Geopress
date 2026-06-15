@@ -2,11 +2,13 @@ package handler
 
 import (
 	"context"
+	"crypto/rand"
 	"encoding/json"
 	"fmt"
 	"log"
 	"net/http"
 	"net/url"
+	"regexp"
 	"sort"
 	"strings"
 	"sync"
@@ -21,25 +23,31 @@ import (
 	"geopress/backend/internal/model"
 
 	"github.com/gin-gonic/gin"
+	"golang.org/x/crypto/bcrypt"
 )
 
 type WorkspaceHandler struct {
-	mu             sync.RWMutex
-	db             *database.DB
-	aiConfig       *ai.RuntimeConfig
-	users          []model.User
-	workspaces     []model.Workspace
-	members        []model.WorkspaceMember
-	knowledgeBases []model.KnowledgeBase
-	knowledgeItems []model.KnowledgeItem
-	platforms      []model.MediaPlatform
-	accounts       []model.MediaAccount
-	contents       []model.Content
-	schedules      []model.PublishSchedule
-	jobs           []model.PublishJob
-	generations    []model.GenerationRequest
-	loginSessions  map[string]mediaAccountLoginSession
-	browserLogin   xiaohongshu.BrowserLoginService
+	mu                     sync.RWMutex
+	db                     *database.DB
+	aiConfig               *ai.RuntimeConfig
+	users                  []model.User
+	subscriptionPlans      []model.SubscriptionPlan
+	workspaces             []model.Workspace
+	members                []model.WorkspaceMember
+	knowledgeBases         []model.KnowledgeBase
+	knowledgeItems         []model.KnowledgeItem
+	platformKnowledgeBases []model.PlatformKnowledgeBase
+	platformKnowledgeItems []model.PlatformKnowledgeItem
+	platforms              []model.MediaPlatform
+	accounts               []model.MediaAccount
+	contents               []model.Content
+	schedules              []model.PublishSchedule
+	jobs                   []model.PublishJob
+	generations            []model.GenerationRequest
+	tokenUsageEvents       []model.AITokenUsageEvent
+	userSessions           map[string]string
+	loginSessions          map[string]mediaAccountLoginSession
+	browserLogin           xiaohongshu.BrowserLoginService
 }
 
 type mediaAccountLoginSession struct {
@@ -55,16 +63,68 @@ type loginRequest struct {
 	Password string `json:"password"`
 }
 
+type registerRequest struct {
+	Name          string `json:"name"`
+	Email         string `json:"email"`
+	Password      string `json:"password"`
+	WorkspaceName string `json:"workspaceName"`
+}
+
+type completeOnboardingRequest struct {
+	WorkspaceID        string   `json:"workspaceId"`
+	Industry           string   `json:"industry"`
+	Tones              []string `json:"tones"`
+	SubscriptionPlanID string   `json:"subscriptionPlanId"`
+	SkipSubscription   bool     `json:"skipSubscription"`
+}
+
 type createKnowledgeBaseRequest struct {
 	Name        string `json:"name"`
 	Description string `json:"description"`
 }
 
 type createKnowledgeItemRequest struct {
-	KnowledgeBaseID string `json:"knowledgeBaseId"`
-	Type            string `json:"type"`
-	Title           string `json:"title"`
-	Content         string `json:"content"`
+	KnowledgeBaseID  string   `json:"knowledgeBaseId"`
+	KnowledgeBaseIDs []string `json:"knowledgeBaseIds"`
+	Type             string   `json:"type"`
+	Title            string   `json:"title"`
+	Content          string   `json:"content"`
+}
+
+type formatKnowledgeItemRequest struct {
+	Type    string `json:"type"`
+	Title   string `json:"title"`
+	Content string `json:"content"`
+}
+
+type formatKnowledgeItemResponse struct {
+	Content  string        `json:"content"`
+	Provider string        `json:"provider"`
+	Model    string        `json:"model"`
+	Usage    ai.TokenUsage `json:"tokenUsage"`
+}
+
+type assignKnowledgeItemsToBasesRequest struct {
+	KnowledgeItemIDs []string `json:"knowledgeItemIds"`
+	KnowledgeBaseIDs []string `json:"knowledgeBaseIds"`
+}
+
+type createPlatformKnowledgeBaseRequest struct {
+	Name              string `json:"name"`
+	Description       string `json:"description"`
+	Category          string `json:"category"`
+	PriceCents        int    `json:"priceCents"`
+	Currency          string `json:"currency"`
+	MarketplaceListed bool   `json:"marketplaceListed"`
+}
+
+type createPlatformKnowledgeItemRequest struct {
+	KnowledgeBaseID  string   `json:"knowledgeBaseId"`
+	KnowledgeBaseIDs []string `json:"knowledgeBaseIds"`
+	Type             string   `json:"type"`
+	Title            string   `json:"title"`
+	Content          string   `json:"content"`
+	Enabled          *bool    `json:"enabled"`
 }
 
 type createMediaAccountRequest struct {
@@ -83,10 +143,16 @@ type completeMediaAccountBrowserLoginRequest struct {
 }
 
 type generateContentRequest struct {
-	Keywords        []string `json:"keywords"`
-	ContentType     string   `json:"contentType"`
-	KnowledgeBaseID string   `json:"knowledgeBaseId"`
-	PublishFormatID string   `json:"publishFormatId"`
+	Keywords         []string `json:"keywords"`
+	ContentType      string   `json:"contentType"`
+	KnowledgeBaseID  string   `json:"knowledgeBaseId"`
+	KnowledgeBaseIDs []string `json:"knowledgeBaseIds"`
+	PublishFormatID  string   `json:"publishFormatId"`
+}
+
+type generateContentResponse struct {
+	Content model.Content      `json:"content"`
+	Trace   ai.GenerationTrace `json:"trace"`
 }
 
 type createContentRequest struct {
@@ -135,41 +201,99 @@ type createMediaPlatformRequest struct {
 }
 
 type updateAIConfigRequest struct {
-	Provider              string `json:"provider"`
-	OpenAIAPIKey          string `json:"openAIAPIKey"`
-	OpenAIBaseURL         string `json:"openAIBaseUrl"`
-	OpenAIModel           string `json:"openAIModel"`
-	RequestTimeoutSeconds int    `json:"requestTimeoutSeconds"`
-	ClearAPIKey           bool   `json:"clearAPIKey"`
+	Provider              string                        `json:"provider"`
+	OpenAIAPIKey          string                        `json:"openAIAPIKey"`
+	OpenAIBaseURL         string                        `json:"openAIBaseUrl"`
+	OpenAIModel           string                        `json:"openAIModel"`
+	RequestTimeoutSeconds int                           `json:"requestTimeoutSeconds"`
+	ClearAPIKey           bool                          `json:"clearAPIKey"`
+	GenerationPipeline    ai.GenerationPipelineSettings `json:"generationPipeline"`
 }
 
+type updateUserSubscriptionRequest struct {
+	SubscriptionTier      model.SubscriptionTier   `json:"subscriptionTier"`
+	SubscriptionStatus    model.SubscriptionStatus `json:"subscriptionStatus"`
+	SubscriptionExpiresAt string                   `json:"subscriptionExpiresAt"`
+}
+
+const registrationPasswordMinLength = 8
+
+var registrationEmailPattern = regexp.MustCompile(`^[^\s@]+@[^\s@]+\.[^\s@]+$`)
+
 func NewWorkspaceHandler(db *database.DB, aiConfig *ai.RuntimeConfig) *WorkspaceHandler {
+	h, err := NewWorkspaceHandlerWithError(db, aiConfig)
+	if err != nil {
+		panic(err)
+	}
+	return h
+}
+
+func NewWorkspaceHandlerWithError(db *database.DB, aiConfig *ai.RuntimeConfig) (*WorkspaceHandler, error) {
 	if aiConfig == nil {
 		aiConfig = ai.NewRuntimeConfig(ai.Config{Provider: ai.ProviderMock})
 	}
 
 	now := time.Now().UTC()
-	expiresAt := now.AddDate(0, 2, 0)
+	demoSubscriptionExpiresAt := now.AddDate(1, 0, 0)
 
 	h := &WorkspaceHandler{
 		db:            db,
 		aiConfig:      aiConfig,
+		userSessions:  map[string]string{},
 		loginSessions: map[string]mediaAccountLoginSession{},
 		browserLogin:  xiaohongshu.NewPlaywrightBrowserLoginService(),
-		users: []model.User{
+		subscriptionPlans: []model.SubscriptionPlan{
 			{
-				ID:              "usr_demo",
-				Name:            "Ava Chen",
-				Email:           "demo@geopress.local",
-				IsPlatformAdmin: true,
-				CreatedAt:       now.AddDate(0, -3, 0),
+				ID:                      model.SubscriptionPlanFree,
+				Name:                    "Free",
+				Tier:                    model.SubscriptionTierFree,
+				PriceCents:              0,
+				Currency:                "USD",
+				MonthlyTokenBudgetCents: 0,
+				InputTokenPricePer1K:    1,
+				OutputTokenPricePer1K:   4,
+				Enabled:                 true,
 			},
 			{
-				ID:              "usr_growth",
-				Name:            "Noah Wang",
-				Email:           "growth@geopress.local",
-				IsPlatformAdmin: false,
-				CreatedAt:       now.AddDate(0, -2, 0),
+				ID:                      model.SubscriptionPlanVIP,
+				Name:                    "VIP",
+				Tier:                    model.SubscriptionTierVIP,
+				PriceCents:              10000,
+				Currency:                "USD",
+				MonthlyTokenBudgetCents: 10000,
+				InputTokenPricePer1K:    1,
+				OutputTokenPricePer1K:   4,
+				Enabled:                 true,
+			},
+		},
+		users: []model.User{
+			{
+				ID:                        "usr_demo",
+				Name:                      "Ava Chen",
+				Email:                     "demo@geopress.local",
+				IsPlatformAdmin:           true,
+				SubscriptionTier:          model.SubscriptionTierVIP,
+				SubscriptionPlanID:        model.SubscriptionPlanVIP,
+				SubscriptionStatus:        model.SubscriptionStatusActive,
+				SubscriptionExpiresAt:     &demoSubscriptionExpiresAt,
+				MonthlyTokenBudgetCents:   10000,
+				SubscriptionCurrentPeriod: now.Format("2006-01"),
+				OnboardingCompleted:       true,
+				OnboardingCompletedAt:     &now,
+				CreatedAt:                 now.AddDate(0, -3, 0),
+			},
+			{
+				ID:                        "usr_growth",
+				Name:                      "Noah Wang",
+				Email:                     "growth@geopress.local",
+				IsPlatformAdmin:           false,
+				SubscriptionTier:          model.SubscriptionTierFree,
+				SubscriptionPlanID:        model.SubscriptionPlanFree,
+				SubscriptionStatus:        model.SubscriptionStatusActive,
+				SubscriptionCurrentPeriod: now.Format("2006-01"),
+				OnboardingCompleted:       true,
+				OnboardingCompletedAt:     &now,
+				CreatedAt:                 now.AddDate(0, -2, 0),
 			},
 		},
 		workspaces: []model.Workspace{
@@ -221,67 +345,90 @@ func NewWorkspaceHandler(db *database.DB, aiConfig *ai.RuntimeConfig) *Workspace
 		},
 		knowledgeItems: []model.KnowledgeItem{
 			{
-				ID:              "kbi_1001",
-				KnowledgeBaseID: "kb_brand",
-				WorkspaceID:     "wks_acme",
-				Type:            "brand",
-				Title:           "品牌定位",
-				Content:         "Acme 面向 B2B SaaS 团队，帮助市场和增长负责人规划内容生产、分发和复盘。",
-				Enabled:         true,
-				UpdatedAt:       now.Add(-5 * time.Hour),
+				ID:               "kbi_1001",
+				KnowledgeBaseIDs: []string{"kb_brand"},
+				WorkspaceID:      "wks_acme",
+				Type:             "brand",
+				Title:            "品牌定位",
+				Content:          "Acme 面向 B2B SaaS 团队，帮助市场和增长负责人规划内容生产、分发和复盘。",
+				Enabled:          true,
+				UpdatedAt:        now.Add(-5 * time.Hour),
 			},
 			{
-				ID:              "kbi_1002",
-				KnowledgeBaseID: "kb_brand",
-				WorkspaceID:     "wks_acme",
-				Type:            "audience",
-				Title:           "目标受众",
-				Content:         "主要读者是市场负责人、内容运营、创始人和增长团队。",
-				Enabled:         true,
-				UpdatedAt:       now.Add(-6 * time.Hour),
+				ID:               "kbi_1002",
+				KnowledgeBaseIDs: []string{"kb_brand"},
+				WorkspaceID:      "wks_acme",
+				Type:             "audience",
+				Title:            "目标受众",
+				Content:          "主要读者是市场负责人、内容运营、创始人和增长团队。",
+				Enabled:          true,
+				UpdatedAt:        now.Add(-6 * time.Hour),
 			},
 			{
-				ID:              "kbi_2001",
-				KnowledgeBaseID: "kb_personal",
-				WorkspaceID:     "wks_personal",
-				Type:            "style",
-				Title:           "写作风格",
-				Content:         "文章应直接、具体，避免夸张营销话术，强调可执行建议。",
-				Enabled:         true,
-				UpdatedAt:       now.Add(-24 * time.Hour),
+				ID:               "kbi_2001",
+				KnowledgeBaseIDs: []string{"kb_personal"},
+				WorkspaceID:      "wks_personal",
+				Type:             "style",
+				Title:            "写作风格",
+				Content:          "文章应直接、具体，避免夸张营销话术，强调可执行建议。",
+				Enabled:          true,
+				UpdatedAt:        now.Add(-24 * time.Hour),
+			},
+		},
+		platformKnowledgeBases: []model.PlatformKnowledgeBase{
+			{
+				ID:                "pkb_xhs_local_life",
+				Name:              "小红书本地生活种草包",
+				Description:       "适合餐饮、门店、本地服务账号的选题、结构和表达规则。",
+				Category:          "小红书",
+				PriceCents:        9900,
+				Currency:          "CNY",
+				MarketplaceListed: true,
+				ItemCount:         2,
+				UpdatedAt:         now.Add(-12 * time.Hour),
+			},
+			{
+				ID:                "pkb_b2b_saas_seo",
+				Name:              "B2B SaaS SEO 文章包",
+				Description:       "面向 SaaS 官网博客的文章结构、受众痛点和 CTA 写法。",
+				Category:          "SEO",
+				PriceCents:        12900,
+				Currency:          "CNY",
+				MarketplaceListed: false,
+				ItemCount:         1,
+				UpdatedAt:         now.Add(-18 * time.Hour),
+			},
+		},
+		platformKnowledgeItems: []model.PlatformKnowledgeItem{
+			{
+				ID:               "pki_xhs_1001",
+				KnowledgeBaseIDs: []string{"pkb_xhs_local_life"},
+				Type:             "structure",
+				Title:            "本地生活笔记结构",
+				Content:          "开头直接给场景和人群，正文按到店理由、体验细节、价格/预约信息、避坑提醒组织，结尾用低压行动引导。",
+				Enabled:          true,
+				UpdatedAt:        now.Add(-12 * time.Hour),
+			},
+			{
+				ID:               "pki_xhs_1002",
+				KnowledgeBaseIDs: []string{"pkb_xhs_local_life"},
+				Type:             "compliance",
+				Title:            "本地生活表达边界",
+				Content:          "避免绝对化承诺和医疗化效果描述，优惠信息需明确适用条件，体验描述不要伪装成未披露广告。",
+				Enabled:          true,
+				UpdatedAt:        now.Add(-12 * time.Hour),
+			},
+			{
+				ID:               "pki_seo_1001",
+				KnowledgeBaseIDs: []string{"pkb_b2b_saas_seo"},
+				Type:             "template",
+				Title:            "SaaS SEO 文章骨架",
+				Content:          "标题围绕具体问题，导语定义读者处境，正文使用问题-原因-操作步骤-指标复盘结构，结尾连接产品能力但避免硬广。",
+				Enabled:          true,
+				UpdatedAt:        now.Add(-18 * time.Hour),
 			},
 		},
 		platforms: []model.MediaPlatform{
-			{
-				ID:                 "plt_wordpress",
-				Name:               "WordPress",
-				Type:               "wordpress",
-				Enabled:            true,
-				SupportsArticle:    true,
-				SupportsImage:      true,
-				SupportsScheduling: true,
-				CredentialFields:   []string{"siteUrl", "username", "applicationPassword"},
-			},
-			{
-				ID:                 "plt_wechat",
-				Name:               "微信公众号",
-				Type:               "wechat_official",
-				Enabled:            true,
-				SupportsArticle:    true,
-				SupportsImage:      true,
-				SupportsScheduling: false,
-				CredentialFields:   []string{"appId", "appSecret"},
-			},
-			{
-				ID:                 "plt_zhihu",
-				Name:               "知乎",
-				Type:               "zhihu",
-				Enabled:            false,
-				SupportsArticle:    true,
-				SupportsImage:      true,
-				SupportsScheduling: false,
-				CredentialFields:   []string{"accessToken"},
-			},
 			{
 				ID:                 "plt_xiaohongshu",
 				Name:               "小红书",
@@ -292,38 +439,8 @@ func NewWorkspaceHandler(db *database.DB, aiConfig *ai.RuntimeConfig) *Workspace
 				SupportsScheduling: false,
 				CredentialFields:   []string{"qrLogin"},
 			},
-			{
-				ID:                 "plt_local_publisher",
-				Name:               "本机发布平台",
-				Type:               "local_publisher",
-				Enabled:            true,
-				SupportsArticle:    true,
-				SupportsImage:      true,
-				SupportsScheduling: false,
-				CredentialFields:   []string{"phoneNumber"},
-			},
 		},
 		accounts: []model.MediaAccount{
-			{
-				ID:            "acc_wordpress",
-				WorkspaceID:   "wks_acme",
-				PlatformID:    "plt_wordpress",
-				Name:          "Acme 官网博客",
-				ExternalID:    "blog.acme.test",
-				Status:        "connected",
-				ExpiresAt:     &expiresAt,
-				LastCheckedAt: now.Add(-2 * time.Hour),
-			},
-			{
-				ID:            "acc_personal_wp",
-				WorkspaceID:   "wks_personal",
-				PlatformID:    "plt_wordpress",
-				Name:          "Ava 个人博客",
-				ExternalID:    "ava.example.test",
-				Status:        "connected",
-				ExpiresAt:     &expiresAt,
-				LastCheckedAt: now.Add(-6 * time.Hour),
-			},
 			{
 				ID:             "acc_xhs_acme",
 				WorkspaceID:    "wks_acme",
@@ -379,9 +496,9 @@ func NewWorkspaceHandler(db *database.DB, aiConfig *ai.RuntimeConfig) *Workspace
 			{
 				ID:             "sch_1001",
 				WorkspaceID:    "wks_acme",
-				Name:           "每周三官网博客",
+				Name:           "每周三小红书长文",
 				ContentID:      "cnt_1001",
-				MediaAccountID: "acc_wordpress",
+				MediaAccountID: "acc_xhs_acme",
 				Frequency:      model.PublishScheduleWeekly,
 				NextRunAt:      now.Add(48 * time.Hour),
 				Enabled:        true,
@@ -394,30 +511,41 @@ func NewWorkspaceHandler(db *database.DB, aiConfig *ai.RuntimeConfig) *Workspace
 				WorkspaceID:    "wks_acme",
 				ScheduleID:     "sch_1001",
 				ContentID:      "cnt_1001",
-				MediaAccountID: "acc_wordpress",
-				Status:         model.PublishJobQueued,
+				MediaAccountID: "acc_xhs_acme",
+				Status:         model.PublishJobManual,
 				ScheduledAt:    now.Add(48 * time.Hour),
-				LastMessage:    "Waiting for scheduled publish window.",
+				LastMessage:    "小红书发布需要登录浏览器确认。",
 			},
 		},
 	}
 
-	h.seedDatabase(context.Background())
-	return h
+	if !h.seedDatabase(context.Background()) {
+		return nil, fmt.Errorf("database seed failed")
+	}
+	if !h.loadDatabaseSnapshot(context.Background()) {
+		return nil, fmt.Errorf("database snapshot load failed")
+	}
+	return h, nil
 }
 
 func (h *WorkspaceHandler) Register(router gin.IRouter, auth gin.HandlerFunc) {
 	router.POST("/auth/login", h.Login)
+	router.POST("/auth/register", h.RegisterUser)
 
 	protected := router.Group("/")
 	protected.Use(auth)
+	protected.Use(h.databaseSnapshotMiddleware())
 	protected.GET("/me", h.Me)
 	protected.GET("/workspaces", h.ListWorkspaces)
+	protected.GET("/subscription-plans", h.ListSubscriptionPlans)
+	protected.POST("/onboarding/complete", h.CompleteOnboarding)
 	protected.GET("/overview", h.Overview)
 	protected.GET("/knowledge-bases", h.ListKnowledgeBases)
 	protected.POST("/knowledge-bases", h.CreateKnowledgeBase)
 	protected.GET("/knowledge-items", h.ListKnowledgeItems)
 	protected.POST("/knowledge-items", h.CreateKnowledgeItem)
+	protected.POST("/knowledge-items/format", h.FormatKnowledgeItem)
+	protected.POST("/knowledge-items/assign-bases", h.AssignKnowledgeItemsToBases)
 	protected.GET("/media-platforms", h.ListMediaPlatforms)
 	protected.GET("/media-accounts", h.ListMediaAccounts)
 	protected.POST("/media-accounts", h.CreateMediaAccount)
@@ -437,16 +565,29 @@ func (h *WorkspaceHandler) Register(router gin.IRouter, auth gin.HandlerFunc) {
 	admin.Use(h.requirePlatformAdmin())
 	admin.GET("/overview", h.AdminOverview)
 	admin.GET("/users", h.AdminListUsers)
+	admin.PUT("/users/:userId/subscription", h.AdminUpdateUserSubscription)
 	admin.GET("/workspaces", h.AdminListWorkspaces)
 	admin.GET("/workspace-members", h.AdminListWorkspaceMembers)
+	admin.GET("/platform-knowledge-bases", h.AdminListPlatformKnowledgeBases)
+	admin.POST("/platform-knowledge-bases", h.AdminCreatePlatformKnowledgeBase)
+	admin.PUT("/platform-knowledge-bases/:knowledgeBaseId", h.AdminUpdatePlatformKnowledgeBase)
+	admin.GET("/platform-knowledge-items", h.AdminListPlatformKnowledgeItems)
+	admin.POST("/platform-knowledge-items", h.AdminCreatePlatformKnowledgeItem)
+	admin.PUT("/platform-knowledge-items/:knowledgeItemId", h.AdminUpdatePlatformKnowledgeItem)
 	admin.GET("/media-platforms", h.AdminListMediaPlatforms)
 	admin.POST("/media-platforms", h.AdminCreateMediaPlatform)
+	admin.PUT("/media-platforms/:platformId", h.AdminUpdateMediaPlatform)
 	admin.GET("/media-accounts", h.AdminListMediaAccounts)
 	admin.GET("/ai-config", h.AdminGetAIConfig)
 	admin.PUT("/ai-config", h.AdminUpdateAIConfig)
 }
 
 func (h *WorkspaceHandler) Login(c *gin.Context) {
+	if !h.loadDatabaseSnapshot(c.Request.Context()) {
+		c.JSON(http.StatusServiceUnavailable, gin.H{"error": "database snapshot load failed"})
+		return
+	}
+
 	var req loginRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid request body"})
@@ -454,15 +595,59 @@ func (h *WorkspaceHandler) Login(c *gin.Context) {
 	}
 
 	email := strings.TrimSpace(strings.ToLower(req.Email))
+	password := req.Password
+	if h.db != nil && h.db.SQL() != nil {
+		if email == "" || password == "" {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "email and password are required"})
+			return
+		}
+
+		dbCtx, cancel := context.WithTimeout(c.Request.Context(), 2*time.Second)
+		credentials, ok, err := h.db.UserCredentialsByEmail(dbCtx, email)
+		cancel()
+		if err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "user lookup failed"})
+			return
+		}
+		if !ok || bcrypt.CompareHashAndPassword([]byte(credentials.PasswordHash), []byte(password)) != nil {
+			c.JSON(http.StatusUnauthorized, gin.H{"error": "invalid email or password"})
+			return
+		}
+
+		token, err := h.createLoginSession(c.Request.Context(), credentials.User.ID)
+		if err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "login session was not created"})
+			return
+		}
+
+		h.mu.RLock()
+		workspaces := h.workspacesForUser(credentials.User.ID)
+		h.mu.RUnlock()
+
+		c.JSON(http.StatusOK, gin.H{
+			"token":      token,
+			"user":       credentials.User,
+			"workspaces": workspaces,
+		})
+		return
+	}
+
+	userID, token := "usr_demo", "demo-token"
 	if email == "" {
 		email = "demo@geopress.local"
 	}
-
-	userID := "usr_demo"
-	token := "demo-token"
-	if email == "growth@geopress.local" {
+	if password != "demo" {
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "invalid email or password"})
+		return
+	}
+	switch email {
+	case "demo@geopress.local":
+	case "growth@geopress.local":
 		userID = "usr_growth"
 		token = "growth-token"
+	default:
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "invalid email or password"})
+		return
 	}
 
 	h.mu.RLock()
@@ -473,6 +658,146 @@ func (h *WorkspaceHandler) Login(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{
 		"token":      token,
 		"user":       user,
+		"workspaces": workspaces,
+	})
+}
+
+func (h *WorkspaceHandler) RegisterUser(c *gin.Context) {
+	if !h.loadDatabaseSnapshot(c.Request.Context()) {
+		c.JSON(http.StatusServiceUnavailable, gin.H{"error": "database snapshot load failed"})
+		return
+	}
+
+	var req registerRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid request body"})
+		return
+	}
+
+	name := strings.TrimSpace(req.Name)
+	email := strings.TrimSpace(strings.ToLower(req.Email))
+	password := req.Password
+	workspaceName := strings.TrimSpace(req.WorkspaceName)
+	if name == "" || email == "" || password == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "name, email and password are required"})
+		return
+	}
+	if !registrationEmailPattern.MatchString(email) {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "email is invalid"})
+		return
+	}
+	if len([]rune(password)) < registrationPasswordMinLength {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "password must be at least 8 characters"})
+		return
+	}
+	if workspaceName == "" {
+		workspaceName = fmt.Sprintf("%s 的个人工作区", name)
+	}
+
+	if h.db != nil && h.db.SQL() != nil {
+		dbCtx, cancel := context.WithTimeout(c.Request.Context(), 2*time.Second)
+		_, exists, err := h.db.UserCredentialsByEmail(dbCtx, email)
+		cancel()
+		if err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "user lookup failed"})
+			return
+		}
+		if exists {
+			c.JSON(http.StatusConflict, gin.H{"error": "email is already registered"})
+			return
+		}
+	}
+
+	userID, err := secureRandomID("usr")
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "user id was not created"})
+		return
+	}
+	workspaceID, err := secureRandomID("wks")
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "workspace id was not created"})
+		return
+	}
+	passwordHash, err := bcrypt.GenerateFromPassword([]byte(password), bcrypt.DefaultCost)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "password was not processed"})
+		return
+	}
+
+	now := time.Now().UTC()
+	user := model.User{
+		ID:                        userID,
+		Name:                      name,
+		Email:                     email,
+		IsPlatformAdmin:           false,
+		SubscriptionTier:          model.SubscriptionTierFree,
+		SubscriptionPlanID:        model.SubscriptionPlanFree,
+		SubscriptionStatus:        model.SubscriptionStatusActive,
+		SubscriptionCurrentPeriod: now.Format("2006-01"),
+		OnboardingCompleted:       false,
+		CreatedAt:                 now,
+	}
+	workspace := model.Workspace{
+		ID:        workspaceID,
+		Name:      workspaceName,
+		Type:      model.WorkspacePersonal,
+		Plan:      "Personal",
+		Status:    "active",
+		Industry:  "",
+		Language:  "zh-CN",
+		Tone:      "专业、清晰",
+		CreatedAt: now,
+	}
+	member := model.WorkspaceMember{
+		UserID:      user.ID,
+		WorkspaceID: workspace.ID,
+		Role:        "owner",
+	}
+
+	if h.db != nil && h.db.SQL() != nil {
+		dbCtx, cancel := context.WithTimeout(c.Request.Context(), 3*time.Second)
+		err = h.db.CreateRegisteredUser(dbCtx, user, string(passwordHash), workspace, member)
+		cancel()
+		if err != nil {
+			log.Printf("user registration was not persisted: %v", err)
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "user was not registered"})
+			return
+		}
+	} else {
+		h.mu.Lock()
+		if h.emailExistsLocked(email) {
+			h.mu.Unlock()
+			c.JSON(http.StatusConflict, gin.H{"error": "email is already registered"})
+			return
+		}
+		h.users = append(h.users, user)
+		h.workspaces = append(h.workspaces, workspace)
+		h.members = append(h.members, member)
+		h.mu.Unlock()
+	}
+
+	token, err := h.createLoginSession(c.Request.Context(), user.ID)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "login session was not created"})
+		return
+	}
+	if !h.loadDatabaseSnapshot(c.Request.Context()) {
+		c.JSON(http.StatusServiceUnavailable, gin.H{"error": "database snapshot load failed"})
+		return
+	}
+
+	h.mu.RLock()
+	responseUser, ok := h.userByID(user.ID)
+	workspaces := h.workspacesForUser(user.ID)
+	h.mu.RUnlock()
+	if !ok {
+		responseUser = user
+		workspaces = []model.Workspace{workspace}
+	}
+
+	c.JSON(http.StatusCreated, gin.H{
+		"token":      token,
+		"user":       responseUser,
 		"workspaces": workspaces,
 	})
 }
@@ -501,6 +826,117 @@ func (h *WorkspaceHandler) ListWorkspaces(c *gin.Context) {
 	h.mu.RUnlock()
 
 	c.JSON(http.StatusOK, gin.H{"items": workspaces})
+}
+
+func (h *WorkspaceHandler) ListSubscriptionPlans(c *gin.Context) {
+	h.mu.RLock()
+	items := make([]model.SubscriptionPlan, 0, len(h.subscriptionPlans))
+	for _, plan := range h.subscriptionPlans {
+		if plan.Enabled {
+			items = append(items, plan)
+		}
+	}
+	h.mu.RUnlock()
+	c.JSON(http.StatusOK, gin.H{"items": items})
+}
+
+func (h *WorkspaceHandler) CompleteOnboarding(c *gin.Context) {
+	userID := middleware.CurrentUserID(c)
+
+	var req completeOnboardingRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid request body"})
+		return
+	}
+
+	workspaceID := strings.TrimSpace(req.WorkspaceID)
+	if workspaceID == "" {
+		workspaceID = middleware.CurrentWorkspaceID(c)
+	}
+	industry := strings.TrimSpace(req.Industry)
+	tones := uniqueStrings(cleanKeywords(req.Tones))
+	if industry == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "industry is required"})
+		return
+	}
+	if len(tones) == 0 {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "at least one tone is required"})
+		return
+	}
+	if len(tones) > 5 {
+		tones = tones[:5]
+	}
+
+	planID := model.SubscriptionPlanID(strings.TrimSpace(req.SubscriptionPlanID))
+	if req.SkipSubscription || planID == "" {
+		planID = model.SubscriptionPlanFree
+	}
+
+	now := time.Now().UTC()
+	h.mu.RLock()
+	if !h.userCanAccessWorkspace(userID, workspaceID) {
+		h.mu.RUnlock()
+		c.JSON(http.StatusForbidden, gin.H{"error": "workspace access denied"})
+		return
+	}
+	plan, planOK := h.subscriptionPlanByID(planID)
+	user, userOK := h.userByID(userID)
+	workspace, workspaceOK := h.workspaceByID(workspaceID)
+	h.mu.RUnlock()
+	if !userOK {
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "user not found"})
+		return
+	}
+	if !workspaceOK {
+		c.JSON(http.StatusNotFound, gin.H{"error": "workspace not found"})
+		return
+	}
+	if !planOK || !plan.Enabled {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "subscription plan is invalid"})
+		return
+	}
+
+	workspace.Industry = industry
+	workspace.Tone = strings.Join(tones, "、")
+	user.SubscriptionTier = plan.Tier
+	user.SubscriptionPlanID = plan.ID
+	user.SubscriptionStatus = model.SubscriptionStatusActive
+	user.MonthlyTokenBudgetCents = plan.MonthlyTokenBudgetCents
+	user.SubscriptionCurrentPeriod = now.Format("2006-01")
+	user.OnboardingCompleted = true
+	user.OnboardingCompletedAt = &now
+	if plan.ID == model.SubscriptionPlanVIP && user.SubscriptionExpiresAt == nil {
+		expiresAt := now.AddDate(0, 1, 0)
+		user.SubscriptionExpiresAt = &expiresAt
+	}
+	if plan.ID == model.SubscriptionPlanFree {
+		user.SubscriptionExpiresAt = nil
+	}
+
+	if err := h.completeUserOnboarding(c.Request.Context(), user, workspace); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "onboarding was not persisted"})
+		return
+	}
+
+	h.mu.Lock()
+	for index := range h.users {
+		if h.users[index].ID == user.ID {
+			h.users[index] = user
+			break
+		}
+	}
+	for index := range h.workspaces {
+		if h.workspaces[index].ID == workspace.ID {
+			h.workspaces[index] = workspace
+			break
+		}
+	}
+	h.mu.Unlock()
+
+	c.JSON(http.StatusOK, gin.H{
+		"user":      user,
+		"workspace": workspace,
+	})
 }
 
 func (h *WorkspaceHandler) Overview(c *gin.Context) {
@@ -570,6 +1006,11 @@ func (h *WorkspaceHandler) CreateKnowledgeBase(c *gin.Context) {
 		UpdatedAt:   now,
 	}
 
+	if err := h.saveKnowledgeBase(c.Request.Context(), item); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "knowledge base was not persisted"})
+		return
+	}
+
 	h.mu.Lock()
 	h.knowledgeBases = append([]model.KnowledgeBase{item}, h.knowledgeBases...)
 	h.mu.Unlock()
@@ -606,24 +1047,159 @@ func (h *WorkspaceHandler) CreateKnowledgeItem(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "title and content are required"})
 		return
 	}
+	knowledgeBaseIDs := cleanKnowledgeBaseIDs(req.KnowledgeBaseID, req.KnowledgeBaseIDs)
+	if len(knowledgeBaseIDs) == 0 {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "at least one knowledge base is required"})
+		return
+	}
 
 	now := time.Now().UTC()
 	item := model.KnowledgeItem{
-		ID:              fmt.Sprintf("kbi_%d", now.UnixNano()),
-		KnowledgeBaseID: strings.TrimSpace(req.KnowledgeBaseID),
-		WorkspaceID:     workspaceID,
-		Type:            defaultString(strings.TrimSpace(req.Type), "note"),
-		Title:           title,
-		Content:         content,
-		Enabled:         true,
-		UpdatedAt:       now,
+		ID:               fmt.Sprintf("kbi_%d", now.UnixNano()),
+		KnowledgeBaseIDs: knowledgeBaseIDs,
+		WorkspaceID:      workspaceID,
+		Type:             defaultString(strings.TrimSpace(req.Type), "note"),
+		Title:            title,
+		Content:          content,
+		Enabled:          true,
+		UpdatedAt:        now,
+	}
+
+	h.mu.RLock()
+	if len(knowledgeBaseIDs) > 0 && !h.hasKnowledgeBasesLocked(workspaceID, knowledgeBaseIDs) {
+		h.mu.RUnlock()
+		c.JSON(http.StatusNotFound, gin.H{"error": "knowledge base not found"})
+		return
+	}
+	h.mu.RUnlock()
+
+	if err := h.saveKnowledgeItem(c.Request.Context(), item); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "knowledge item was not persisted"})
+		return
 	}
 
 	h.mu.Lock()
 	h.knowledgeItems = append([]model.KnowledgeItem{item}, h.knowledgeItems...)
-	h.bumpKnowledgeBaseCount(workspaceID, item.KnowledgeBaseID, 1)
+	h.recountKnowledgeBaseItemsLocked(workspaceID)
 	h.mu.Unlock()
 	c.JSON(http.StatusCreated, item)
+}
+
+func (h *WorkspaceHandler) FormatKnowledgeItem(c *gin.Context) {
+	workspaceID, ok := h.authorizedWorkspaceID(c)
+	if !ok {
+		return
+	}
+	userID := middleware.CurrentUserID(c)
+
+	h.mu.RLock()
+	user, userOK := h.userByID(userID)
+	h.mu.RUnlock()
+	if !userOK {
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "user not found"})
+		return
+	}
+	if !user.HasActiveVIP(time.Now().UTC()) {
+		c.JSON(http.StatusForbidden, gin.H{"error": "VIP subscription is required for knowledge content formatting"})
+		return
+	}
+
+	var req formatKnowledgeItemRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid request body"})
+		return
+	}
+
+	content := strings.TrimSpace(req.Content)
+	if content == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "content is required"})
+		return
+	}
+
+	provider := h.aiConfig.Provider()
+	response, err := provider.FormatKnowledgeContent(c.Request.Context(), ai.FormatKnowledgeContentRequest{
+		WorkspaceID: workspaceID,
+		UserID:      userID,
+		Type:        strings.TrimSpace(req.Type),
+		Title:       strings.TrimSpace(req.Title),
+		Content:     content,
+	})
+	if err != nil {
+		c.JSON(http.StatusBadGateway, gin.H{"error": "knowledge content formatting failed"})
+		return
+	}
+
+	c.JSON(http.StatusOK, formatKnowledgeItemResponse{
+		Content:  strings.TrimSpace(response.Content),
+		Provider: response.Provider,
+		Model:    response.Model,
+		Usage:    response.TokenUsage,
+	})
+}
+
+func (h *WorkspaceHandler) AssignKnowledgeItemsToBases(c *gin.Context) {
+	workspaceID, ok := h.authorizedWorkspaceID(c)
+	if !ok {
+		return
+	}
+
+	var req assignKnowledgeItemsToBasesRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid request body"})
+		return
+	}
+
+	knowledgeItemIDs := uniqueStrings(cleanKeywords(req.KnowledgeItemIDs))
+	knowledgeBaseIDs := cleanKnowledgeBaseIDs("", req.KnowledgeBaseIDs)
+	if len(knowledgeItemIDs) == 0 || len(knowledgeBaseIDs) == 0 {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "knowledgeItemIds and knowledgeBaseIds are required"})
+		return
+	}
+
+	now := time.Now().UTC()
+	h.mu.RLock()
+
+	if !h.hasKnowledgeBasesLocked(workspaceID, knowledgeBaseIDs) {
+		h.mu.RUnlock()
+		c.JSON(http.StatusNotFound, gin.H{"error": "knowledge base not found"})
+		return
+	}
+
+	foundItemIDs := map[string]bool{}
+	for index := range h.knowledgeItems {
+		item := &h.knowledgeItems[index]
+		if item.WorkspaceID != workspaceID || !containsString(knowledgeItemIDs, item.ID) {
+			continue
+		}
+		foundItemIDs[item.ID] = true
+	}
+	if len(foundItemIDs) != len(knowledgeItemIDs) {
+		h.mu.RUnlock()
+		c.JSON(http.StatusNotFound, gin.H{"error": "knowledge item not found"})
+		return
+	}
+	h.mu.RUnlock()
+
+	if err := h.assignKnowledgeItemsToBases(c.Request.Context(), workspaceID, knowledgeItemIDs, knowledgeBaseIDs); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "knowledge item assignment was not persisted"})
+		return
+	}
+
+	updated := make([]model.KnowledgeItem, 0, len(knowledgeItemIDs))
+	h.mu.Lock()
+	for index := range h.knowledgeItems {
+		item := &h.knowledgeItems[index]
+		if item.WorkspaceID != workspaceID || !foundItemIDs[item.ID] {
+			continue
+		}
+		item.KnowledgeBaseIDs = mergeStringSet(item.KnowledgeBaseIDs, knowledgeBaseIDs)
+		item.UpdatedAt = now
+		updated = append(updated, *item)
+	}
+
+	h.recountKnowledgeBaseItemsLocked(workspaceID)
+	h.mu.Unlock()
+	c.JSON(http.StatusOK, gin.H{"items": updated})
 }
 
 func (h *WorkspaceHandler) ListMediaPlatforms(c *gin.Context) {
@@ -733,6 +1309,11 @@ func (h *WorkspaceHandler) CreateMediaAccount(c *gin.Context) {
 		LastCheckedAt:  now,
 	}
 
+	if err := h.saveMediaAccount(c.Request.Context(), account); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "media account was not persisted"})
+		return
+	}
+
 	h.mu.Lock()
 	h.accounts = append([]model.MediaAccount{account}, h.accounts...)
 	h.mu.Unlock()
@@ -802,7 +1383,6 @@ func (h *WorkspaceHandler) startMediaAccountBrowserLogin(c *gin.Context) {
 
 	var updated model.MediaAccount
 	h.mu.Lock()
-	defer h.mu.Unlock()
 	for index := range h.accounts {
 		if h.accounts[index].WorkspaceID != workspaceID || h.accounts[index].ID != accountID {
 			continue
@@ -833,8 +1413,13 @@ func (h *WorkspaceHandler) startMediaAccountBrowserLogin(c *gin.Context) {
 		}
 		break
 	}
+	h.mu.Unlock()
 	if updated.ID == "" {
 		c.JSON(http.StatusNotFound, gin.H{"error": "media account not found"})
+		return
+	}
+	if err := h.saveMediaAccount(c.Request.Context(), updated); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "media account login state was not persisted"})
 		return
 	}
 
@@ -924,8 +1509,8 @@ func (h *WorkspaceHandler) completeMediaAccountBrowserLogin(c *gin.Context) {
 		return
 	}
 
+	var updated model.MediaAccount
 	h.mu.Lock()
-	defer h.mu.Unlock()
 	for index := range h.accounts {
 		account := &h.accounts[index]
 		if account.WorkspaceID != workspaceID || account.ID != accountID {
@@ -943,12 +1528,21 @@ func (h *WorkspaceHandler) completeMediaAccountBrowserLogin(c *gin.Context) {
 		account.Status = "connected"
 		account.LastCheckedAt = now
 		delete(h.loginSessions, key)
+		updated = *account
+		break
+	}
+	h.mu.Unlock()
 
-		c.JSON(http.StatusOK, *account)
+	if updated.ID == "" {
+		c.JSON(http.StatusNotFound, gin.H{"error": "media account not found"})
+		return
+	}
+	if err := h.saveMediaAccount(c.Request.Context(), updated); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "media account login state was not persisted"})
 		return
 	}
 
-	c.JSON(http.StatusNotFound, gin.H{"error": "media account not found"})
+	c.JSON(http.StatusOK, updated)
 }
 
 func (h *WorkspaceHandler) ListContents(c *gin.Context) {
@@ -996,6 +1590,11 @@ func (h *WorkspaceHandler) CreateContent(c *gin.Context) {
 		UpdatedAt:       now,
 	}
 
+	if err := h.saveContent(c.Request.Context(), content); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "content was not persisted"})
+		return
+	}
+
 	h.mu.Lock()
 	h.contents = append([]model.Content{content}, h.contents...)
 	h.mu.Unlock()
@@ -1022,22 +1621,38 @@ func (h *WorkspaceHandler) GenerateContent(c *gin.Context) {
 	}
 
 	now := time.Now().UTC()
-	knowledgeBaseID := strings.TrimSpace(req.KnowledgeBaseID)
-	contentType := publishFormatOrContentType(req.PublishFormatID, req.ContentType, ai.FormatGenericArticle)
+	knowledgeBaseIDs := cleanKnowledgeBaseIDs(req.KnowledgeBaseID, req.KnowledgeBaseIDs)
+	contentType, ok := ai.NormalizeContentType(publishFormatOrContentType(req.PublishFormatID, req.ContentType, ai.FormatGenericArticle))
+	if !ok {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "unsupported content type"})
+		return
+	}
 	skill := ai.SelectWritingSkill(contentType)
 	publishFormat := ai.SelectPublishFormat(skill.ContentType)
 
 	h.mu.RLock()
+	user, userOK := h.userByID(userID)
+	if !userOK {
+		h.mu.RUnlock()
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "user not found"})
+		return
+	}
+	if !h.hasKnowledgeBasesLocked(workspaceID, knowledgeBaseIDs) {
+		h.mu.RUnlock()
+		c.JSON(http.StatusNotFound, gin.H{"error": "knowledge base not found"})
+		return
+	}
 	workspace, _ := h.workspaceByID(workspaceID)
-	chunks := h.retrieveKnowledgeChunksLocked(workspaceID, knowledgeBaseID, keywords, 8)
+	chunks := h.retrieveKnowledgeChunksLocked(workspaceID, knowledgeBaseIDs, keywords, 8)
 	h.mu.RUnlock()
+	primaryKnowledgeBaseID := firstString(knowledgeBaseIDs)
 
 	aiReq := ai.GenerateRequest{
-		WorkspaceID:     workspaceID,
-		UserID:          userID,
-		KnowledgeBaseID: knowledgeBaseID,
-		ContentType:     skill.ContentType,
-		Keywords:        keywords,
+		WorkspaceID:      workspaceID,
+		UserID:           userID,
+		KnowledgeBaseIDs: knowledgeBaseIDs,
+		ContentType:      skill.ContentType,
+		Keywords:         keywords,
 		Workspace: ai.WorkspaceContext{
 			Name:     workspace.Name,
 			Type:     workspace.Type,
@@ -1051,58 +1666,111 @@ func (h *WorkspaceHandler) GenerateContent(c *gin.Context) {
 	}
 
 	provider := h.aiConfig.Provider()
+	pipeline := h.aiConfig.GenerationPipelineForUser(user)
+	trace := ai.GenerationTrace{
+		SubscriptionTier: string(defaultUserSubscriptionTier(user.SubscriptionTier)),
+		Pipeline:         pipeline,
+		Steps:            []ai.GenerationTraceStep{},
+		RetrievedIDs:     knowledgeChunkIDs(chunks),
+	}
+
+	var analysis ai.GenerationStageResponse
+	var generationUsage ai.TokenUsage
+	if pipeline.InputAnalysis {
+		stage, err := provider.AnalyzeGenerationInput(c.Request.Context(), aiReq)
+		if err != nil {
+			trace.AddStep(ai.GenerationStageInputAnalysis, "输入分析", "failed", "输入分析失败", nil, []string{err.Error()})
+			h.recordGeneration(c.Request.Context(), failedGenerationLog(now, workspaceID, userID, primaryKnowledgeBaseID, provider, skill, keywords, chunks, trace, err))
+			c.JSON(http.StatusBadGateway, gin.H{"error": "content generation input analysis failed"})
+			return
+		}
+		analysis = stage
+		generationUsage = addTokenUsage(generationUsage, stage.TokenUsage)
+		trace.AddStage(ai.GenerationStageInputAnalysis, "输入分析", stage)
+	} else {
+		trace.AddStep(ai.GenerationStageInputAnalysis, "输入分析", "skipped", "当前订阅链路未启用独立输入分析。", nil, nil)
+	}
+
+	trace.AddStep(ai.GenerationStageRetrieval, "知识检索", "succeeded", fmt.Sprintf("已检索 %d 个知识片段。", len(chunks)), knowledgeTraceDetails(chunks, knowledgeBaseIDs), warningsForRetrievedChunks(chunks))
+
+	if pipeline.ContentPlan {
+		stage, err := provider.PlanGeneration(c.Request.Context(), aiReq, analysis)
+		if err != nil {
+			trace.AddStep(ai.GenerationStagePlan, "创作计划", "failed", "创作计划失败", nil, []string{err.Error()})
+			h.recordGeneration(c.Request.Context(), failedGenerationLog(now, workspaceID, userID, primaryKnowledgeBaseID, provider, skill, keywords, chunks, trace, err))
+			c.JSON(http.StatusBadGateway, gin.H{"error": "content generation planning failed"})
+			return
+		}
+		generationUsage = addTokenUsage(generationUsage, stage.TokenUsage)
+		trace.AddStage(ai.GenerationStagePlan, "创作计划", stage)
+	} else {
+		trace.AddStep(ai.GenerationStagePlan, "创作计划", "skipped", "当前订阅链路未启用独立创作计划。", nil, nil)
+	}
+
 	response, err := provider.Generate(c.Request.Context(), aiReq)
 	if err != nil {
-		h.recordGeneration(c.Request.Context(), model.GenerationRequest{
-			ID:                    fmt.Sprintf("gen_%d", now.UnixNano()),
-			WorkspaceID:           workspaceID,
-			UserID:                userID,
-			KnowledgeBaseID:       knowledgeBaseID,
-			Provider:              provider.Name(),
-			Model:                 provider.Model(),
-			ContentType:           skill.ContentType,
-			Keywords:              keywords,
-			Prompt:                encodeJSON(ai.BuildPrompt(aiReq)),
-			PromptVersion:         ai.PromptVersion,
-			SkillID:               skill.ID,
-			SkillVersion:          skill.Version,
-			RetrievedKnowledgeIDs: knowledgeChunkIDs(chunks),
-			Status:                "failed",
-			ErrorMessage:          err.Error(),
-			CreatedAt:             now,
-		})
+		trace.AddStep(ai.GenerationStageDraft, "草稿生成", "failed", "草稿生成失败", nil, []string{err.Error()})
+		h.recordGeneration(c.Request.Context(), failedGenerationLog(now, workspaceID, userID, primaryKnowledgeBaseID, provider, skill, keywords, chunks, trace, err))
 		c.JSON(http.StatusBadGateway, gin.H{"error": "content generation failed"})
 		return
 	}
+	generationUsage = addTokenUsage(generationUsage, response.TokenUsage)
+	trace.AddStep(ai.GenerationStageDraft, "草稿生成", "succeeded", "已生成结构化草稿。", []string{
+		"标题：" + strings.TrimSpace(response.Draft.Title),
+		fmt.Sprintf("章节数：%d", len(response.Draft.Sections)),
+		fmt.Sprintf("使用知识条目：%d 个", len(response.Draft.UsedKnowledgeIDs)),
+	}, response.Draft.Warnings)
 
 	if err := response.Draft.Validate(); err != nil {
-		h.recordGeneration(c.Request.Context(), model.GenerationRequest{
-			ID:                    fmt.Sprintf("gen_%d", now.UnixNano()),
-			WorkspaceID:           workspaceID,
-			UserID:                userID,
-			KnowledgeBaseID:       knowledgeBaseID,
-			Provider:              response.Provider,
-			Model:                 response.Model,
-			ContentType:           skill.ContentType,
-			Keywords:              keywords,
-			Prompt:                encodeJSON(response.Prompt),
-			PromptVersion:         response.PromptVersion,
-			SkillID:               response.SkillID,
-			SkillVersion:          response.SkillVersion,
-			RetrievedKnowledgeIDs: response.RetrievedIDs,
-			RawOutput:             string(response.RawOutput),
-			Status:                "failed",
-			ErrorMessage:          err.Error(),
-			CreatedAt:             now,
-		})
+		trace.AddStep(ai.GenerationStageDraft, "草稿结构校验", "failed", "生成结果未通过结构校验。", nil, []string{err.Error()})
+		h.recordGeneration(c.Request.Context(), failedGenerationLog(now, workspaceID, userID, primaryKnowledgeBaseID, provider, skill, keywords, chunks, trace, err))
 		c.JSON(http.StatusBadGateway, gin.H{"error": "generated content is invalid"})
 		return
+	}
+
+	var quality ai.GenerationStageResponse
+	if pipeline.QualityCheck {
+		stage, err := provider.CheckGeneratedDraft(c.Request.Context(), aiReq, response.Draft)
+		if err != nil {
+			trace.AddStep(ai.GenerationStageQualityCheck, "质量检查", "failed", "质量检查失败", nil, []string{err.Error()})
+			h.recordGeneration(c.Request.Context(), failedGenerationLog(now, workspaceID, userID, primaryKnowledgeBaseID, provider, skill, keywords, chunks, trace, err))
+			c.JSON(http.StatusBadGateway, gin.H{"error": "content quality check failed"})
+			return
+		}
+		quality = stage
+		generationUsage = addTokenUsage(generationUsage, stage.TokenUsage)
+		trace.AddStage(ai.GenerationStageQualityCheck, "质量检查", stage)
+	} else {
+		trace.AddStep(ai.GenerationStageQualityCheck, "质量检查", "skipped", "当前订阅链路未启用独立质量检查。", nil, nil)
+	}
+
+	rewriteRounds := pipeline.RewriteRounds
+	if !pipeline.QualityCheck {
+		rewriteRounds = 0
+	}
+	for round := 0; round < rewriteRounds; round++ {
+		rewritten, err := provider.RewriteGeneratedDraft(c.Request.Context(), aiReq, response.Draft, quality)
+		if err != nil {
+			trace.AddStep(ai.GenerationStageRewrite, "草稿重写", "failed", fmt.Sprintf("第 %d 轮重写失败。", round+1), nil, []string{err.Error()})
+			h.recordGeneration(c.Request.Context(), failedGenerationLog(now, workspaceID, userID, primaryKnowledgeBaseID, provider, skill, keywords, chunks, trace, err))
+			c.JSON(http.StatusBadGateway, gin.H{"error": "content rewrite failed"})
+			return
+		}
+		response = mergeGenerateResponses(response, rewritten)
+		generationUsage = addTokenUsage(generationUsage, rewritten.TokenUsage)
+		trace.AddStep(ai.GenerationStageRewrite, "草稿重写", "succeeded", fmt.Sprintf("已完成第 %d 轮草稿重写。", round+1), []string{
+			"基于质量检查结果修正草稿。",
+			"仍保持 draft 状态，等待人工审核。",
+		}, response.Draft.Warnings)
+	}
+	if rewriteRounds == 0 {
+		trace.AddStep(ai.GenerationStageRewrite, "草稿重写", "skipped", "当前订阅链路未启用自动重写。", nil, nil)
 	}
 
 	content := model.Content{
 		ID:              fmt.Sprintf("cnt_%d", now.UnixNano()),
 		WorkspaceID:     workspaceID,
-		KnowledgeBaseID: knowledgeBaseID,
+		KnowledgeBaseID: primaryKnowledgeBaseID,
 		Title:           strings.TrimSpace(response.Draft.Title),
 		Summary:         strings.TrimSpace(response.Draft.Summary),
 		Body:            strings.TrimSpace(response.Draft.Body),
@@ -1113,19 +1781,26 @@ func (h *WorkspaceHandler) GenerateContent(c *gin.Context) {
 		UpdatedAt:       now,
 	}
 
+	if err := h.saveContent(c.Request.Context(), content); err != nil {
+		trace.AddStep(ai.GenerationStagePersist, "保存草稿", "failed", "AI 输出保存数据库失败。", nil, []string{err.Error()})
+		h.recordGeneration(c.Request.Context(), failedGenerationLog(now, workspaceID, userID, primaryKnowledgeBaseID, provider, skill, keywords, chunks, trace, err))
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "generated content was not persisted"})
+		return
+	}
+
 	h.mu.Lock()
 	h.contents = append([]model.Content{content}, h.contents...)
 	h.mu.Unlock()
 
-	if err := h.saveContent(c.Request.Context(), content); err != nil {
-		log.Printf("generated content was not persisted: %v", err)
-	}
+	generationID := fmt.Sprintf("gen_%d", now.UnixNano())
+	trace.AddStep(ai.GenerationStagePersist, "保存草稿", "succeeded", "AI 输出已保存为草稿，未自动发布。", []string{"内容 ID：" + content.ID}, nil)
+	trace.Warnings = collectTraceWarnings(trace)
 
 	h.recordGeneration(c.Request.Context(), model.GenerationRequest{
-		ID:                    fmt.Sprintf("gen_%d", now.UnixNano()),
+		ID:                    generationID,
 		WorkspaceID:           workspaceID,
 		UserID:                userID,
-		KnowledgeBaseID:       knowledgeBaseID,
+		KnowledgeBaseID:       primaryKnowledgeBaseID,
 		ContentID:             content.ID,
 		Provider:              response.Provider,
 		Model:                 response.Model,
@@ -1137,15 +1812,19 @@ func (h *WorkspaceHandler) GenerateContent(c *gin.Context) {
 		SkillVersion:          response.SkillVersion,
 		RetrievedKnowledgeIDs: response.RetrievedIDs,
 		RawOutput:             string(response.RawOutput),
-		ParsedOutput:          encodeJSON(response.Draft),
-		InputTokens:           response.TokenUsage.InputTokens,
-		OutputTokens:          response.TokenUsage.OutputTokens,
-		TotalTokens:           response.TokenUsage.TotalTokens,
+		ParsedOutput:          encodeJSON(gin.H{"draft": response.Draft, "trace": trace}),
+		InputTokens:           generationUsage.InputTokens,
+		OutputTokens:          generationUsage.OutputTokens,
+		TotalTokens:           generationUsage.TotalTokens,
 		Status:                "succeeded",
 		CreatedAt:             now,
 	})
+	if generationUsage.TotalTokens > 0 {
+		response.TokenUsage = generationUsage
+		h.recordAITokenUsage(c.Request.Context(), h.buildAITokenUsageEvent(generationID, workspaceID, userID, response, now))
+	}
 
-	c.JSON(http.StatusCreated, content)
+	c.JSON(http.StatusCreated, generateContentResponse{Content: content, Trace: trace})
 }
 
 func (h *WorkspaceHandler) ListPublishSchedules(c *gin.Context) {
@@ -1189,17 +1868,18 @@ func (h *WorkspaceHandler) CreatePublishSchedule(c *gin.Context) {
 		frequency = model.PublishScheduleOnce
 	}
 
-	h.mu.Lock()
-	defer h.mu.Unlock()
-
+	h.mu.RLock()
 	if !hasContent(h.contents, workspaceID, contentID) {
+		h.mu.RUnlock()
 		c.JSON(http.StatusNotFound, gin.H{"error": "content not found"})
 		return
 	}
 	if !hasMediaAccount(h.accounts, workspaceID, accountID) {
+		h.mu.RUnlock()
 		c.JSON(http.StatusNotFound, gin.H{"error": "media account not found"})
 		return
 	}
+	h.mu.RUnlock()
 
 	schedule := model.PublishSchedule{
 		ID:             fmt.Sprintf("sch_%d", now.UnixNano()),
@@ -1223,8 +1903,15 @@ func (h *WorkspaceHandler) CreatePublishSchedule(c *gin.Context) {
 		LastMessage:    "Waiting for scheduled publish window.",
 	}
 
+	if err := h.savePublishScheduleWithJob(c.Request.Context(), schedule, job); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "publish schedule was not persisted"})
+		return
+	}
+
+	h.mu.Lock()
 	h.schedules = append([]model.PublishSchedule{schedule}, h.schedules...)
 	h.jobs = append([]model.PublishJob{job}, h.jobs...)
+	h.mu.Unlock()
 	c.JSON(http.StatusCreated, gin.H{"schedule": schedule, "job": job})
 }
 
@@ -1312,6 +1999,14 @@ func (h *WorkspaceHandler) PreparePublish(c *gin.Context) {
 		Status:         model.PublishJobManual,
 		ScheduledAt:    now,
 		LastMessage:    "小红书长文发布内容已生成，等待确认后通过浏览器发布。",
+	}
+	scheduledContent := content
+	scheduledContent.Status = model.ContentScheduled
+	scheduledContent.UpdatedAt = now
+
+	if err := h.savePublishJobWithContent(c.Request.Context(), job, scheduledContent); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "publish preparation was not persisted"})
+		return
 	}
 
 	h.mu.Lock()
@@ -1447,9 +2142,9 @@ func (h *WorkspaceHandler) ConfirmPublishJob(c *gin.Context) {
 		return
 	}
 
+	var updatedJob model.PublishJob
+	var updatedContent model.Content
 	h.mu.Lock()
-	defer h.mu.Unlock()
-
 	for index := range h.jobs {
 		job := &h.jobs[index]
 		if job.WorkspaceID != workspaceID || job.ID != jobID {
@@ -1460,11 +2155,27 @@ func (h *WorkspaceHandler) ConfirmPublishJob(c *gin.Context) {
 		job.ExternalURL = externalURL
 		job.LastMessage = defaultString(strings.TrimSpace(req.Message), "已人工确认发布完成。")
 		h.updateContentStatusLocked(workspaceID, job.ContentID, model.ContentPublished)
-		c.JSON(http.StatusOK, job)
+		updatedJob = *job
+		updatedContent, _ = h.contentByID(workspaceID, job.ContentID)
+		break
+	}
+	h.mu.Unlock()
+
+	if updatedJob.ID == "" {
+		c.JSON(http.StatusNotFound, gin.H{"error": "publish job not found"})
+		return
+	}
+	if updatedContent.ID != "" {
+		if err := h.savePublishJobWithContent(c.Request.Context(), updatedJob, updatedContent); err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "publish confirmation was not persisted"})
+			return
+		}
+	} else if err := h.savePublishJob(c.Request.Context(), updatedJob); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "publish job was not persisted"})
 		return
 	}
 
-	c.JSON(http.StatusNotFound, gin.H{"error": "publish job not found"})
+	c.JSON(http.StatusOK, updatedJob)
 }
 
 func (h *WorkspaceHandler) runPublish(
@@ -1478,8 +2189,13 @@ func (h *WorkspaceHandler) runPublish(
 ) (publishing.PublishResult, error) {
 	workspaceID := workspace.ID
 	h.mu.Lock()
-	h.updateJobStatusLocked(workspaceID, jobID, model.PublishJobRunning, "", "正在通过已登录浏览器发布小红书长文。")
+	runningJob := h.updateJobStatusLocked(workspaceID, jobID, model.PublishJobRunning, "", "正在通过已登录浏览器发布小红书长文。")
 	h.mu.Unlock()
+	if runningJob.ID != "" {
+		if err := h.savePublishJob(ctx, runningJob); err != nil {
+			return publishing.PublishResult{}, fmt.Errorf("persist running publish job: %w", err)
+		}
+	}
 
 	publisher, supported := publisherForPlatform(prepared.PlatformType)
 	if !supported {
@@ -1498,8 +2214,13 @@ func (h *WorkspaceHandler) runPublish(
 	})
 	if err != nil {
 		h.mu.Lock()
-		h.updateJobStatusLocked(workspaceID, jobID, model.PublishJobFailed, "", err.Error())
+		failedJob := h.updateJobStatusLocked(workspaceID, jobID, model.PublishJobFailed, "", err.Error())
 		h.mu.Unlock()
+		if failedJob.ID != "" {
+			if saveErr := h.savePublishJob(ctx, failedJob); saveErr != nil {
+				return publishing.PublishResult{}, fmt.Errorf("publish failed: %w; persist failed job: %w", err, saveErr)
+			}
+		}
 		return publishing.PublishResult{}, err
 	}
 
@@ -1516,10 +2237,21 @@ func (h *WorkspaceHandler) runPublish(
 
 	h.mu.Lock()
 	job := h.updateJobStatusLocked(workspaceID, jobID, status, result.ExternalURL, message)
+	var publishedContent model.Content
 	if result.Status == "published" {
 		h.updateContentStatusLocked(workspaceID, job.ContentID, model.ContentPublished)
+		publishedContent, _ = h.contentByID(workspaceID, job.ContentID)
 	}
 	h.mu.Unlock()
+	if job.ID != "" {
+		if publishedContent.ID != "" {
+			if err := h.savePublishJobWithContent(ctx, job, publishedContent); err != nil {
+				return publishing.PublishResult{}, fmt.Errorf("persist publish result: %w", err)
+			}
+		} else if err := h.savePublishJob(ctx, job); err != nil {
+			return publishing.PublishResult{}, fmt.Errorf("persist publish job: %w", err)
+		}
+	}
 
 	return result, nil
 }
@@ -1529,13 +2261,15 @@ func (h *WorkspaceHandler) AdminOverview(c *gin.Context) {
 	defer h.mu.RUnlock()
 
 	c.JSON(http.StatusOK, gin.H{
-		"userCount":          len(h.users),
-		"workspaceCount":     len(h.workspaces),
-		"memberCount":        len(h.members),
-		"mediaPlatformCount": len(h.platforms),
-		"mediaAccountCount":  len(h.accounts),
-		"contentCount":       len(h.contents),
-		"publishJobCount":    len(h.jobs),
+		"userCount":                  len(h.users),
+		"workspaceCount":             len(h.workspaces),
+		"memberCount":                len(h.members),
+		"platformKnowledgeBaseCount": len(h.platformKnowledgeBases),
+		"platformKnowledgeItemCount": len(h.platformKnowledgeItems),
+		"mediaPlatformCount":         len(h.platforms),
+		"mediaAccountCount":          len(h.accounts),
+		"contentCount":               len(h.contents),
+		"publishJobCount":            len(h.jobs),
 	})
 }
 
@@ -1544,6 +2278,74 @@ func (h *WorkspaceHandler) AdminListUsers(c *gin.Context) {
 	items := append([]model.User(nil), h.users...)
 	h.mu.RUnlock()
 	c.JSON(http.StatusOK, gin.H{"items": items})
+}
+
+func (h *WorkspaceHandler) AdminUpdateUserSubscription(c *gin.Context) {
+	userID := strings.TrimSpace(c.Param("userId"))
+	if userID == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "user id is required"})
+		return
+	}
+
+	var req updateUserSubscriptionRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid request body"})
+		return
+	}
+
+	tier := req.SubscriptionTier
+	if tier == "" {
+		tier = model.SubscriptionTierFree
+	}
+	if tier != model.SubscriptionTierFree && tier != model.SubscriptionTierVIP {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "unsupported subscription tier"})
+		return
+	}
+
+	status := req.SubscriptionStatus
+	if status == "" {
+		status = model.SubscriptionStatusActive
+	}
+	if !validSubscriptionStatus(status) {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "unsupported subscription status"})
+		return
+	}
+
+	expiresAt, ok := parseOptionalTime(req.SubscriptionExpiresAt)
+	if !ok {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid subscriptionExpiresAt"})
+		return
+	}
+
+	h.mu.Lock()
+	var updatedUser model.User
+	for index := range h.users {
+		user := &h.users[index]
+		if user.ID != userID {
+			continue
+		}
+		plan, _ := h.subscriptionPlanByTierLocked(tier)
+		user.SubscriptionTier = tier
+		user.SubscriptionPlanID = plan.ID
+		user.SubscriptionStatus = status
+		user.SubscriptionExpiresAt = expiresAt
+		user.MonthlyTokenBudgetCents = plan.MonthlyTokenBudgetCents
+		user.SubscriptionCurrentPeriod = defaultString(user.SubscriptionCurrentPeriod, time.Now().UTC().Format("2006-01"))
+		updatedUser = *user
+		break
+	}
+	h.mu.Unlock()
+
+	if updatedUser.ID == "" {
+		c.JSON(http.StatusNotFound, gin.H{"error": "user not found"})
+		return
+	}
+
+	if err := h.updateUserSubscription(c.Request.Context(), updatedUser); err != nil {
+		log.Printf("user subscription was not persisted: %v", err)
+	}
+
+	c.JSON(http.StatusOK, updatedUser)
 }
 
 func (h *WorkspaceHandler) AdminListWorkspaces(c *gin.Context) {
@@ -1558,6 +2360,215 @@ func (h *WorkspaceHandler) AdminListWorkspaceMembers(c *gin.Context) {
 	items := append([]model.WorkspaceMember(nil), h.members...)
 	h.mu.RUnlock()
 	c.JSON(http.StatusOK, gin.H{"items": items})
+}
+
+func (h *WorkspaceHandler) AdminListPlatformKnowledgeBases(c *gin.Context) {
+	h.mu.RLock()
+	items := append([]model.PlatformKnowledgeBase(nil), h.platformKnowledgeBases...)
+	h.mu.RUnlock()
+	c.JSON(http.StatusOK, gin.H{"items": items})
+}
+
+func (h *WorkspaceHandler) AdminCreatePlatformKnowledgeBase(c *gin.Context) {
+	var req createPlatformKnowledgeBaseRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid request body"})
+		return
+	}
+
+	name := strings.TrimSpace(req.Name)
+	if name == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "name is required"})
+		return
+	}
+
+	now := time.Now().UTC()
+	item := model.PlatformKnowledgeBase{
+		ID:                fmt.Sprintf("pkb_%d", now.UnixNano()),
+		Name:              name,
+		Description:       strings.TrimSpace(req.Description),
+		Category:          defaultString(strings.TrimSpace(req.Category), "general"),
+		PriceCents:        req.PriceCents,
+		Currency:          defaultString(strings.ToUpper(strings.TrimSpace(req.Currency)), "CNY"),
+		MarketplaceListed: req.MarketplaceListed,
+		ItemCount:         0,
+		UpdatedAt:         now,
+	}
+
+	if err := h.savePlatformKnowledgeBase(c.Request.Context(), item); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "platform knowledge base was not persisted"})
+		return
+	}
+
+	h.mu.Lock()
+	h.platformKnowledgeBases = append([]model.PlatformKnowledgeBase{item}, h.platformKnowledgeBases...)
+	h.mu.Unlock()
+	c.JSON(http.StatusCreated, item)
+}
+
+func (h *WorkspaceHandler) AdminUpdatePlatformKnowledgeBase(c *gin.Context) {
+	knowledgeBaseID := strings.TrimSpace(c.Param("knowledgeBaseId"))
+	if knowledgeBaseID == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "knowledgeBaseId is required"})
+		return
+	}
+
+	var req createPlatformKnowledgeBaseRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid request body"})
+		return
+	}
+
+	name := strings.TrimSpace(req.Name)
+	if name == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "name is required"})
+		return
+	}
+
+	now := time.Now().UTC()
+	h.mu.Lock()
+	var updated model.PlatformKnowledgeBase
+	for index := range h.platformKnowledgeBases {
+		item := &h.platformKnowledgeBases[index]
+		if item.ID != knowledgeBaseID {
+			continue
+		}
+		item.Name = name
+		item.Description = strings.TrimSpace(req.Description)
+		item.Category = defaultString(strings.TrimSpace(req.Category), "general")
+		item.PriceCents = req.PriceCents
+		item.Currency = defaultString(strings.ToUpper(strings.TrimSpace(req.Currency)), "CNY")
+		item.MarketplaceListed = req.MarketplaceListed
+		item.UpdatedAt = now
+		updated = *item
+		break
+	}
+	h.mu.Unlock()
+
+	if updated.ID == "" {
+		c.JSON(http.StatusNotFound, gin.H{"error": "platform knowledge base not found"})
+		return
+	}
+	if err := h.savePlatformKnowledgeBase(c.Request.Context(), updated); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "platform knowledge base was not persisted"})
+		return
+	}
+
+	c.JSON(http.StatusOK, updated)
+}
+
+func (h *WorkspaceHandler) AdminListPlatformKnowledgeItems(c *gin.Context) {
+	h.mu.RLock()
+	items := append([]model.PlatformKnowledgeItem(nil), h.platformKnowledgeItems...)
+	h.mu.RUnlock()
+	c.JSON(http.StatusOK, gin.H{"items": items})
+}
+
+func (h *WorkspaceHandler) AdminCreatePlatformKnowledgeItem(c *gin.Context) {
+	var req createPlatformKnowledgeItemRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid request body"})
+		return
+	}
+
+	knowledgeBaseIDs := cleanKnowledgeBaseIDs(req.KnowledgeBaseID, req.KnowledgeBaseIDs)
+	title := strings.TrimSpace(req.Title)
+	content := strings.TrimSpace(req.Content)
+	if len(knowledgeBaseIDs) == 0 || title == "" || content == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "knowledgeBaseIds, title and content are required"})
+		return
+	}
+
+	now := time.Now().UTC()
+	item := model.PlatformKnowledgeItem{
+		ID:               fmt.Sprintf("pki_%d", now.UnixNano()),
+		KnowledgeBaseIDs: knowledgeBaseIDs,
+		Type:             defaultString(strings.TrimSpace(req.Type), "note"),
+		Title:            title,
+		Content:          content,
+		Enabled:          optionalBool(req.Enabled, true),
+		UpdatedAt:        now,
+	}
+
+	h.mu.RLock()
+	if !h.hasPlatformKnowledgeBasesLocked(knowledgeBaseIDs) {
+		h.mu.RUnlock()
+		c.JSON(http.StatusNotFound, gin.H{"error": "platform knowledge base not found"})
+		return
+	}
+	h.mu.RUnlock()
+
+	if err := h.savePlatformKnowledgeItem(c.Request.Context(), item); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "platform knowledge item was not persisted"})
+		return
+	}
+
+	h.mu.Lock()
+	h.platformKnowledgeItems = append([]model.PlatformKnowledgeItem{item}, h.platformKnowledgeItems...)
+	h.recountPlatformKnowledgeBaseItemsLocked()
+	h.mu.Unlock()
+	c.JSON(http.StatusCreated, item)
+}
+
+func (h *WorkspaceHandler) AdminUpdatePlatformKnowledgeItem(c *gin.Context) {
+	knowledgeItemID := strings.TrimSpace(c.Param("knowledgeItemId"))
+	if knowledgeItemID == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "knowledgeItemId is required"})
+		return
+	}
+
+	var req createPlatformKnowledgeItemRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid request body"})
+		return
+	}
+
+	knowledgeBaseIDs := cleanKnowledgeBaseIDs(req.KnowledgeBaseID, req.KnowledgeBaseIDs)
+	title := strings.TrimSpace(req.Title)
+	content := strings.TrimSpace(req.Content)
+	if len(knowledgeBaseIDs) == 0 || title == "" || content == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "knowledgeBaseIds, title and content are required"})
+		return
+	}
+
+	now := time.Now().UTC()
+	h.mu.RLock()
+	if !h.hasPlatformKnowledgeBasesLocked(knowledgeBaseIDs) {
+		h.mu.RUnlock()
+		c.JSON(http.StatusNotFound, gin.H{"error": "platform knowledge base not found"})
+		return
+	}
+	h.mu.RUnlock()
+
+	var updated model.PlatformKnowledgeItem
+	h.mu.Lock()
+	for index := range h.platformKnowledgeItems {
+		item := &h.platformKnowledgeItems[index]
+		if item.ID != knowledgeItemID {
+			continue
+		}
+		item.KnowledgeBaseIDs = knowledgeBaseIDs
+		item.Type = defaultString(strings.TrimSpace(req.Type), "note")
+		item.Title = title
+		item.Content = content
+		item.Enabled = optionalBool(req.Enabled, true)
+		item.UpdatedAt = now
+		h.recountPlatformKnowledgeBaseItemsLocked()
+		updated = *item
+		break
+	}
+	h.mu.Unlock()
+
+	if updated.ID == "" {
+		c.JSON(http.StatusNotFound, gin.H{"error": "platform knowledge item not found"})
+		return
+	}
+	if err := h.savePlatformKnowledgeItem(c.Request.Context(), updated); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "platform knowledge item was not persisted"})
+		return
+	}
+
+	c.JSON(http.StatusOK, updated)
 }
 
 func (h *WorkspaceHandler) AdminListMediaPlatforms(c *gin.Context) {
@@ -1577,6 +2588,20 @@ func (h *WorkspaceHandler) AdminCreateMediaPlatform(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "name and type are required"})
 		return
 	}
+	if platformType != xiaohongshu.PlatformType {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "only xiaohongshu media platform is supported"})
+		return
+	}
+
+	h.mu.RLock()
+	for _, platform := range h.platforms {
+		if platform.Type == platformType {
+			h.mu.RUnlock()
+			c.JSON(http.StatusConflict, gin.H{"error": "media platform type already exists"})
+			return
+		}
+	}
+	h.mu.RUnlock()
 
 	platform := model.MediaPlatform{
 		ID:                 fmt.Sprintf("plt_%d", time.Now().UTC().UnixNano()),
@@ -1588,11 +2613,90 @@ func (h *WorkspaceHandler) AdminCreateMediaPlatform(c *gin.Context) {
 		SupportsScheduling: req.SupportsScheduling,
 		CredentialFields:   cleanKeywords(req.CredentialFields),
 	}
+	if platform.ID != "plt_xiaohongshu" {
+		platform.ID = "plt_xiaohongshu"
+	}
+	if len(platform.CredentialFields) == 0 {
+		platform.CredentialFields = []string{"qrLogin"}
+	}
+
+	if err := h.saveMediaPlatform(c.Request.Context(), platform); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "media platform was not persisted"})
+		return
+	}
 
 	h.mu.Lock()
 	h.platforms = append([]model.MediaPlatform{platform}, h.platforms...)
 	h.mu.Unlock()
 	c.JSON(http.StatusCreated, platform)
+}
+
+func (h *WorkspaceHandler) AdminUpdateMediaPlatform(c *gin.Context) {
+	platformID := strings.TrimSpace(c.Param("platformId"))
+	if platformID == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "platformId is required"})
+		return
+	}
+
+	var req createMediaPlatformRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid request body"})
+		return
+	}
+
+	name := strings.TrimSpace(req.Name)
+	platformType := strings.TrimSpace(req.Type)
+	if name == "" || platformType == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "name and type are required"})
+		return
+	}
+	if platformType != xiaohongshu.PlatformType {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "only xiaohongshu media platform is supported"})
+		return
+	}
+
+	h.mu.RLock()
+	platformIndex := -1
+	for index, platform := range h.platforms {
+		if platform.ID == platformID {
+			platformIndex = index
+			continue
+		}
+		if platform.Type == platformType {
+			h.mu.RUnlock()
+			c.JSON(http.StatusConflict, gin.H{"error": "media platform type already exists"})
+			return
+		}
+	}
+	if platformIndex == -1 {
+		h.mu.RUnlock()
+		c.JSON(http.StatusNotFound, gin.H{"error": "media platform not found"})
+		return
+	}
+	h.mu.RUnlock()
+
+	updated := model.MediaPlatform{
+		ID:                 platformID,
+		Name:               name,
+		Type:               platformType,
+		Enabled:            req.Enabled,
+		SupportsArticle:    req.SupportsArticle,
+		SupportsImage:      req.SupportsImage,
+		SupportsScheduling: req.SupportsScheduling,
+		CredentialFields:   cleanKeywords(req.CredentialFields),
+	}
+	if len(updated.CredentialFields) == 0 {
+		updated.CredentialFields = []string{"qrLogin"}
+	}
+	if err := h.saveMediaPlatform(c.Request.Context(), updated); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "media platform was not persisted"})
+		return
+	}
+
+	h.mu.Lock()
+	h.platforms[platformIndex] = updated
+	h.mu.Unlock()
+	c.JSON(http.StatusOK, updated)
 }
 
 func (h *WorkspaceHandler) AdminListMediaAccounts(c *gin.Context) {
@@ -1623,11 +2727,12 @@ func (h *WorkspaceHandler) AdminUpdateAIConfig(c *gin.Context) {
 	}
 
 	updated := h.aiConfig.Update(ai.Config{
-		Provider:       provider,
-		OpenAIAPIKey:   strings.TrimSpace(req.OpenAIAPIKey),
-		OpenAIBaseURL:  strings.TrimSpace(req.OpenAIBaseURL),
-		OpenAIModel:    strings.TrimSpace(req.OpenAIModel),
-		RequestTimeout: req.RequestTimeoutSeconds,
+		Provider:           provider,
+		OpenAIAPIKey:       strings.TrimSpace(req.OpenAIAPIKey),
+		OpenAIBaseURL:      strings.TrimSpace(req.OpenAIBaseURL),
+		OpenAIModel:        strings.TrimSpace(req.OpenAIModel),
+		RequestTimeout:     req.RequestTimeoutSeconds,
+		GenerationPipeline: req.GenerationPipeline,
 	}, req.ClearAPIKey)
 
 	c.JSON(http.StatusOK, ai.NewRuntimeConfig(updated).Public())
@@ -1650,12 +2755,108 @@ func (h *WorkspaceHandler) requirePlatformAdmin() gin.HandlerFunc {
 	}
 }
 
-func (h *WorkspaceHandler) seedDatabase(ctx context.Context) {
+func (h *WorkspaceHandler) seedDatabase(ctx context.Context) bool {
 	dbCtx, cancel := context.WithTimeout(ctx, 3*time.Second)
 	defer cancel()
-	if err := h.db.SeedWorkspaceData(dbCtx, h.users, h.workspaces, h.members, h.knowledgeBases); err != nil {
-		log.Printf("database seed failed, continuing in memory mode: %v", err)
+	if err := h.db.SeedWorkspaceData(
+		dbCtx,
+		h.users,
+		h.workspaces,
+		h.members,
+		h.knowledgeBases,
+		h.knowledgeItems,
+		h.platformKnowledgeBases,
+		h.platformKnowledgeItems,
+		h.platforms,
+		h.accounts,
+		h.contents,
+		h.schedules,
+		h.jobs,
+	); err != nil {
+		log.Printf("database seed failed: %v", err)
+		return false
 	}
+	return true
+}
+
+func (h *WorkspaceHandler) databaseSnapshotMiddleware() gin.HandlerFunc {
+	return func(c *gin.Context) {
+		if !h.loadDatabaseSnapshot(c.Request.Context()) {
+			c.AbortWithStatusJSON(http.StatusServiceUnavailable, gin.H{"error": "database snapshot load failed"})
+			return
+		}
+		c.Next()
+	}
+}
+
+func (h *WorkspaceHandler) loadDatabaseSnapshot(ctx context.Context) bool {
+	if h.db == nil || h.db.SQL() == nil {
+		return true
+	}
+
+	dbCtx, cancel := context.WithTimeout(ctx, 3*time.Second)
+	defer cancel()
+	snapshot, err := h.db.LoadSnapshot(dbCtx)
+	if err != nil {
+		log.Printf("database snapshot load failed: %v", err)
+		return false
+	}
+
+	h.mu.Lock()
+	h.users = snapshot.Users
+	h.subscriptionPlans = snapshot.SubscriptionPlans
+	h.workspaces = snapshot.Workspaces
+	h.members = snapshot.Members
+	h.knowledgeBases = snapshot.KnowledgeBases
+	h.knowledgeItems = snapshot.KnowledgeItems
+	h.platformKnowledgeBases = snapshot.PlatformKnowledgeBases
+	h.platformKnowledgeItems = snapshot.PlatformKnowledgeItems
+	h.platforms = snapshot.Platforms
+	h.accounts = snapshot.Accounts
+	h.contents = snapshot.Contents
+	h.schedules = snapshot.Schedules
+	h.jobs = snapshot.Jobs
+	h.generations = snapshot.Generations
+	h.tokenUsageEvents = snapshot.TokenUsageEvents
+	h.mu.Unlock()
+
+	return true
+}
+
+func (h *WorkspaceHandler) createLoginSession(ctx context.Context, userID string) (string, error) {
+	token, err := secureRandomID("gp")
+	if err != nil {
+		return "", err
+	}
+	if h.db == nil || h.db.SQL() == nil {
+		h.mu.Lock()
+		h.userSessions[token] = userID
+		h.mu.Unlock()
+		return token, nil
+	}
+
+	expiresAt := time.Now().UTC().AddDate(0, 0, 30)
+	dbCtx, cancel := context.WithTimeout(ctx, 2*time.Second)
+	defer cancel()
+	if err := h.db.CreateUserSession(dbCtx, token, userID, &expiresAt); err != nil {
+		return "", err
+	}
+	return token, nil
+}
+
+func (h *WorkspaceHandler) ResolveUserSession(_ context.Context, token string) (string, bool, error) {
+	h.mu.RLock()
+	userID, ok := h.userSessions[token]
+	h.mu.RUnlock()
+	return userID, ok, nil
+}
+
+func secureRandomID(prefix string) (string, error) {
+	data := make([]byte, 24)
+	if _, err := rand.Read(data); err != nil {
+		return "", err
+	}
+	return fmt.Sprintf("%s_%x", prefix, data), nil
 }
 
 func (h *WorkspaceHandler) authorizedWorkspaceID(c *gin.Context) (string, bool) {
@@ -1689,6 +2890,38 @@ func (h *WorkspaceHandler) userByID(userID string) (model.User, bool) {
 		}
 	}
 	return model.User{}, false
+}
+
+func (h *WorkspaceHandler) subscriptionPlanByID(planID model.SubscriptionPlanID) (model.SubscriptionPlan, bool) {
+	for _, plan := range h.subscriptionPlans {
+		if plan.ID == planID {
+			return plan, true
+		}
+	}
+	return model.SubscriptionPlan{}, false
+}
+
+func (h *WorkspaceHandler) subscriptionPlanByTierLocked(tier model.SubscriptionTier) (model.SubscriptionPlan, bool) {
+	for _, plan := range h.subscriptionPlans {
+		if plan.Tier == tier && plan.Enabled {
+			return plan, true
+		}
+	}
+	for _, plan := range h.subscriptionPlans {
+		if plan.ID == model.SubscriptionPlanFree {
+			return plan, true
+		}
+	}
+	return model.SubscriptionPlan{ID: model.SubscriptionPlanFree, Tier: model.SubscriptionTierFree, Enabled: true}, false
+}
+
+func (h *WorkspaceHandler) emailExistsLocked(email string) bool {
+	for _, user := range h.users {
+		if strings.EqualFold(user.Email, email) {
+			return true
+		}
+	}
+	return false
 }
 
 func (h *WorkspaceHandler) workspaceByID(workspaceID string) (model.Workspace, bool) {
@@ -1808,7 +3041,94 @@ func (h *WorkspaceHandler) bumpKnowledgeBaseCount(workspaceID, knowledgeBaseID s
 	}
 }
 
-func (h *WorkspaceHandler) retrieveKnowledgeChunksLocked(workspaceID, knowledgeBaseID string, keywords []string, limit int) []ai.KnowledgeChunk {
+func (h *WorkspaceHandler) recountKnowledgeBaseItemsLocked(workspaceID string) {
+	counts := map[string]int{}
+	for _, item := range h.knowledgeItems {
+		if item.WorkspaceID != workspaceID {
+			continue
+		}
+		for _, knowledgeBaseID := range item.KnowledgeBaseIDs {
+			counts[knowledgeBaseID]++
+		}
+	}
+
+	now := time.Now().UTC()
+	for index := range h.knowledgeBases {
+		item := &h.knowledgeBases[index]
+		if item.WorkspaceID != workspaceID {
+			continue
+		}
+		item.ItemCount = counts[item.ID]
+		item.UpdatedAt = now
+	}
+}
+
+func (h *WorkspaceHandler) hasKnowledgeBasesLocked(workspaceID string, knowledgeBaseIDs []string) bool {
+	for _, knowledgeBaseID := range knowledgeBaseIDs {
+		found := false
+		for _, item := range h.knowledgeBases {
+			if item.WorkspaceID == workspaceID && item.ID == knowledgeBaseID {
+				found = true
+				break
+			}
+		}
+		if !found {
+			return false
+		}
+	}
+	return true
+}
+
+func (h *WorkspaceHandler) bumpPlatformKnowledgeBaseCount(knowledgeBaseID string, delta int) {
+	for index := range h.platformKnowledgeBases {
+		item := &h.platformKnowledgeBases[index]
+		if item.ID == knowledgeBaseID {
+			item.ItemCount += delta
+			if item.ItemCount < 0 {
+				item.ItemCount = 0
+			}
+			item.UpdatedAt = time.Now().UTC()
+			return
+		}
+	}
+}
+
+func (h *WorkspaceHandler) recountPlatformKnowledgeBaseItemsLocked() {
+	counts := map[string]int{}
+	for _, item := range h.platformKnowledgeItems {
+		for _, knowledgeBaseID := range item.KnowledgeBaseIDs {
+			counts[knowledgeBaseID]++
+		}
+	}
+
+	now := time.Now().UTC()
+	for index := range h.platformKnowledgeBases {
+		item := &h.platformKnowledgeBases[index]
+		item.ItemCount = counts[item.ID]
+		item.UpdatedAt = now
+	}
+}
+
+func (h *WorkspaceHandler) hasPlatformKnowledgeBasesLocked(knowledgeBaseIDs []string) bool {
+	for _, knowledgeBaseID := range knowledgeBaseIDs {
+		if !hasPlatformKnowledgeBase(h.platformKnowledgeBases, knowledgeBaseID) {
+			return false
+		}
+	}
+	return true
+}
+
+func (h *WorkspaceHandler) touchPlatformKnowledgeBase(knowledgeBaseID string, updatedAt time.Time) {
+	for index := range h.platformKnowledgeBases {
+		item := &h.platformKnowledgeBases[index]
+		if item.ID == knowledgeBaseID {
+			item.UpdatedAt = updatedAt
+			return
+		}
+	}
+}
+
+func (h *WorkspaceHandler) retrieveKnowledgeChunksLocked(workspaceID string, knowledgeBaseIDs []string, keywords []string, limit int) []ai.KnowledgeChunk {
 	type scoredChunk struct {
 		score int
 		item  model.KnowledgeItem
@@ -1820,7 +3140,7 @@ func (h *WorkspaceHandler) retrieveKnowledgeChunksLocked(workspaceID, knowledgeB
 		if item.WorkspaceID != workspaceID || !item.Enabled {
 			continue
 		}
-		if knowledgeBaseID != "" && item.KnowledgeBaseID != knowledgeBaseID {
+		if len(knowledgeBaseIDs) > 0 && !intersectsString(item.KnowledgeBaseIDs, knowledgeBaseIDs) {
 			continue
 		}
 		fallback = append(fallback, item)
@@ -1847,11 +3167,11 @@ func (h *WorkspaceHandler) retrieveKnowledgeChunksLocked(workspaceID, knowledgeB
 	chunks := make([]ai.KnowledgeChunk, 0, limit)
 	for _, item := range scored[:limit] {
 		chunks = append(chunks, ai.KnowledgeChunk{
-			ID:              item.item.ID,
-			KnowledgeBaseID: item.item.KnowledgeBaseID,
-			Type:            item.item.Type,
-			Title:           item.item.Title,
-			Content:         item.item.Content,
+			ID:               item.item.ID,
+			KnowledgeBaseIDs: item.item.KnowledgeBaseIDs,
+			Type:             item.item.Type,
+			Title:            item.item.Title,
+			Content:          item.item.Content,
 		})
 	}
 	return chunks
@@ -1900,6 +3220,142 @@ func (h *WorkspaceHandler) saveContent(ctx context.Context, item model.Content) 
 	dbCtx, cancel := context.WithTimeout(ctx, 2*time.Second)
 	defer cancel()
 	return h.db.SaveContent(dbCtx, item)
+}
+
+func (h *WorkspaceHandler) saveKnowledgeBase(ctx context.Context, item model.KnowledgeBase) error {
+	dbCtx, cancel := context.WithTimeout(ctx, 2*time.Second)
+	defer cancel()
+	return h.db.SaveKnowledgeBase(dbCtx, item)
+}
+
+func (h *WorkspaceHandler) saveKnowledgeItem(ctx context.Context, item model.KnowledgeItem) error {
+	dbCtx, cancel := context.WithTimeout(ctx, 2*time.Second)
+	defer cancel()
+	return h.db.SaveKnowledgeItem(dbCtx, item)
+}
+
+func (h *WorkspaceHandler) assignKnowledgeItemsToBases(ctx context.Context, workspaceID string, knowledgeItemIDs []string, knowledgeBaseIDs []string) error {
+	dbCtx, cancel := context.WithTimeout(ctx, 2*time.Second)
+	defer cancel()
+	return h.db.AssignKnowledgeItemsToBases(dbCtx, workspaceID, knowledgeItemIDs, knowledgeBaseIDs)
+}
+
+func (h *WorkspaceHandler) savePlatformKnowledgeBase(ctx context.Context, item model.PlatformKnowledgeBase) error {
+	dbCtx, cancel := context.WithTimeout(ctx, 2*time.Second)
+	defer cancel()
+	return h.db.SavePlatformKnowledgeBase(dbCtx, item)
+}
+
+func (h *WorkspaceHandler) savePlatformKnowledgeItem(ctx context.Context, item model.PlatformKnowledgeItem) error {
+	dbCtx, cancel := context.WithTimeout(ctx, 2*time.Second)
+	defer cancel()
+	return h.db.SavePlatformKnowledgeItem(dbCtx, item)
+}
+
+func (h *WorkspaceHandler) saveMediaPlatform(ctx context.Context, item model.MediaPlatform) error {
+	dbCtx, cancel := context.WithTimeout(ctx, 2*time.Second)
+	defer cancel()
+	return h.db.SaveMediaPlatform(dbCtx, item)
+}
+
+func (h *WorkspaceHandler) saveMediaAccount(ctx context.Context, item model.MediaAccount) error {
+	dbCtx, cancel := context.WithTimeout(ctx, 2*time.Second)
+	defer cancel()
+	return h.db.SaveMediaAccount(dbCtx, item)
+}
+
+func (h *WorkspaceHandler) savePublishScheduleWithJob(ctx context.Context, schedule model.PublishSchedule, job model.PublishJob) error {
+	dbCtx, cancel := context.WithTimeout(ctx, 2*time.Second)
+	defer cancel()
+	return h.db.SavePublishScheduleWithJob(dbCtx, schedule, job)
+}
+
+func (h *WorkspaceHandler) savePublishJob(ctx context.Context, item model.PublishJob) error {
+	dbCtx, cancel := context.WithTimeout(ctx, 2*time.Second)
+	defer cancel()
+	return h.db.SavePublishJob(dbCtx, item)
+}
+
+func (h *WorkspaceHandler) savePublishJobWithContent(ctx context.Context, job model.PublishJob, content model.Content) error {
+	dbCtx, cancel := context.WithTimeout(ctx, 2*time.Second)
+	defer cancel()
+	return h.db.SavePublishJobWithContent(dbCtx, job, content)
+}
+
+func (h *WorkspaceHandler) updateUserSubscription(ctx context.Context, user model.User) error {
+	if h.db == nil || h.db.SQL() == nil {
+		return nil
+	}
+	dbCtx, cancel := context.WithTimeout(ctx, 2*time.Second)
+	defer cancel()
+	return h.db.UpdateUserSubscription(dbCtx, user)
+}
+
+func (h *WorkspaceHandler) completeUserOnboarding(ctx context.Context, user model.User, workspace model.Workspace) error {
+	if h.db == nil || h.db.SQL() == nil {
+		return nil
+	}
+	dbCtx, cancel := context.WithTimeout(ctx, 2*time.Second)
+	defer cancel()
+	return h.db.CompleteUserOnboarding(dbCtx, user, workspace)
+}
+
+func (h *WorkspaceHandler) recordAITokenUsage(ctx context.Context, event model.AITokenUsageEvent) {
+	if event.ID == "" || event.UserID == "" || event.WorkspaceID == "" {
+		return
+	}
+
+	h.mu.Lock()
+	h.tokenUsageEvents = append([]model.AITokenUsageEvent{event}, h.tokenUsageEvents...)
+	for index := range h.users {
+		if h.users[index].ID != event.UserID {
+			continue
+		}
+		h.users[index].MonthlyTokenUsedCents += event.TotalCostCents
+		h.users[index].MonthlyTokenInputUsed += event.InputTokens
+		h.users[index].MonthlyTokenOutputUsed += event.OutputTokens
+		h.users[index].SubscriptionCurrentPeriod = event.BillingPeriod
+		break
+	}
+	h.mu.Unlock()
+
+	if h.db == nil || h.db.SQL() == nil {
+		return
+	}
+	dbCtx, cancel := context.WithTimeout(ctx, 2*time.Second)
+	defer cancel()
+	if err := h.db.RecordAITokenUsageEvent(dbCtx, event); err != nil {
+		log.Printf("ai token usage event was not persisted: %v", err)
+	}
+}
+
+func (h *WorkspaceHandler) buildAITokenUsageEvent(generationID, workspaceID, userID string, response ai.GenerateResponse, now time.Time) model.AITokenUsageEvent {
+	h.mu.RLock()
+	user, _ := h.userByID(userID)
+	plan, planOK := h.subscriptionPlanByID(user.SubscriptionPlanID)
+	h.mu.RUnlock()
+	if !planOK {
+		plan, _ = h.subscriptionPlanByID(model.SubscriptionPlanFree)
+	}
+	inputCost := billableTokenCostCents(response.TokenUsage.InputTokens, plan.InputTokenPricePer1K)
+	outputCost := billableTokenCostCents(response.TokenUsage.OutputTokens, plan.OutputTokenPricePer1K)
+	return model.AITokenUsageEvent{
+		ID:                  fmt.Sprintf("aiu_%d", now.UnixNano()),
+		UserID:              userID,
+		WorkspaceID:         workspaceID,
+		GenerationRequestID: generationID,
+		Provider:            response.Provider,
+		Model:               response.Model,
+		SubscriptionPlanID:  plan.ID,
+		InputTokens:         response.TokenUsage.InputTokens,
+		OutputTokens:        response.TokenUsage.OutputTokens,
+		TotalTokens:         response.TokenUsage.TotalTokens,
+		InputCostCents:      inputCost,
+		OutputCostCents:     outputCost,
+		TotalCostCents:      inputCost + outputCost,
+		BillingPeriod:       defaultString(user.SubscriptionCurrentPeriod, now.Format("2006-01")),
+		CreatedAt:           now,
+	}
 }
 
 func encodeJSON(value any) string {
@@ -2001,6 +3457,69 @@ func hasMediaAccount(accounts []model.MediaAccount, workspaceID, accountID strin
 	return false
 }
 
+func hasPlatformKnowledgeBase(items []model.PlatformKnowledgeBase, knowledgeBaseID string) bool {
+	for _, item := range items {
+		if item.ID == knowledgeBaseID {
+			return true
+		}
+	}
+	return false
+}
+
+func cleanKnowledgeBaseIDs(single string, values []string) []string {
+	items := make([]string, 0, len(values)+1)
+	if single = strings.TrimSpace(single); single != "" {
+		items = append(items, single)
+	}
+	items = append(items, values...)
+	return uniqueStrings(cleanKeywords(items))
+}
+
+func uniqueStrings(values []string) []string {
+	seen := map[string]bool{}
+	result := make([]string, 0, len(values))
+	for _, value := range values {
+		if value == "" || seen[value] {
+			continue
+		}
+		seen[value] = true
+		result = append(result, value)
+	}
+	return result
+}
+
+func mergeStringSet(current []string, additions []string) []string {
+	merged := make([]string, 0, len(current)+len(additions))
+	merged = append(merged, current...)
+	merged = append(merged, additions...)
+	return uniqueStrings(cleanKeywords(merged))
+}
+
+func containsString(values []string, target string) bool {
+	for _, value := range values {
+		if value == target {
+			return true
+		}
+	}
+	return false
+}
+
+func intersectsString(left []string, right []string) bool {
+	for _, value := range left {
+		if containsString(right, value) {
+			return true
+		}
+	}
+	return false
+}
+
+func firstString(values []string) string {
+	if len(values) == 0 {
+		return ""
+	}
+	return values[0]
+}
+
 func cleanKeywords(values []string) []string {
 	keywords := make([]string, 0, len(values))
 	for _, value := range values {
@@ -2019,6 +3538,37 @@ func defaultString(value, fallback string) string {
 	return value
 }
 
+func validSubscriptionStatus(value model.SubscriptionStatus) bool {
+	switch value {
+	case model.SubscriptionStatusActive, model.SubscriptionStatusInactive, model.SubscriptionStatusExpired, model.SubscriptionStatusCanceled:
+		return true
+	default:
+		return false
+	}
+}
+
+func parseOptionalTime(value string) (*time.Time, bool) {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return nil, true
+	}
+	for _, layout := range []string{time.RFC3339Nano, time.RFC3339, "2006-01-02"} {
+		parsed, err := time.Parse(layout, value)
+		if err == nil {
+			utc := parsed.UTC()
+			return &utc, true
+		}
+	}
+	return nil, false
+}
+
+func optionalBool(value *bool, fallback bool) bool {
+	if value == nil {
+		return fallback
+	}
+	return *value
+}
+
 func publishFormatOrContentType(values ...string) string {
 	for _, value := range values {
 		value = strings.TrimSpace(value)
@@ -2027,6 +3577,123 @@ func publishFormatOrContentType(values ...string) string {
 		}
 	}
 	return ai.FormatGenericArticle
+}
+
+func defaultUserSubscriptionTier(value model.SubscriptionTier) model.SubscriptionTier {
+	if value == "" {
+		return model.SubscriptionTierFree
+	}
+	return value
+}
+
+func billableTokenCostCents(tokens int, pricePer1K int) int {
+	if tokens <= 0 || pricePer1K <= 0 {
+		return 0
+	}
+	return (tokens*pricePer1K + 999) / 1000
+}
+
+func knowledgeTraceDetails(chunks []ai.KnowledgeChunk, knowledgeBaseIDs []string) []string {
+	details := []string{}
+	if len(knowledgeBaseIDs) == 0 {
+		details = append(details, "检索范围：全部知识库包。")
+	} else {
+		details = append(details, fmt.Sprintf("检索范围：%d 个知识库包。", len(knowledgeBaseIDs)))
+	}
+	if len(chunks) == 0 {
+		details = append(details, "未检索到可用知识片段。")
+		return details
+	}
+	for _, chunk := range chunks {
+		details = append(details, fmt.Sprintf("%s（%s）", chunk.Title, chunk.Type))
+		if len(details) >= 6 {
+			break
+		}
+	}
+	return details
+}
+
+func warningsForRetrievedChunks(chunks []ai.KnowledgeChunk) []string {
+	if len(chunks) == 0 {
+		return []string{"没有检索到知识片段，草稿需要人工补充事实依据。"}
+	}
+	return nil
+}
+
+func collectTraceWarnings(trace ai.GenerationTrace) []string {
+	warnings := []string{}
+	for _, step := range trace.Steps {
+		warnings = append(warnings, step.Warnings...)
+	}
+	return uniqueStrings(cleanKeywords(warnings))
+}
+
+func failedGenerationLog(
+	now time.Time,
+	workspaceID string,
+	userID string,
+	knowledgeBaseID string,
+	provider ai.Provider,
+	skill ai.WritingSkill,
+	keywords []string,
+	chunks []ai.KnowledgeChunk,
+	trace ai.GenerationTrace,
+	err error,
+) model.GenerationRequest {
+	return model.GenerationRequest{
+		ID:                    fmt.Sprintf("gen_%d", now.UnixNano()),
+		WorkspaceID:           workspaceID,
+		UserID:                userID,
+		KnowledgeBaseID:       knowledgeBaseID,
+		Provider:              provider.Name(),
+		Model:                 provider.Model(),
+		ContentType:           skill.ContentType,
+		Keywords:              keywords,
+		Prompt:                encodeJSON(gin.H{"trace": trace}),
+		PromptVersion:         ai.PromptVersion,
+		SkillID:               skill.ID,
+		SkillVersion:          skill.Version,
+		RetrievedKnowledgeIDs: knowledgeChunkIDs(chunks),
+		ParsedOutput:          encodeJSON(trace),
+		Status:                "failed",
+		ErrorMessage:          err.Error(),
+		CreatedAt:             now,
+	}
+}
+
+func mergeGenerateResponses(current ai.GenerateResponse, next ai.GenerateResponse) ai.GenerateResponse {
+	if next.Prompt.System == "" && next.Prompt.User == "" {
+		next.Prompt = current.Prompt
+	}
+	if next.Provider == "" {
+		next.Provider = current.Provider
+	}
+	if next.Model == "" {
+		next.Model = current.Model
+	}
+	if next.PromptVersion == "" {
+		next.PromptVersion = current.PromptVersion
+	}
+	if next.SkillID == "" {
+		next.SkillID = current.SkillID
+	}
+	if next.SkillVersion == "" {
+		next.SkillVersion = current.SkillVersion
+	}
+	if len(next.RetrievedIDs) == 0 {
+		next.RetrievedIDs = current.RetrievedIDs
+	}
+	next.TokenUsage.InputTokens += current.TokenUsage.InputTokens
+	next.TokenUsage.OutputTokens += current.TokenUsage.OutputTokens
+	next.TokenUsage.TotalTokens += current.TokenUsage.TotalTokens
+	return next
+}
+
+func addTokenUsage(current ai.TokenUsage, next ai.TokenUsage) ai.TokenUsage {
+	current.InputTokens += next.InputTokens
+	current.OutputTokens += next.OutputTokens
+	current.TotalTokens += next.TotalTokens
+	return current
 }
 
 func publisherForPlatform(platformType string) (publishing.Publisher, bool) {

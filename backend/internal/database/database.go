@@ -67,6 +67,14 @@ func (db *DB) SeedWorkspaceData(
 	workspaces []model.Workspace,
 	members []model.WorkspaceMember,
 	knowledgeBases []model.KnowledgeBase,
+	knowledgeItems []model.KnowledgeItem,
+	platformKnowledgeBases []model.PlatformKnowledgeBase,
+	platformKnowledgeItems []model.PlatformKnowledgeItem,
+	platforms []model.MediaPlatform,
+	accounts []model.MediaAccount,
+	contents []model.Content,
+	schedules []model.PublishSchedule,
+	jobs []model.PublishJob,
 ) error {
 	if db == nil || db.conn == nil {
 		return nil
@@ -77,21 +85,38 @@ func (db *DB) SeedWorkspaceData(
 		return err
 	}
 	defer func() {
-		if err != nil {
-			_ = tx.Rollback()
-		}
+		_ = tx.Rollback()
 	}()
 
 	now := time.Now().UTC()
 	for _, user := range users {
 		_, err = tx.ExecContext(ctx, `
-			INSERT INTO users (id, name, email, password_hash, status, created_at, updated_at)
-			VALUES ($1, $2, $3, $4, 'active', $5, $6)
+			INSERT INTO users (
+				id, name, email, password_hash, status, is_platform_admin,
+				subscription_tier, subscription_status, subscription_expires_at,
+				created_at, updated_at
+			)
+			VALUES ($1, $2, $3, $4, 'active', $5, $6, $7, $8, $9, $10)
 			ON CONFLICT (id) DO UPDATE SET
 				name = EXCLUDED.name,
 				email = EXCLUDED.email,
+				is_platform_admin = EXCLUDED.is_platform_admin,
+				subscription_tier = EXCLUDED.subscription_tier,
+				subscription_status = EXCLUDED.subscription_status,
+				subscription_expires_at = EXCLUDED.subscription_expires_at,
 				updated_at = EXCLUDED.updated_at
-		`, user.ID, user.Name, user.Email, "demo-password-disabled", user.CreatedAt, now)
+		`,
+			user.ID,
+			user.Name,
+			user.Email,
+			"demo-password-disabled",
+			user.IsPlatformAdmin,
+			defaultSubscriptionTier(user.SubscriptionTier),
+			defaultSubscriptionStatus(user.SubscriptionStatus),
+			user.SubscriptionExpiresAt,
+			user.CreatedAt,
+			now,
+		)
 		if err != nil {
 			return err
 		}
@@ -146,7 +171,238 @@ func (db *DB) SeedWorkspaceData(
 		}
 	}
 
+	for _, item := range knowledgeItems {
+		updatedAt := item.UpdatedAt
+		if updatedAt.IsZero() {
+			updatedAt = now
+		}
+		_, err = tx.ExecContext(ctx, `
+			INSERT INTO knowledge_items (id, workspace_id, type, title, content, enabled, created_at, updated_at)
+			VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+			ON CONFLICT (id) DO UPDATE SET
+				workspace_id = EXCLUDED.workspace_id,
+				type = EXCLUDED.type,
+				title = EXCLUDED.title,
+				content = EXCLUDED.content,
+				enabled = EXCLUDED.enabled,
+				updated_at = EXCLUDED.updated_at
+		`, item.ID, item.WorkspaceID, item.Type, item.Title, item.Content, item.Enabled, updatedAt, updatedAt)
+		if err != nil {
+			return err
+		}
+		if err = replaceKnowledgeItemBases(ctx, tx, item.ID, item.WorkspaceID, item.KnowledgeBaseIDs); err != nil {
+			return err
+		}
+	}
+
+	for _, base := range platformKnowledgeBases {
+		updatedAt := base.UpdatedAt
+		if updatedAt.IsZero() {
+			updatedAt = now
+		}
+		_, err = tx.ExecContext(ctx, `
+			INSERT INTO platform_knowledge_bases (
+				id, name, description, category, price_cents, currency, marketplace_listed, created_at, updated_at
+			)
+			VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+			ON CONFLICT (id) DO UPDATE SET
+				name = EXCLUDED.name,
+				description = EXCLUDED.description,
+				category = EXCLUDED.category,
+				price_cents = EXCLUDED.price_cents,
+				currency = EXCLUDED.currency,
+				marketplace_listed = EXCLUDED.marketplace_listed,
+				updated_at = EXCLUDED.updated_at
+		`, base.ID, base.Name, base.Description, base.Category, base.PriceCents, base.Currency, base.MarketplaceListed, updatedAt, updatedAt)
+		if err != nil {
+			return err
+		}
+	}
+
+	for _, item := range platformKnowledgeItems {
+		updatedAt := item.UpdatedAt
+		if updatedAt.IsZero() {
+			updatedAt = now
+		}
+		_, err = tx.ExecContext(ctx, `
+			INSERT INTO platform_knowledge_items (id, type, title, content, enabled, created_at, updated_at)
+			VALUES ($1, $2, $3, $4, $5, $6, $7)
+			ON CONFLICT (id) DO UPDATE SET
+				type = EXCLUDED.type,
+				title = EXCLUDED.title,
+				content = EXCLUDED.content,
+				enabled = EXCLUDED.enabled,
+				updated_at = EXCLUDED.updated_at
+		`, item.ID, item.Type, item.Title, item.Content, item.Enabled, updatedAt, updatedAt)
+		if err != nil {
+			return err
+		}
+		if err = replacePlatformKnowledgeItemBases(ctx, tx, item.ID, item.KnowledgeBaseIDs); err != nil {
+			return err
+		}
+	}
+
+	allowedPlatformIDs := make([]string, 0, len(platforms))
+	for _, platform := range platforms {
+		allowedPlatformIDs = append(allowedPlatformIDs, platform.ID)
+	}
+	if len(allowedPlatformIDs) > 0 {
+		_, err = tx.ExecContext(ctx, `
+			DELETE FROM media_accounts
+			WHERE platform_id NOT IN (`+placeholders(len(allowedPlatformIDs))+`)
+		`, anySlice(allowedPlatformIDs)...)
+		if err != nil {
+			return err
+		}
+		_, err = tx.ExecContext(ctx, `
+			DELETE FROM media_platforms
+			WHERE id NOT IN (`+placeholders(len(allowedPlatformIDs))+`)
+		`, anySlice(allowedPlatformIDs)...)
+		if err != nil {
+			return err
+		}
+	}
+	for _, platform := range platforms {
+		credentialFields, marshalErr := json.Marshal(platform.CredentialFields)
+		if marshalErr != nil {
+			return marshalErr
+		}
+		_, err = tx.ExecContext(ctx, `
+			INSERT INTO media_platforms (
+				id, name, type, enabled, supports_article, supports_image, supports_scheduling, credential_fields, created_at, updated_at
+			)
+			VALUES ($1, $2, $3, $4, $5, $6, $7, $8::jsonb, $9, $10)
+			ON CONFLICT (id) DO UPDATE SET
+				name = EXCLUDED.name,
+				type = EXCLUDED.type,
+				enabled = EXCLUDED.enabled,
+				supports_article = EXCLUDED.supports_article,
+				supports_image = EXCLUDED.supports_image,
+				supports_scheduling = EXCLUDED.supports_scheduling,
+				credential_fields = EXCLUDED.credential_fields,
+				updated_at = EXCLUDED.updated_at
+		`, platform.ID, platform.Name, platform.Type, platform.Enabled, platform.SupportsArticle, platform.SupportsImage, platform.SupportsScheduling, string(credentialFields), now, now)
+		if err != nil {
+			return err
+		}
+	}
+
+	for _, account := range accounts {
+		credentials := map[string]string{}
+		for key, value := range account.CredentialMeta {
+			credentials[key] = value
+		}
+		credentials["loginMethod"] = account.LoginMethod
+		credentialsJSON, marshalErr := json.Marshal(credentials)
+		if marshalErr != nil {
+			return marshalErr
+		}
+		lastCheckedAt := account.LastCheckedAt
+		if lastCheckedAt.IsZero() {
+			lastCheckedAt = now
+		}
+		_, err = tx.ExecContext(ctx, `
+			INSERT INTO media_accounts (
+				id, workspace_id, platform_id, name, external_id, status, credentials, expires_at, last_checked_at, created_at, updated_at
+			)
+			VALUES ($1, $2, $3, $4, $5, $6, $7::jsonb, $8, $9, $10, $11)
+			ON CONFLICT (id) DO UPDATE SET
+				workspace_id = EXCLUDED.workspace_id,
+				platform_id = EXCLUDED.platform_id,
+				name = EXCLUDED.name,
+				external_id = EXCLUDED.external_id,
+				status = EXCLUDED.status,
+				credentials = EXCLUDED.credentials,
+				expires_at = EXCLUDED.expires_at,
+				last_checked_at = EXCLUDED.last_checked_at,
+				updated_at = EXCLUDED.updated_at
+		`, account.ID, account.WorkspaceID, account.PlatformID, account.Name, account.ExternalID, account.Status, string(credentialsJSON), account.ExpiresAt, lastCheckedAt, lastCheckedAt, now)
+		if err != nil {
+			return err
+		}
+	}
+
+	for _, content := range contents {
+		updatedAt := content.UpdatedAt
+		if updatedAt.IsZero() {
+			updatedAt = now
+		}
+		_, err = tx.ExecContext(ctx, `
+			INSERT INTO contents (
+				id, workspace_id, knowledge_base_id, title, summary, body, keywords, status, author_name, source, created_at, updated_at
+			)
+			VALUES ($1, $2, nullif($3, ''), $4, $5, $6, $7::text[], $8, $9, $10, $11, $12)
+			ON CONFLICT (id) DO UPDATE SET
+				knowledge_base_id = EXCLUDED.knowledge_base_id,
+				title = EXCLUDED.title,
+				summary = EXCLUDED.summary,
+				body = EXCLUDED.body,
+				keywords = EXCLUDED.keywords,
+				status = EXCLUDED.status,
+				author_name = EXCLUDED.author_name,
+				source = EXCLUDED.source,
+				updated_at = EXCLUDED.updated_at
+		`, content.ID, content.WorkspaceID, content.KnowledgeBaseID, content.Title, content.Summary, content.Body, pgTextArray(content.Keywords), content.Status, content.Author, content.Source, updatedAt, updatedAt)
+		if err != nil {
+			return err
+		}
+	}
+
+	for _, schedule := range schedules {
+		if err = savePublishScheduleTx(ctx, tx, schedule); err != nil {
+			return err
+		}
+	}
+
+	for _, job := range jobs {
+		if err = savePublishJobTx(ctx, tx, job); err != nil {
+			return err
+		}
+	}
+
 	err = tx.Commit()
+	return err
+}
+
+func defaultSubscriptionTier(value model.SubscriptionTier) string {
+	if value == "" {
+		return string(model.SubscriptionTierFree)
+	}
+	return string(value)
+}
+
+func defaultSubscriptionStatus(value model.SubscriptionStatus) string {
+	if value == "" {
+		return string(model.SubscriptionStatusActive)
+	}
+	return string(value)
+}
+
+func (db *DB) UpdateUserSubscription(ctx context.Context, user model.User) error {
+	if db == nil || db.conn == nil {
+		return nil
+	}
+
+	_, err := db.conn.ExecContext(ctx, `
+		UPDATE users
+		SET
+			subscription_tier = $2,
+			subscription_status = $3,
+			subscription_expires_at = $4,
+			subscription_plan_id = $5,
+			monthly_token_budget_cents = $6,
+			subscription_current_period = $7,
+			updated_at = $8
+		WHERE id = $1
+	`, user.ID,
+		defaultSubscriptionTier(user.SubscriptionTier),
+		defaultSubscriptionStatus(user.SubscriptionStatus),
+		user.SubscriptionExpiresAt,
+		defaultSubscriptionPlanID(user.SubscriptionPlanID, user.SubscriptionTier),
+		user.MonthlyTokenBudgetCents,
+		defaultBillingPeriod(user.SubscriptionCurrentPeriod, time.Now().UTC()),
+		time.Now().UTC(),
+	)
 	return err
 }
 
@@ -175,7 +431,7 @@ func (db *DB) SaveContent(ctx context.Context, item model.Content) error {
 			created_at,
 			updated_at
 		)
-		VALUES ($1, $2, nullif($3, ''), $4, $5, $6, $7, $8, $9, $10, $11, $12)
+		VALUES ($1, $2, nullif($3, ''), $4, $5, $6, $7::text[], $8, $9, $10, $11, $12)
 		ON CONFLICT (id) DO UPDATE SET
 			title = EXCLUDED.title,
 			summary = EXCLUDED.summary,
@@ -191,7 +447,7 @@ func (db *DB) SaveContent(ctx context.Context, item model.Content) error {
 		item.Title,
 		item.Summary,
 		item.Body,
-		item.Keywords,
+		pgTextArray(item.Keywords),
 		item.Status,
 		item.Author,
 		item.Source,
@@ -241,7 +497,7 @@ func (db *DB) SaveGenerationRequest(ctx context.Context, item model.GenerationRe
 		)
 		VALUES (
 			$1, $2, nullif($3, ''), nullif($4, ''), nullif($5, ''),
-			$6, $7, $8, $9,
+			$6, $7, $8, $9::text[],
 			$10::jsonb, $11, $12, $13, $14::jsonb, $15::jsonb, $16::jsonb,
 			$17, $18, $19, $20, $21, $22
 		)
@@ -253,7 +509,7 @@ func (db *DB) SaveGenerationRequest(ctx context.Context, item model.GenerationRe
 		item.Provider,
 		item.Model,
 		item.ContentType,
-		item.Keywords,
+		pgTextArray(item.Keywords),
 		prompt,
 		item.PromptVersion,
 		item.SkillID,
