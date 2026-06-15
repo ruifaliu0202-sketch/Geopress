@@ -41,6 +41,16 @@ type ListResponse<T> = {
   items: T[];
 };
 
+export class ApiRequestError extends Error {
+  status: number;
+
+  constructor(message: string, status: number) {
+    super(message);
+    this.name = 'ApiRequestError';
+    this.status = status;
+  }
+}
+
 type MeResponse = {
   user: User;
   workspaces: Workspace[];
@@ -74,7 +84,7 @@ async function request<T>(path: string, token?: string, workspaceId?: string, in
     } catch {
       errorMessage = message;
     }
-    throw new Error(errorMessage || `API request failed: ${response.status}`);
+    throw new ApiRequestError(errorMessage || `API request failed: ${response.status}`, response.status);
   }
 
   return response.json() as Promise<T>;

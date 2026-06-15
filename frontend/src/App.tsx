@@ -53,12 +53,14 @@ import DashboardOutlinedIcon from '@mui/icons-material/DashboardOutlined';
 import ExpandMoreIcon from '@mui/icons-material/ExpandMore';
 import KeyOutlinedIcon from '@mui/icons-material/KeyOutlined';
 import LoginOutlinedIcon from '@mui/icons-material/LoginOutlined';
+import LogoutOutlinedIcon from '@mui/icons-material/LogoutOutlined';
 import ManageAccountsOutlinedIcon from '@mui/icons-material/ManageAccountsOutlined';
 import PsychologyAltOutlinedIcon from '@mui/icons-material/PsychologyAltOutlined';
 import PublishOutlinedIcon from '@mui/icons-material/PublishOutlined';
 import ScheduleOutlinedIcon from '@mui/icons-material/ScheduleOutlined';
 import SettingsOutlinedIcon from '@mui/icons-material/SettingsOutlined';
 import {
+  ApiRequestError,
   completeOnboarding,
   createContent,
   createKnowledgeBase,
@@ -166,10 +168,55 @@ const contentTypeOptions = [
 const onboardingIndustries = ['本地生活', 'B2B SaaS', '教育培训', '美业医美', '电商零售', '企业服务', '个人创作者', '其他'];
 const onboardingTones = ['专业', '清晰', '克制', '亲和', '犀利', '种草感', '可信', '实用'];
 
+const authStorageKey = 'geopress.workspaceAuth';
+
+type StoredAuth = {
+  token: string;
+  user: User;
+  workspaceId: string;
+};
+
+function readStoredAuth(): StoredAuth | null {
+  try {
+    const raw = window.localStorage.getItem(authStorageKey);
+    if (!raw) {
+      return null;
+    }
+    const parsed = JSON.parse(raw) as Partial<StoredAuth>;
+    if (!parsed.token || !parsed.user || !parsed.workspaceId) {
+      return null;
+    }
+    return {
+      token: parsed.token,
+      user: parsed.user,
+      workspaceId: parsed.workspaceId,
+    };
+  } catch {
+    return null;
+  }
+}
+
+function writeStoredAuth(auth: StoredAuth) {
+  try {
+    window.localStorage.setItem(authStorageKey, JSON.stringify(auth));
+  } catch {
+    // Ignore storage failures so private-mode browsers can still use in-memory auth.
+  }
+}
+
+function clearStoredAuth() {
+  try {
+    window.localStorage.removeItem(authStorageKey);
+  } catch {
+    // Ignore storage failures.
+  }
+}
+
 function App() {
-  const [token, setToken] = useState('');
-  const [user, setUser] = useState<User | null>(null);
-  const [workspaceId, setWorkspaceId] = useState('');
+  const [initialAuth] = useState<StoredAuth | null>(() => readStoredAuth());
+  const [token, setToken] = useState(initialAuth?.token ?? '');
+  const [user, setUser] = useState<User | null>(initialAuth?.user ?? null);
+  const [workspaceId, setWorkspaceId] = useState(initialAuth?.workspaceId ?? '');
   const [activeView, setActiveView] = useState<ViewKey>('overview');
   const [workspace, setWorkspace] = useState<WorkspaceData | null>(null);
   const [loading, setLoading] = useState(false);
@@ -193,12 +240,30 @@ function App() {
     fetchWorkspace(token, workspaceId)
       .then((data) => {
         if (mounted) {
+          const nextWorkspaceId = data.workspaces.some((item) => item.id === workspaceId)
+            ? workspaceId
+            : data.workspaces[0]?.id ?? '';
           setWorkspace(data);
           setUser(data.user);
+          if (nextWorkspaceId && nextWorkspaceId !== workspaceId) {
+            setWorkspaceId(nextWorkspaceId);
+          }
+          if (nextWorkspaceId) {
+            writeStoredAuth({ token, user: data.user, workspaceId: nextWorkspaceId });
+          }
         }
       })
       .catch((err: unknown) => {
         if (mounted) {
+          if (err instanceof ApiRequestError && err.status === 401) {
+            clearStoredAuth();
+            setToken('');
+            setUser(null);
+            setWorkspaceId('');
+            setWorkspace(null);
+            setActiveView('overview');
+            return;
+          }
           setError(err instanceof Error ? err.message : '加载失败');
         }
       })
@@ -219,16 +284,31 @@ function App() {
 
   const refresh = () => setReloadKey((value) => value + 1);
   const visibleNavItems = user?.isPlatformAdmin ? [...navItems, adminNavItem] : navItems;
+  const handleLogout = () => {
+    clearStoredAuth();
+    setToken('');
+    setUser(null);
+    setWorkspaceId('');
+    setWorkspace(null);
+    setActiveView('overview');
+    setDialog(null);
+    setGenerationTrace(null);
+    setTraceDrawerOpen(false);
+  };
 
   if (!token) {
     return (
       <LoginView
         onLogin={(result) => {
+          const nextWorkspaceId = result.workspaces[0]?.id ?? '';
           setToken(result.token);
           setUser(result.user);
-          setWorkspaceId(result.workspaces[0]?.id ?? '');
+          setWorkspaceId(nextWorkspaceId);
           setWorkspace(null);
           setActiveView('overview');
+          if (nextWorkspaceId) {
+            writeStoredAuth({ token: result.token, user: result.user, workspaceId: nextWorkspaceId });
+          }
         }}
       />
     );
@@ -243,6 +323,7 @@ function App() {
         onComplete={(result) => {
           setUser(result.user);
           setWorkspace(null);
+          writeStoredAuth({ token, user: result.user, workspaceId });
           setReloadKey((value) => value + 1);
         }}
       />
@@ -311,7 +392,13 @@ function App() {
               labelId="workspace-select-label"
               label="工作区"
               value={workspaceId}
-              onChange={(event) => setWorkspaceId(String(event.target.value))}
+              onChange={(event) => {
+                const nextWorkspaceId = String(event.target.value);
+                setWorkspaceId(nextWorkspaceId);
+                if (user) {
+                  writeStoredAuth({ token, user, workspaceId: nextWorkspaceId });
+                }
+              }}
             >
               {(workspace?.workspaces ?? []).map((item) => (
                 <MenuItem key={item.id} value={item.id}>
@@ -328,6 +415,11 @@ function App() {
                 <AutorenewIcon />
               </IconButton>
             </span>
+          </Tooltip>
+          <Tooltip title="退出登录">
+            <IconButton onClick={handleLogout}>
+              <LogoutOutlinedIcon />
+            </IconButton>
           </Tooltip>
         </Toolbar>
       </AppBar>
