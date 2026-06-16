@@ -38,6 +38,7 @@ backend/
   internal/http/middleware/        Auth, tenant, CORS middleware
   internal/model/models.go         Domain models
   internal/systemconfig/           System configuration loaders/persistence adapters
+  internal/web/                    Embedded frontend static asset server and build output
   migrations/                      PostgreSQL schema migrations
 
 frontend/
@@ -58,9 +59,16 @@ docs/
   product-plan.md                  Product nodes and implementation plan
 
 scripts/
+  build-native.sh                  Builds frontend assets into backend/internal/web/dist and emits dist/geopress-api
   migrate.sh                       Migration runner
   xiaohongshu-browser-login.mjs    Playwright worker for Xiaohongshu QR login
   xiaohongshu-browser-publish.mjs  Playwright worker for Xiaohongshu browser publishing
+
+deploy/
+  backend.Dockerfile               Optional Docker backend image with Node, Chromium, Playwright, migrations
+  frontend.Dockerfile              Optional Docker frontend static image
+  nginx.conf                       Optional Docker Nginx frontend/API proxy
+  .env.example                     Optional Docker Compose environment template
 ```
 
 ## Implemented Capabilities
@@ -98,6 +106,8 @@ scripts/
 - PostgreSQL migrations for users, sessions, subscription plans, AI token usage, system settings/secrets, workspaces, knowledge bases/items, platform knowledge resources, media platforms/accounts, media account login sessions, contents/versions, generation requests, publish schedules/jobs/results, and audit logs.
 - Tenant workspace frontend is split into app shell, workspace views, workflow dialogs, common components, data tables, and utility formatters instead of keeping all workflow code in `App.tsx`.
 - Workspace console has an in-product onboarding tour with overlay, target highlighting, automatic page switching, Back/Next/Enter/ESC controls, and manual restart from the top bar. It teaches the full workflow: choose workspace, create knowledge base package, create guide item, connect Xiaohongshu, generate from keywords, create publish task, and confirm publish result.
+- Native deployment builds the Vite frontend into `backend/internal/web/dist` and embeds those assets in the Go API binary. The same backend process serves `/api/*` and the SPA frontend, with unknown non-API routes falling back to `index.html`.
+- Optional Docker Compose deployment remains available, but native single-binary deployment is the preferred deployment path for this skeleton.
 
 ## Demo Auth
 
@@ -191,6 +201,14 @@ npm run build
 npm run lint
 ```
 
+Native build:
+
+```bash
+./scripts/build-native.sh
+```
+
+This runs the frontend build, copies `frontend/dist` into `backend/internal/web/dist`, and emits `dist/geopress-api`. The generated `dist/geopress-api` and `frontend/dist` are ignored build outputs; `backend/internal/web/dist` is the embedded asset source used by Go builds.
+
 The backend defaults to `http://localhost:18080`. The frontend dev server defaults to `http://localhost:5173` and proxies `/api` to `http://localhost:18080`.
 
 Relevant environment variables:
@@ -211,6 +229,41 @@ Service startup rule for agents:
 - If the user already has backend or frontend dev servers running, prefer those for validation and do not stop them.
 - If an agent must start temporary validation services, use alternate free ports, report the ports while testing, and stop the processes before finishing the turn unless the user explicitly asks to keep them running.
 - Do not leave background dev servers running as a side effect of validation.
+- Native production runtime can run only `dist/geopress-api`; it does not need a separate frontend server. If Nginx or Caddy is used in front, it should reverse proxy all paths to the backend service for HTTPS/host handling rather than serving a separate static directory.
+
+## Deployment Guidance
+
+Preferred deployment is native single-binary:
+
+```text
+browser -> Nginx/Caddy optional HTTPS proxy -> geopress-api
+                                      /api/* -> backend handlers
+                                      /*     -> embedded frontend SPA
+```
+
+Native build and run:
+
+```bash
+./scripts/build-native.sh
+DATABASE_URL='postgres://geo_app:<password>@localhost:5432/geo?sslmode=disable' ./scripts/migrate.sh
+APP_ENV=production \
+HTTP_ADDR=127.0.0.1:18080 \
+FRONTEND_ORIGIN=https://your-domain.example \
+DATABASE_URL='postgres://geo_app:<password>@localhost:5432/geo?sslmode=disable' \
+AI_PROVIDER=mock \
+./dist/geopress-api
+```
+
+For systemd deployments, keep the binary under `/opt/geopress/geopress-api`, runtime state under `/var/lib/geopress/runtime`, and environment in `/etc/geopress/geopress.env`. Set `GEOPRESS_PROJECT_ROOT=/var/lib/geopress` so Xiaohongshu browser profiles persist under `/var/lib/geopress/runtime/browser-profiles`.
+
+If Xiaohongshu browser login or publishing is used outside Docker, the host must provide Node.js, frontend `node_modules` containing Playwright, Chromium/Chrome, and CJK fonts. Configure `GEOPRESS_NODE_BIN`, `GEOPRESS_CHROME_PATH`, and `GEOPRESS_BROWSER_HEADLESS` explicitly in production.
+
+Optional Docker Compose deployment:
+
+- `docker-compose.yml` now defaults to connecting containers to host PostgreSQL through `host.docker.internal:5432`.
+- `api` and `migrate` include `extra_hosts: host.docker.internal:host-gateway` for Linux Docker.
+- The local bundled PostgreSQL service is behind the `local-db` profile and should be treated as a development fallback.
+- Docker runtime state is persisted in the `geopress-runtime` volume.
 
 ## Xiaohongshu Browser Login Notes
 
@@ -282,22 +335,24 @@ Use a dedicated application database user instead of the PostgreSQL superuser.
 
 Recommended names:
 
-- Database: `geopress`
-- Application role: `geopress_app`
+- Database: `geo`
+- Application role: `geo_app`
 
 Recommended connection format:
 
 ```bash
-DATABASE_URL='postgres://geopress_app:<password>@localhost:5432/geopress?sslmode=disable'
+DATABASE_URL='postgres://geo_app:<password>@localhost:5432/geo?sslmode=disable'
 ```
 
 Run migrations:
 
 ```bash
-DATABASE_URL='postgres://geopress_app:<password>@localhost:5432/geopress?sslmode=disable' ./scripts/migrate.sh
+DATABASE_URL='postgres://geo_app:<password>@localhost:5432/geo?sslmode=disable' ./scripts/migrate.sh
 ```
 
 If `CREATE EXTENSION vector` requires elevated privileges, create the extension once with a PostgreSQL admin account, then run application migrations with the lower-privilege application role.
+
+For Docker containers connecting to host PostgreSQL, the host PostgreSQL service must listen on the Docker gateway address and `pg_hba.conf` must allow the active Docker bridge subnet for `geo_app`. Common local subnets include `172.17.0.0/16` and Compose-created networks such as `172.18.0.0/16`.
 
 ## AI Implementation Plan
 
@@ -326,6 +381,7 @@ Implementation notes:
 ## Frontend Boundaries
 
 - `frontend/src/App.tsx` is the tenant workspace console shell: authentication state, workspace fetch, active view routing, dialogs, AI Thinking overlay, and workspace tour wiring.
+- Production frontend assets are built by Vite and embedded in the Go backend under `backend/internal/web/dist`; do not add a separate production frontend server unless explicitly changing deployment strategy.
 - Tenant workspace feature code lives under `frontend/src/features/workspace/`.
 - Shared workspace UI lives under `frontend/src/components/`, including `AIThinkingOverlay`, `aiThinkingModel`, `OnboardingTour`, `common`, and `dataTables`.
 - `frontend/src/admin/AdminConsole.tsx` is the platform management backend.
@@ -340,6 +396,7 @@ Implementation notes:
 ## Backend Boundaries
 
 - Current handlers maintain in-memory snapshots loaded from PostgreSQL and write changes through database helper methods. This is a temporary structure for skeleton speed.
+- `internal/web` owns embedded frontend static serving. Register API routes before `web.Register(router)` so `/api/*` remains backend-only and all other unknown routes can fall back to the SPA.
 - Next persistence step should introduce `internal/repository` and `internal/service`.
 - Repository methods must always receive workspace/tenant context for tenant-scoped resources.
 - Admin-only operations must check platform-admin authorization.

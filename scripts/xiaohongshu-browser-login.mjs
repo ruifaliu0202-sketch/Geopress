@@ -16,6 +16,10 @@ const stateFile = args['state-file'] ? path.resolve(args['state-file']) : path.j
 const watchTimeoutMs = Number(args['watch-timeout-ms'] || 5 * 60 * 1000);
 const pollMs = Number(args['poll-ms'] || 1000);
 const headless = !['0', 'false', 'no'].includes(String(process.env.GEOPRESS_BROWSER_HEADLESS || 'true').toLowerCase());
+const chromiumArgs = ['--disable-blink-features=AutomationControlled'];
+if (['1', 'true', 'yes'].includes(String(process.env.GEOPRESS_CHROMIUM_NO_SANDBOX || '').toLowerCase())) {
+  chromiumArgs.push('--no-sandbox', '--disable-setuid-sandbox');
+}
 
 const playwright = await importPlaywright();
 await mkdir(profileDir, { recursive: true });
@@ -25,7 +29,7 @@ const context = await playwright.chromium.launchPersistentContext(profileDir, {
   headless,
   viewport: { width: 1280, height: 900 },
   locale: 'zh-CN',
-  args: ['--disable-blink-features=AutomationControlled'],
+  args: chromiumArgs,
 });
 
 try {

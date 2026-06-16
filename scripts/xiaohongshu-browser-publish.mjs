@@ -15,6 +15,10 @@ const chromePath = args['chrome-path'] || undefined;
 const headless = !['0', 'false', 'no'].includes(String(process.env.GEOPRESS_BROWSER_HEADLESS || 'true').toLowerCase());
 const publishUrl = args['publish-url'] || 'https://creator.xiaohongshu.com/publish/publish?from=homepage&target=article';
 const screenshotDir = path.resolve(args['screenshot-dir'] || path.join(scriptDir, '..', 'runtime'));
+const chromiumArgs = ['--disable-blink-features=AutomationControlled'];
+if (['1', 'true', 'yes'].includes(String(process.env.GEOPRESS_CHROMIUM_NO_SANDBOX || '').toLowerCase())) {
+  chromiumArgs.push('--no-sandbox', '--disable-setuid-sandbox');
+}
 
 if (publishMode !== 'long_article') {
   throw new Error(`Unsupported publish mode: ${publishMode}`);
@@ -29,7 +33,7 @@ const context = await playwright.chromium.launchPersistentContext(profileDir, {
   headless,
   viewport: { width: 1440, height: 1000 },
   locale: 'zh-CN',
-  args: ['--disable-blink-features=AutomationControlled'],
+  args: chromiumArgs,
 });
 
 let page;

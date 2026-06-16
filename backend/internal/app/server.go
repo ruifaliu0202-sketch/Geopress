@@ -11,6 +11,7 @@ import (
 	"geopress/backend/internal/http/handler"
 	"geopress/backend/internal/http/middleware"
 	"geopress/backend/internal/systemconfig"
+	"geopress/backend/internal/web"
 
 	"github.com/gin-gonic/gin"
 )
@@ -62,6 +63,7 @@ func NewServerWithError(cfg config.Config) (*gin.Engine, error) {
 		return nil, err
 	}
 	workspaceHandler.Register(api, middleware.AuthWithDatabase(db))
+	web.Register(router)
 
 	return router, nil
 }

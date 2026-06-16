@@ -9,6 +9,8 @@ dist/
 *.test
 coverage.out
 runtime/
+!backend/internal/web/dist/
+!backend/internal/web/dist/**
 
 # Node
 node_modules/
