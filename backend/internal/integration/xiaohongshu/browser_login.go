@@ -67,22 +67,24 @@ type BrowserLoginCompleteResult struct {
 }
 
 type PlaywrightBrowserLoginService struct {
-	NodeBin       string
-	ScriptPath    string
-	ChromePath    string
-	LoginURL      string
-	QRSelector    string
-	ActionTimeout time.Duration
+	NodeBin             string
+	ScriptPath          string
+	ChromePath          string
+	LoginURL            string
+	QRSelector          string
+	ActionTimeout       time.Duration
+	InitialStateTimeout time.Duration
 }
 
 func NewPlaywrightBrowserLoginService() PlaywrightBrowserLoginService {
 	return PlaywrightBrowserLoginService{
-		NodeBin:       defaultNodeBin(),
-		ScriptPath:    defaultBrowserLoginScriptPath(),
-		ChromePath:    defaultChromePath(),
-		LoginURL:      DefaultLoginURL,
-		QRSelector:    DefaultLoginSelector,
-		ActionTimeout: 30 * time.Second,
+		NodeBin:             defaultNodeBin(),
+		ScriptPath:          defaultBrowserLoginScriptPath(),
+		ChromePath:          defaultChromePath(),
+		LoginURL:            DefaultLoginURL,
+		QRSelector:          DefaultLoginSelector,
+		ActionTimeout:       defaultDurationSeconds("GEOPRESS_XHS_BROWSER_LOGIN_ACTION_TIMEOUT_SECONDS", 60*time.Second),
+		InitialStateTimeout: defaultDurationSeconds("GEOPRESS_XHS_BROWSER_LOGIN_INITIAL_TIMEOUT_SECONDS", 90*time.Second),
 	}
 }
 
@@ -225,7 +227,11 @@ func (s PlaywrightBrowserLoginService) startWatcher(ctx context.Context, args ..
 		return nil, fmt.Errorf("start playwright browser watcher failed: %s", message)
 	}
 
-	line, err := readFirstLine(stdout, 20*time.Second)
+	timeout := s.InitialStateTimeout
+	if timeout <= 0 {
+		timeout = 90 * time.Second
+	}
+	line, err := readFirstLine(stdout, timeout)
 	if err != nil {
 		_ = cmd.Process.Kill()
 		message := strings.TrimSpace(stderr.String())
@@ -372,6 +378,22 @@ func defaultChromePath() string {
 		}
 	}
 	return ""
+}
+
+func defaultDurationSeconds(envKey string, fallback time.Duration) time.Duration {
+	value := strings.TrimSpace(os.Getenv(envKey))
+	if value == "" {
+		return fallback
+	}
+	duration, err := time.ParseDuration(value)
+	if err == nil {
+		return duration
+	}
+	var seconds int
+	if _, err := fmt.Sscanf(value, "%d", &seconds); err == nil && seconds > 0 {
+		return time.Duration(seconds) * time.Second
+	}
+	return fallback
 }
 
 func defaultBrowserLoginScriptPath() string {
