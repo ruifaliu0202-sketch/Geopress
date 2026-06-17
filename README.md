@@ -157,10 +157,6 @@ sudo apt-get install -y chromium fonts-noto-cjk fonts-noto-color-emoji
 ```bash
 sudo useradd --system --create-home --shell /usr/sbin/nologin geopress
 sudo mkdir -p /opt/geopress /var/lib/geopress/runtime /etc/geopress
-sudo cp dist/geopress-api /opt/geopress/geopress-api
-sudo mkdir -p /opt/geopress/backend
-sudo cp -R scripts /opt/geopress/
-sudo cp -R backend/migrations /opt/geopress/backend/
 sudo chown -R geopress:geopress /opt/geopress /var/lib/geopress
 ```
 
@@ -176,9 +172,10 @@ OPENAI_API_KEY=
 OPENAI_BASE_URL=https://api.openai.com/v1
 OPENAI_MODEL=gpt-5.5
 AI_REQUEST_TIMEOUT_SECONDS=45
-GEOPRESS_PROJECT_ROOT=/var/lib/geopress
+GEOPRESS_INSTALL_ROOT=/opt/geopress
+GEOPRESS_RUNTIME_ROOT=/var/lib/geopress
 GEOPRESS_NODE_BIN=/usr/bin/node
-GEOPRESS_CHROME_PATH=/usr/bin/chromium
+GEOPRESS_CHROME_PATH=/usr/bin/google-chrome
 GEOPRESS_BROWSER_HEADLESS=true
 ```
 
@@ -202,12 +199,57 @@ RestartSec=3
 WantedBy=multi-user.target
 ```
 
-启动：
+首次安装或代码更新后，使用部署脚本完成构建、安装、迁移：
+
+```bash
+RESTART_SERVICE=false ./scripts/deploy-native.sh
+```
+
+确认文件安装完成后，启动服务：
 
 ```bash
 sudo systemctl daemon-reload
 sudo systemctl enable --now geopress
 sudo systemctl status geopress
+```
+
+后续代码更新时，直接执行：
+
+```bash
+./scripts/deploy-native.sh
+```
+
+如果服务器上的 `/home/.../Geopress` 本身就是 git checkout，也可以让脚本先拉取最新代码：
+
+```bash
+GIT_PULL=true ./scripts/deploy-native.sh
+```
+
+后续更新脚本默认行为：
+
+```text
+构建前端和 Go 二进制
+安装 geopress-api 到 /opt/geopress/geopress-api
+同步 scripts 和 backend/migrations 到 /opt/geopress
+读取 /etc/geopress/geopress.env 里的 DATABASE_URL
+运行数据库迁移
+重启 geopress.service
+```
+
+常用覆盖项：
+
+```bash
+INSTALL_DIR=/opt/geopress \
+DATA_DIR=/var/lib/geopress \
+ENV_FILE=/etc/geopress/geopress.env \
+SERVICE_NAME=geopress \
+./scripts/deploy-native.sh
+```
+
+只安装文件、不跑迁移、不重启服务：
+
+```bash
+RUN_MIGRATIONS=false RESTART_SERVICE=false ./scripts/deploy-native.sh
 ```
 
 ### 5. 可选 Nginx HTTPS 反代

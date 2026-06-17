@@ -378,7 +378,7 @@ func defaultBrowserLoginScriptPath() string {
 	if value := strings.TrimSpace(os.Getenv("GEOPRESS_XHS_BROWSER_LOGIN_SCRIPT")); value != "" {
 		return value
 	}
-	root := projectRoot()
+	root := installRoot()
 	if root == "" {
 		return filepath.Join("scripts", "xiaohongshu-browser-login.mjs")
 	}
@@ -386,17 +386,47 @@ func defaultBrowserLoginScriptPath() string {
 }
 
 func RuntimeBrowserProfilePath(workspaceID, accountID string) string {
-	root := projectRoot()
+	root := runtimeRoot()
 	if root == "" {
 		return filepath.Join("runtime", "browser-profiles", workspaceID, accountID)
 	}
 	return filepath.Join(root, "runtime", "browser-profiles", workspaceID, accountID)
 }
 
-func projectRoot() string {
+func installRoot() string {
+	if value := strings.TrimSpace(os.Getenv("GEOPRESS_INSTALL_ROOT")); value != "" {
+		return value
+	}
+	if value := strings.TrimSpace(os.Getenv("GEOPRESS_PROJECT_ROOT")); value != "" {
+		if hasScriptPath(value) {
+			return value
+		}
+	}
+	if hasScriptPath("/opt/geopress") {
+		return "/opt/geopress"
+	}
+	return workingRoot()
+}
+
+func runtimeRoot() string {
+	if value := strings.TrimSpace(os.Getenv("GEOPRESS_RUNTIME_ROOT")); value != "" {
+		return value
+	}
 	if value := strings.TrimSpace(os.Getenv("GEOPRESS_PROJECT_ROOT")); value != "" {
 		return value
 	}
+	return workingRoot()
+}
+
+func hasScriptPath(root string) bool {
+	if strings.TrimSpace(root) == "" {
+		return false
+	}
+	_, err := os.Stat(filepath.Join(root, "scripts", "xiaohongshu-browser-login.mjs"))
+	return err == nil
+}
+
+func workingRoot() string {
 	wd, err := os.Getwd()
 	if err != nil {
 		return ""

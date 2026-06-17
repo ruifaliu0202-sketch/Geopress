@@ -213,7 +213,7 @@ func defaultBrowserPublishScriptPath() string {
 	if value := strings.TrimSpace(os.Getenv("GEOPRESS_XHS_BROWSER_PUBLISH_SCRIPT")); value != "" {
 		return value
 	}
-	root := projectRoot()
+	root := installRoot()
 	if root == "" {
 		return filepath.Join("scripts", "xiaohongshu-browser-publish.mjs")
 	}
