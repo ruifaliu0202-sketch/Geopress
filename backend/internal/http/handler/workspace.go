@@ -123,11 +123,22 @@ type createPlatformKnowledgeItemRequest struct {
 }
 
 type createMediaAccountRequest struct {
-	PlatformID  string `json:"platformId"`
-	Name        string `json:"name"`
-	ExternalID  string `json:"externalId"`
-	LoginMethod string `json:"loginMethod"`
-	PhoneNumber string `json:"phoneNumber"`
+	PlatformID          string         `json:"platformId"`
+	Name                string         `json:"name"`
+	ExternalID          string         `json:"externalId"`
+	LoginMethod         string         `json:"loginMethod"`
+	PhoneNumber         string         `json:"phoneNumber"`
+	AccountGroup        string         `json:"accountGroup"`
+	OwnershipType       string         `json:"ownershipType"`
+	OperatingRole       string         `json:"operatingRole"`
+	Persona             string         `json:"persona"`
+	Positioning         string         `json:"positioning"`
+	TargetAudience      string         `json:"targetAudience"`
+	ContentCategories   []string       `json:"contentCategories"`
+	HealthNotes         string         `json:"healthNotes"`
+	AuthorizationScopes []string       `json:"authorizationScopes"`
+	SyncEnabled         bool           `json:"syncEnabled"`
+	MatrixMetadata      map[string]any `json:"matrixMetadata"`
 }
 
 type startMediaAccountBrowserLoginRequest struct {
@@ -144,6 +155,7 @@ type generateContentRequest struct {
 	KnowledgeBaseID  string   `json:"knowledgeBaseId"`
 	KnowledgeBaseIDs []string `json:"knowledgeBaseIds"`
 	PublishFormatID  string   `json:"publishFormatId"`
+	MediaAccountID   string   `json:"mediaAccountId"`
 }
 
 type generateContentResponse struct {
@@ -152,12 +164,14 @@ type generateContentResponse struct {
 }
 
 type createContentRequest struct {
-	Title           string   `json:"title"`
-	Summary         string   `json:"summary"`
-	Body            string   `json:"body"`
-	Author          string   `json:"author"`
-	KnowledgeBaseID string   `json:"knowledgeBaseId"`
-	Keywords        []string `json:"keywords"`
+	Title                    string         `json:"title"`
+	Summary                  string         `json:"summary"`
+	Body                     string         `json:"body"`
+	Author                   string         `json:"author"`
+	KnowledgeBaseID          string         `json:"knowledgeBaseId"`
+	Keywords                 []string       `json:"keywords"`
+	AttributedMediaAccountID string         `json:"attributedMediaAccountId"`
+	AttributionMetadata      map[string]any `json:"attributionMetadata"`
 }
 
 type createPublishScheduleRequest struct {
@@ -439,54 +453,83 @@ func NewWorkspaceHandlerWithError(db *database.DB, aiConfig *ai.RuntimeConfig) (
 		},
 		accounts: []model.MediaAccount{
 			{
-				ID:             "acc_xhs_acme",
-				WorkspaceID:    "wks_acme",
-				PlatformID:     "plt_xiaohongshu",
-				Name:           "Acme 小红书",
-				ExternalID:     "AcmeGrowth",
-				LoginMethod:    "qr",
-				CredentialMeta: map[string]string{},
-				Status:         "pending_login",
-				LastCheckedAt:  now.Add(-90 * time.Minute),
+				ID:                  "acc_xhs_acme",
+				WorkspaceID:         "wks_acme",
+				PlatformID:          "plt_xiaohongshu",
+				Name:                "Acme 小红书",
+				ExternalID:          "AcmeGrowth",
+				LoginMethod:         "qr",
+				CredentialMeta:      map[string]string{},
+				Status:              "pending_login",
+				AccountGroup:        "品牌主账号",
+				OwnershipType:       "owned",
+				OperatingRole:       "primary",
+				Persona:             "B2B SaaS 增长顾问",
+				Positioning:         "增长内容与运营方法论",
+				TargetAudience:      "市场负责人、内容运营、创始人",
+				ContentCategories:   []string{"SaaS", "增长", "内容营销"},
+				HealthStatus:        "needs_authorization",
+				AuthorizationScopes: []string{"profile:read"},
+				LastSyncStatus:      "never_synced",
+				MatrixMetadata:      map[string]any{},
+				LastCheckedAt:       now.Add(-90 * time.Minute),
 			},
 			{
-				ID:             "acc_xhs_personal",
-				WorkspaceID:    "wks_personal",
-				PlatformID:     "plt_xiaohongshu",
-				Name:           "Ava 小红书",
-				ExternalID:     "AvaCreator",
-				LoginMethod:    "qr",
-				CredentialMeta: map[string]string{},
-				Status:         "pending_login",
-				LastCheckedAt:  now.Add(-3 * time.Hour),
+				ID:                  "acc_xhs_personal",
+				WorkspaceID:         "wks_personal",
+				PlatformID:          "plt_xiaohongshu",
+				Name:                "Ava 小红书",
+				ExternalID:          "AvaCreator",
+				LoginMethod:         "qr",
+				CredentialMeta:      map[string]string{},
+				Status:              "pending_login",
+				AccountGroup:        "个人账号",
+				OwnershipType:       "owned",
+				OperatingRole:       "primary",
+				Persona:             "独立顾问",
+				Positioning:         "个人服务与方法沉淀",
+				TargetAudience:      "独立顾问、早期创业者",
+				ContentCategories:   []string{"独立顾问", "内容飞轮"},
+				HealthStatus:        "needs_authorization",
+				AuthorizationScopes: []string{"profile:read"},
+				LastSyncStatus:      "never_synced",
+				MatrixMetadata:      map[string]any{},
+				LastCheckedAt:       now.Add(-3 * time.Hour),
 			},
 		},
 		contents: []model.Content{
 			{
-				ID:              "cnt_1001",
-				WorkspaceID:     "wks_acme",
-				KnowledgeBaseID: "kb_brand",
-				Title:           "Q3 SaaS 增长内容规划",
-				Summary:         "围绕获客、转化和留存的内容发布计划。",
-				Body:            "这是一篇示例草稿，用于展示内容生命周期和排程发布。",
-				Keywords:        []string{"SaaS", "增长", "内容营销"},
-				Status:          model.ContentScheduled,
-				Author:          "Ava Chen",
-				Source:          "mock_ai",
-				UpdatedAt:       now.Add(-2 * time.Hour),
+				ID:                       "cnt_1001",
+				WorkspaceID:              "wks_acme",
+				KnowledgeBaseID:          "kb_brand",
+				AttributedMediaAccountID: "acc_xhs_acme",
+				Title:                    "Q3 SaaS 增长内容规划",
+				Summary:                  "围绕获客、转化和留存的内容发布计划。",
+				Body:                     "这是一篇示例草稿，用于展示内容生命周期和排程发布。",
+				Keywords:                 []string{"SaaS", "增长", "内容营销"},
+				Status:                   model.ContentScheduled,
+				Author:                   "Ava Chen",
+				Source:                   "mock_ai",
+				AttributionMetadata: map[string]any{
+					"mediaAccountId":    "acc_xhs_acme",
+					"attributionSource": "seed_demo",
+					"attributedAt":      now.Add(-2 * time.Hour).Format(time.RFC3339),
+				},
+				UpdatedAt: now.Add(-2 * time.Hour),
 			},
 			{
-				ID:              "cnt_2001",
-				WorkspaceID:     "wks_personal",
-				KnowledgeBaseID: "kb_personal",
-				Title:           "独立顾问如何搭建内容飞轮",
-				Summary:         "用稳定输出和案例沉淀提升获客效率。",
-				Body:            "这是一篇个人工作区示例内容。",
-				Keywords:        []string{"独立顾问", "内容飞轮"},
-				Status:          model.ContentDraft,
-				Author:          "Ava Chen",
-				Source:          "manual",
-				UpdatedAt:       now.Add(-20 * time.Hour),
+				ID:                  "cnt_2001",
+				WorkspaceID:         "wks_personal",
+				KnowledgeBaseID:     "kb_personal",
+				Title:               "独立顾问如何搭建内容飞轮",
+				Summary:             "用稳定输出和案例沉淀提升获客效率。",
+				Body:                "这是一篇个人工作区示例内容。",
+				Keywords:            []string{"独立顾问", "内容飞轮"},
+				Status:              model.ContentDraft,
+				Author:              "Ava Chen",
+				Source:              "manual",
+				AttributionMetadata: map[string]any{},
+				UpdatedAt:           now.Add(-20 * time.Hour),
 			},
 		},
 		schedules: []model.PublishSchedule{
@@ -512,6 +555,13 @@ func NewWorkspaceHandlerWithError(db *database.DB, aiConfig *ai.RuntimeConfig) (
 				Status:         model.PublishJobManual,
 				ScheduledAt:    now.Add(48 * time.Hour),
 				LastMessage:    "小红书发布需要登录浏览器确认。",
+				AttributionMetadata: map[string]any{
+					"contentId":         "cnt_1001",
+					"mediaAccountId":    "acc_xhs_acme",
+					"scheduleId":        "sch_1001",
+					"attributionSource": "seed_demo",
+					"attributedAt":      now.Add(-24 * time.Hour).Format(time.RFC3339),
+				},
 			},
 		},
 	}
@@ -546,6 +596,11 @@ func (h *WorkspaceHandler) Register(router gin.IRouter, auth gin.HandlerFunc) {
 	protected.GET("/media-platforms", h.ListMediaPlatforms)
 	protected.GET("/media-accounts", h.ListMediaAccounts)
 	protected.POST("/media-accounts", h.CreateMediaAccount)
+	protected.GET("/media-account-matrix", h.ListMediaAccountMatrix)
+	protected.GET("/media-account-matrix/:accountId", h.GetMediaAccountMatrixItem)
+	protected.GET("/media-account-matrix/:accountId/metric-snapshots", h.ListMediaAccountMetricSnapshots)
+	protected.GET("/content-metrics", h.ListContentMetrics)
+	protected.POST("/media-account-matrix/:accountId/sync-jobs", h.CreateMediaAccountSyncJob)
 	protected.POST("/media-accounts/:accountId/browser-login/start", h.StartMediaAccountBrowserLogin)
 	protected.POST("/media-accounts/:accountId/browser-login/complete", h.CompleteMediaAccountBrowserLogin)
 	protected.GET("/contents", h.ListContents)
@@ -1268,6 +1323,7 @@ func (h *WorkspaceHandler) CreateMediaAccount(c *gin.Context) {
 		return
 	}
 
+	// 平台能力先从账号绑定方式收敛：小红书等 QR 平台不接受普通用户绕过受支持的授权路径。
 	phoneNumber, phoneOK := cleanPhoneNumber(req.PhoneNumber)
 	if !phoneOK {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "phoneNumber is invalid"})
@@ -1313,15 +1369,28 @@ func (h *WorkspaceHandler) CreateMediaAccount(c *gin.Context) {
 	}
 
 	account := model.MediaAccount{
-		ID:             fmt.Sprintf("acc_%d", now.UnixNano()),
-		WorkspaceID:    workspaceID,
-		PlatformID:     platformID,
-		Name:           name,
-		ExternalID:     strings.TrimSpace(req.ExternalID),
-		LoginMethod:    loginMethod,
-		CredentialMeta: credentialMeta,
-		Status:         status,
-		LastCheckedAt:  now,
+		ID:                  fmt.Sprintf("acc_%d", now.UnixNano()),
+		WorkspaceID:         workspaceID,
+		PlatformID:          platformID,
+		Name:                name,
+		ExternalID:          strings.TrimSpace(req.ExternalID),
+		LoginMethod:         loginMethod,
+		CredentialMeta:      credentialMeta,
+		Status:              status,
+		AccountGroup:        strings.TrimSpace(req.AccountGroup),
+		OwnershipType:       defaultString(strings.TrimSpace(req.OwnershipType), "owned"),
+		OperatingRole:       defaultString(strings.TrimSpace(req.OperatingRole), "primary"),
+		Persona:             strings.TrimSpace(req.Persona),
+		Positioning:         strings.TrimSpace(req.Positioning),
+		TargetAudience:      strings.TrimSpace(req.TargetAudience),
+		ContentCategories:   uniqueStrings(cleanKeywords(req.ContentCategories)),
+		HealthStatus:        mediaAccountHealthFromStatus(status),
+		HealthNotes:         strings.TrimSpace(req.HealthNotes),
+		AuthorizationScopes: uniqueStrings(cleanKeywords(req.AuthorizationScopes)),
+		SyncEnabled:         req.SyncEnabled,
+		LastSyncStatus:      "never_synced",
+		MatrixMetadata:      nonNilMap(req.MatrixMetadata),
+		LastCheckedAt:       now,
 	}
 
 	if err := h.saveMediaAccount(c.Request.Context(), account); err != nil {
@@ -1419,6 +1488,7 @@ func (h *WorkspaceHandler) startMediaAccountBrowserLogin(c *gin.Context) {
 			account.Status = "connected"
 			account.CredentialMeta["qrLoginCompletedAt"] = loginResult.StartedAt.Format(time.RFC3339)
 		}
+		account.HealthStatus = mediaAccountHealthFromStatus(account.Status)
 		account.LastCheckedAt = now
 		updated = *account
 		break
@@ -1552,6 +1622,7 @@ func (h *WorkspaceHandler) completeMediaAccountBrowserLogin(c *gin.Context) {
 		account.CredentialMeta["browserLoginStateFile"] = loginResult.StateFile
 		account.CredentialMeta["loginSessionId"] = sessionID
 		account.Status = "connected"
+		account.HealthStatus = mediaAccountHealthFromStatus(account.Status)
 		account.LastCheckedAt = now
 		updated = *account
 		break
@@ -1603,20 +1674,32 @@ func (h *WorkspaceHandler) CreateContent(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "title is required"})
 		return
 	}
+	attributedAccountID := strings.TrimSpace(req.AttributedMediaAccountID)
+	if attributedAccountID != "" {
+		h.mu.RLock()
+		accountOK := hasMediaAccount(h.accounts, workspaceID, attributedAccountID)
+		h.mu.RUnlock()
+		if !accountOK {
+			c.JSON(http.StatusNotFound, gin.H{"error": "attributed media account not found"})
+			return
+		}
+	}
 
 	now := time.Now().UTC()
 	content := model.Content{
-		ID:              fmt.Sprintf("cnt_%d", now.UnixNano()),
-		WorkspaceID:     workspaceID,
-		KnowledgeBaseID: strings.TrimSpace(req.KnowledgeBaseID),
-		Title:           title,
-		Summary:         strings.TrimSpace(req.Summary),
-		Body:            strings.TrimSpace(req.Body),
-		Keywords:        cleanKeywords(req.Keywords),
-		Status:          model.ContentDraft,
-		Author:          defaultString(strings.TrimSpace(req.Author), "Current User"),
-		Source:          "manual",
-		UpdatedAt:       now,
+		ID:                       fmt.Sprintf("cnt_%d", now.UnixNano()),
+		WorkspaceID:              workspaceID,
+		KnowledgeBaseID:          strings.TrimSpace(req.KnowledgeBaseID),
+		AttributedMediaAccountID: attributedAccountID,
+		Title:                    title,
+		Summary:                  strings.TrimSpace(req.Summary),
+		Body:                     strings.TrimSpace(req.Body),
+		Keywords:                 cleanKeywords(req.Keywords),
+		Status:                   model.ContentDraft,
+		Author:                   defaultString(strings.TrimSpace(req.Author), "Current User"),
+		Source:                   "manual",
+		AttributionMetadata:      contentAttributionMetadata(nonNilMap(req.AttributionMetadata), attributedAccountID, "manual_create", now),
+		UpdatedAt:                now,
 	}
 
 	if err := h.saveContent(c.Request.Context(), content); err != nil {
@@ -1655,6 +1738,7 @@ func (h *WorkspaceHandler) GenerateContent(c *gin.Context) {
 
 	now := time.Now().UTC()
 	knowledgeBaseIDs := cleanKnowledgeBaseIDs(req.KnowledgeBaseID, req.KnowledgeBaseIDs)
+	attributedAccountID := strings.TrimSpace(req.MediaAccountID)
 	contentType, ok := ai.NormalizeContentType(publishFormatOrContentType(req.PublishFormatID, req.ContentType, ai.FormatGenericArticle))
 	if !ok {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "unsupported content type"})
@@ -1673,6 +1757,11 @@ func (h *WorkspaceHandler) GenerateContent(c *gin.Context) {
 	if !h.hasKnowledgeBasesLocked(workspaceID, knowledgeBaseIDs) {
 		h.mu.RUnlock()
 		c.JSON(http.StatusNotFound, gin.H{"error": "knowledge base not found"})
+		return
+	}
+	if attributedAccountID != "" && !hasMediaAccount(h.accounts, workspaceID, attributedAccountID) {
+		h.mu.RUnlock()
+		c.JSON(http.StatusNotFound, gin.H{"error": "media account not found"})
 		return
 	}
 	workspace, _ := h.workspaceByID(workspaceID)
@@ -1802,17 +1891,23 @@ func (h *WorkspaceHandler) GenerateContent(c *gin.Context) {
 	}
 
 	content := model.Content{
-		ID:              fmt.Sprintf("cnt_%d", now.UnixNano()),
-		WorkspaceID:     workspaceID,
-		KnowledgeBaseID: primaryKnowledgeBaseID,
-		Title:           strings.TrimSpace(response.Draft.Title),
-		Summary:         strings.TrimSpace(response.Draft.Summary),
-		Body:            strings.TrimSpace(response.Draft.Body),
-		Keywords:        cleanKeywords(response.Draft.Keywords),
-		Status:          model.ContentDraft,
-		Author:          "AI Writer",
-		Source:          "ai_" + defaultString(response.Provider, "mock") + ":" + publishFormat.ID,
-		UpdatedAt:       now,
+		ID:                       fmt.Sprintf("cnt_%d", now.UnixNano()),
+		WorkspaceID:              workspaceID,
+		KnowledgeBaseID:          primaryKnowledgeBaseID,
+		AttributedMediaAccountID: attributedAccountID,
+		Title:                    strings.TrimSpace(response.Draft.Title),
+		Summary:                  strings.TrimSpace(response.Draft.Summary),
+		Body:                     strings.TrimSpace(response.Draft.Body),
+		Keywords:                 cleanKeywords(response.Draft.Keywords),
+		Status:                   model.ContentDraft,
+		Author:                   "AI Writer",
+		Source:                   "ai_" + defaultString(response.Provider, "mock") + ":" + publishFormat.ID,
+		AttributionMetadata: contentAttributionMetadata(map[string]any{
+			"publishFormatId": publishFormat.ID,
+			"writingSkillId":  skill.ID,
+			"contentType":     skill.ContentType,
+		}, attributedAccountID, "ai_generation", now),
+		UpdatedAt: now,
 	}
 
 	if err := h.saveContent(c.Request.Context(), content); err != nil {
@@ -1903,16 +1998,19 @@ func (h *WorkspaceHandler) CreatePublishSchedule(c *gin.Context) {
 	}
 
 	h.mu.RLock()
-	if !hasContent(h.contents, workspaceID, contentID) {
+	content, contentOK := h.contentByID(workspaceID, contentID)
+	account, accountOK := h.mediaAccountByID(workspaceID, accountID)
+	if !contentOK {
 		h.mu.RUnlock()
 		c.JSON(http.StatusNotFound, gin.H{"error": "content not found"})
 		return
 	}
-	if !hasMediaAccount(h.accounts, workspaceID, accountID) {
+	if !accountOK {
 		h.mu.RUnlock()
 		c.JSON(http.StatusNotFound, gin.H{"error": "media account not found"})
 		return
 	}
+	platform, _ := h.mediaPlatformByID(account.PlatformID)
 	h.mu.RUnlock()
 
 	schedule := model.PublishSchedule{
@@ -1927,14 +2025,15 @@ func (h *WorkspaceHandler) CreatePublishSchedule(c *gin.Context) {
 		CreatedAt:      now,
 	}
 	job := model.PublishJob{
-		ID:             fmt.Sprintf("job_%d", now.UnixNano()),
-		WorkspaceID:    workspaceID,
-		ScheduleID:     schedule.ID,
-		ContentID:      contentID,
-		MediaAccountID: accountID,
-		Status:         model.PublishJobQueued,
-		ScheduledAt:    schedule.NextRunAt,
-		LastMessage:    "Waiting for scheduled publish window.",
+		ID:                  fmt.Sprintf("job_%d", now.UnixNano()),
+		WorkspaceID:         workspaceID,
+		ScheduleID:          schedule.ID,
+		ContentID:           content.ID,
+		MediaAccountID:      account.ID,
+		Status:              model.PublishJobQueued,
+		ScheduledAt:         schedule.NextRunAt,
+		LastMessage:         "Waiting for scheduled publish window.",
+		AttributionMetadata: publishAttributionMetadata(content.ID, account.ID, platform.ID, schedule.ID, "publish_schedule", now),
 	}
 
 	if err := h.savePublishScheduleWithJob(c.Request.Context(), schedule, job); err != nil {
@@ -2026,16 +2125,19 @@ func (h *WorkspaceHandler) PreparePublish(c *gin.Context) {
 	}
 
 	job := model.PublishJob{
-		ID:             fmt.Sprintf("job_%d", now.UnixNano()),
-		WorkspaceID:    workspaceID,
-		ContentID:      content.ID,
-		MediaAccountID: account.ID,
-		Status:         model.PublishJobManual,
-		ScheduledAt:    now,
-		LastMessage:    "小红书长文发布内容已生成，等待确认后通过浏览器发布。",
+		ID:                  fmt.Sprintf("job_%d", now.UnixNano()),
+		WorkspaceID:         workspaceID,
+		ContentID:           content.ID,
+		MediaAccountID:      account.ID,
+		Status:              model.PublishJobManual,
+		ScheduledAt:         now,
+		LastMessage:         "小红书长文发布内容已生成，等待确认后通过浏览器发布。",
+		AttributionMetadata: publishAttributionMetadata(content.ID, account.ID, platform.ID, "", "publish_prepare", now),
 	}
 	scheduledContent := content
 	scheduledContent.Status = model.ContentScheduled
+	scheduledContent.AttributedMediaAccountID = account.ID
+	scheduledContent.AttributionMetadata = contentAttributionMetadata(scheduledContent.AttributionMetadata, account.ID, "publish_prepare", now)
 	scheduledContent.UpdatedAt = now
 
 	if err := h.savePublishJobWithContent(c.Request.Context(), job, scheduledContent); err != nil {
@@ -2188,9 +2290,19 @@ func (h *WorkspaceHandler) ConfirmPublishJob(c *gin.Context) {
 		job.Status = model.PublishJobSucceeded
 		job.ExternalURL = externalURL
 		job.LastMessage = defaultString(strings.TrimSpace(req.Message), "已人工确认发布完成。")
+		job.AttributionMetadata = mergeAnyMaps(job.AttributionMetadata, map[string]any{
+			"externalUrl":       externalURL,
+			"attributionSource": "manual_publish_confirm",
+			"attributedAt":      time.Now().UTC().Format(time.RFC3339),
+		})
 		h.updateContentStatusLocked(workspaceID, job.ContentID, model.ContentPublished)
 		updatedJob = *job
 		updatedContent, _ = h.contentByID(workspaceID, job.ContentID)
+		if updatedContent.ID != "" {
+			updatedContent.AttributedMediaAccountID = job.MediaAccountID
+			updatedContent.AttributionMetadata = contentAttributionMetadata(updatedContent.AttributionMetadata, job.MediaAccountID, "manual_publish_confirm", time.Now().UTC())
+			h.replaceContentLocked(updatedContent)
+		}
 		break
 	}
 	h.mu.Unlock()
@@ -2249,6 +2361,15 @@ func (h *WorkspaceHandler) runPublish(
 	if err != nil {
 		h.mu.Lock()
 		failedJob := h.updateJobStatusLocked(workspaceID, jobID, model.PublishJobFailed, "", err.Error())
+		if failedJob.ID != "" {
+			failedJob.AttributionMetadata = mergeAnyMaps(failedJob.AttributionMetadata, map[string]any{
+				"attributionSource": "publish_run_failed",
+				"platformId":        platform.ID,
+				"errorMessage":      err.Error(),
+				"attributedAt":      time.Now().UTC().Format(time.RFC3339),
+			})
+			h.replacePublishJobLocked(failedJob)
+		}
 		h.mu.Unlock()
 		if failedJob.ID != "" {
 			if saveErr := h.savePublishJob(ctx, failedJob); saveErr != nil {
@@ -2271,10 +2392,26 @@ func (h *WorkspaceHandler) runPublish(
 
 	h.mu.Lock()
 	job := h.updateJobStatusLocked(workspaceID, jobID, status, result.ExternalURL, message)
+	if job.ID != "" {
+		job.AttributionMetadata = mergeAnyMaps(job.AttributionMetadata, map[string]any{
+			"platformId":        platform.ID,
+			"externalUrl":       result.ExternalURL,
+			"externalId":        result.ExternalID,
+			"publishResult":     result.Status,
+			"attributionSource": "publish_run",
+			"attributedAt":      time.Now().UTC().Format(time.RFC3339),
+		})
+		h.replacePublishJobLocked(job)
+	}
 	var publishedContent model.Content
 	if publishResultSucceeded(result) {
 		h.updateContentStatusLocked(workspaceID, job.ContentID, model.ContentPublished)
 		publishedContent, _ = h.contentByID(workspaceID, job.ContentID)
+		if publishedContent.ID != "" {
+			publishedContent.AttributedMediaAccountID = account.ID
+			publishedContent.AttributionMetadata = contentAttributionMetadata(publishedContent.AttributionMetadata, account.ID, "publish_run", time.Now().UTC())
+			h.replaceContentLocked(publishedContent)
+		}
 	}
 	h.mu.Unlock()
 	if job.ID != "" {
@@ -3085,6 +3222,24 @@ func (h *WorkspaceHandler) updateJobStatusLocked(workspaceID, jobID string, stat
 	return model.PublishJob{}
 }
 
+func (h *WorkspaceHandler) replacePublishJobLocked(updated model.PublishJob) {
+	for index := range h.jobs {
+		if h.jobs[index].WorkspaceID == updated.WorkspaceID && h.jobs[index].ID == updated.ID {
+			h.jobs[index] = updated
+			return
+		}
+	}
+}
+
+func (h *WorkspaceHandler) replaceContentLocked(updated model.Content) {
+	for index := range h.contents {
+		if h.contents[index].WorkspaceID == updated.WorkspaceID && h.contents[index].ID == updated.ID {
+			h.contents[index] = updated
+			return
+		}
+	}
+}
+
 func (h *WorkspaceHandler) bumpKnowledgeBaseCount(workspaceID, knowledgeBaseID string, delta int) {
 	for index := range h.knowledgeBases {
 		item := &h.knowledgeBases[index]
@@ -3680,6 +3835,67 @@ func cleanKeywords(values []string) []string {
 		}
 	}
 	return keywords
+}
+
+func nonNilMap(value map[string]any) map[string]any {
+	if value == nil {
+		return map[string]any{}
+	}
+	return value
+}
+
+func mergeAnyMaps(base map[string]any, overrides map[string]any) map[string]any {
+	merged := map[string]any{}
+	for key, value := range base {
+		merged[key] = value
+	}
+	for key, value := range overrides {
+		if value == nil {
+			continue
+		}
+		if text, ok := value.(string); ok && text == "" {
+			continue
+		}
+		merged[key] = value
+	}
+	return merged
+}
+
+func contentAttributionMetadata(base map[string]any, mediaAccountID string, source string, now time.Time) map[string]any {
+	metadata := mergeAnyMaps(base, map[string]any{
+		"mediaAccountId":    mediaAccountID,
+		"attributionSource": source,
+		"attributedAt":      now.UTC().Format(time.RFC3339),
+	})
+	if mediaAccountID == "" {
+		delete(metadata, "mediaAccountId")
+	}
+	return metadata
+}
+
+func publishAttributionMetadata(contentID string, accountID string, platformID string, scheduleID string, source string, now time.Time) map[string]any {
+	// 内容表现回流依赖这些稳定键做最小归因，不绑定具体平台抓取实现。
+	return mergeAnyMaps(map[string]any{}, map[string]any{
+		"contentId":         contentID,
+		"mediaAccountId":    accountID,
+		"platformId":        platformID,
+		"scheduleId":        scheduleID,
+		"attributionSource": source,
+		"attributedAt":      now.UTC().Format(time.RFC3339),
+	})
+}
+
+func mediaAccountHealthFromStatus(status string) string {
+	switch status {
+	case "connected":
+		return "healthy"
+	case "pending_login", "qr_waiting":
+		return "needs_authorization"
+	case "expired":
+		return "expired"
+	default:
+		return "unknown"
+	}
 }
 
 func extractKeywordsFromMarkdownPrompt(value string) []string {

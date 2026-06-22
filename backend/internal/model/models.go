@@ -196,16 +196,109 @@ func (platform *MediaPlatform) EnsureCapabilities() {
 }
 
 type MediaAccount struct {
-	ID             string            `json:"id"`
-	WorkspaceID    string            `json:"workspaceId"`
-	PlatformID     string            `json:"platformId"`
-	Name           string            `json:"name"`
-	ExternalID     string            `json:"externalId"`
-	LoginMethod    string            `json:"loginMethod"`
-	CredentialMeta map[string]string `json:"credentialMeta,omitempty"`
-	Status         string            `json:"status"`
-	ExpiresAt      *time.Time        `json:"expiresAt,omitempty"`
-	LastCheckedAt  time.Time         `json:"lastCheckedAt"`
+	ID                  string            `json:"id"`
+	WorkspaceID         string            `json:"workspaceId"`
+	PlatformID          string            `json:"platformId"`
+	Name                string            `json:"name"`
+	ExternalID          string            `json:"externalId"`
+	LoginMethod         string            `json:"loginMethod"`
+	CredentialMeta      map[string]string `json:"credentialMeta,omitempty"`
+	Status              string            `json:"status"`
+	AccountGroup        string            `json:"accountGroup"`
+	OwnershipType       string            `json:"ownershipType"`
+	OperatingRole       string            `json:"operatingRole"`
+	Persona             string            `json:"persona"`
+	Positioning         string            `json:"positioning"`
+	TargetAudience      string            `json:"targetAudience"`
+	ContentCategories   []string          `json:"contentCategories"`
+	HealthStatus        string            `json:"healthStatus"`
+	HealthNotes         string            `json:"healthNotes"`
+	AuthorizationScopes []string          `json:"authorizationScopes"`
+	SyncEnabled         bool              `json:"syncEnabled"`
+	LastSyncJobID       string            `json:"lastSyncJobId"`
+	LastSyncStatus      string            `json:"lastSyncStatus"`
+	LastSyncMessage     string            `json:"lastSyncMessage"`
+	LastProfileSyncedAt *time.Time        `json:"lastProfileSyncedAt,omitempty"`
+	LastMetricsSyncedAt *time.Time        `json:"lastMetricsSyncedAt,omitempty"`
+	NextSyncAt          *time.Time        `json:"nextSyncAt,omitempty"`
+	MatrixMetadata      map[string]any    `json:"matrixMetadata"`
+	ExpiresAt           *time.Time        `json:"expiresAt,omitempty"`
+	LastCheckedAt       time.Time         `json:"lastCheckedAt"`
+}
+
+type MediaAccountMetricSnapshot struct {
+	ID                 string         `json:"id"`
+	WorkspaceID        string         `json:"workspaceId"`
+	MediaAccountID     string         `json:"mediaAccountId"`
+	PlatformID         string         `json:"platformId"`
+	Source             string         `json:"source"`
+	CapturedAt         time.Time      `json:"capturedAt"`
+	FollowerCount      int            `json:"followerCount"`
+	FollowingCount     int            `json:"followingCount"`
+	ContentCount       int            `json:"contentCount"`
+	TotalLikeCount     int            `json:"totalLikeCount"`
+	TotalFavoriteCount int            `json:"totalFavoriteCount"`
+	TotalCommentCount  int            `json:"totalCommentCount"`
+	TotalShareCount    int            `json:"totalShareCount"`
+	EngagementRate     float64        `json:"engagementRate"`
+	AudienceSignals    map[string]any `json:"audienceSignals"`
+	Profile            map[string]any `json:"profile"`
+	RawMetrics         map[string]any `json:"rawMetrics"`
+	FreshnessStatus    string         `json:"freshnessStatus"`
+	CreatedAt          time.Time      `json:"createdAt"`
+}
+
+type ContentMetric struct {
+	ID                  string         `json:"id"`
+	WorkspaceID         string         `json:"workspaceId"`
+	ContentID           string         `json:"contentId"`
+	PublishJobID        string         `json:"publishJobId"`
+	MediaAccountID      string         `json:"mediaAccountId"`
+	PlatformID          string         `json:"platformId"`
+	ExternalContentID   string         `json:"externalContentId"`
+	ExternalURL         string         `json:"externalUrl"`
+	MetricDate          string         `json:"metricDate"`
+	CapturedAt          time.Time      `json:"capturedAt"`
+	ImpressionCount     int            `json:"impressionCount"`
+	ViewCount           int            `json:"viewCount"`
+	LikeCount           int            `json:"likeCount"`
+	CommentCount        int            `json:"commentCount"`
+	ShareCount          int            `json:"shareCount"`
+	FavoriteCount       int            `json:"favoriteCount"`
+	ClickCount          int            `json:"clickCount"`
+	EngagementRate      float64        `json:"engagementRate"`
+	AttributionMetadata map[string]any `json:"attributionMetadata"`
+	RawMetrics          map[string]any `json:"rawMetrics"`
+	CreatedAt           time.Time      `json:"createdAt"`
+}
+
+type MediaAccountSyncJob struct {
+	ID                string         `json:"id"`
+	WorkspaceID       string         `json:"workspaceId"`
+	MediaAccountID    string         `json:"mediaAccountId"`
+	PlatformID        string         `json:"platformId"`
+	RequestedByUserID string         `json:"requestedByUserId"`
+	SyncType          string         `json:"syncType"`
+	Status            string         `json:"status"`
+	RequestedAt       time.Time      `json:"requestedAt"`
+	StartedAt         *time.Time     `json:"startedAt,omitempty"`
+	FinishedAt        *time.Time     `json:"finishedAt,omitempty"`
+	IdempotencyKey    string         `json:"idempotencyKey"`
+	RequestPayload    map[string]any `json:"requestPayload"`
+	ResultSummary     map[string]any `json:"resultSummary"`
+	ErrorMessage      string         `json:"errorMessage"`
+	CreatedAt         time.Time      `json:"createdAt"`
+	UpdatedAt         time.Time      `json:"updatedAt"`
+}
+
+type MediaAccountMatrixItem struct {
+	Account            MediaAccount                `json:"account"`
+	Platform           MediaPlatform               `json:"platform"`
+	LatestSnapshot     *MediaAccountMetricSnapshot `json:"latestSnapshot,omitempty"`
+	LatestSyncJob      *MediaAccountSyncJob        `json:"latestSyncJob,omitempty"`
+	ContentMetricCount int                         `json:"contentMetricCount"`
+	DataFreshness      string                      `json:"dataFreshness"`
+	Warnings           []string                    `json:"warnings"`
 }
 
 type MediaAccountLoginSession struct {
@@ -235,17 +328,19 @@ const (
 )
 
 type Content struct {
-	ID              string        `json:"id"`
-	WorkspaceID     string        `json:"workspaceId"`
-	KnowledgeBaseID string        `json:"knowledgeBaseId"`
-	Title           string        `json:"title"`
-	Summary         string        `json:"summary"`
-	Body            string        `json:"body"`
-	Keywords        []string      `json:"keywords"`
-	Status          ContentStatus `json:"status"`
-	Author          string        `json:"author"`
-	Source          string        `json:"source"`
-	UpdatedAt       time.Time     `json:"updatedAt"`
+	ID                       string         `json:"id"`
+	WorkspaceID              string         `json:"workspaceId"`
+	KnowledgeBaseID          string         `json:"knowledgeBaseId"`
+	AttributedMediaAccountID string         `json:"attributedMediaAccountId"`
+	Title                    string         `json:"title"`
+	Summary                  string         `json:"summary"`
+	Body                     string         `json:"body"`
+	Keywords                 []string       `json:"keywords"`
+	Status                   ContentStatus  `json:"status"`
+	Author                   string         `json:"author"`
+	Source                   string         `json:"source"`
+	AttributionMetadata      map[string]any `json:"attributionMetadata"`
+	UpdatedAt                time.Time      `json:"updatedAt"`
 }
 
 type GenerationRequest struct {
@@ -306,13 +401,14 @@ const (
 )
 
 type PublishJob struct {
-	ID             string           `json:"id"`
-	WorkspaceID    string           `json:"workspaceId"`
-	ScheduleID     string           `json:"scheduleId"`
-	ContentID      string           `json:"contentId"`
-	MediaAccountID string           `json:"mediaAccountId"`
-	Status         PublishJobStatus `json:"status"`
-	ScheduledAt    time.Time        `json:"scheduledAt"`
-	ExternalURL    string           `json:"externalUrl"`
-	LastMessage    string           `json:"lastMessage"`
+	ID                  string           `json:"id"`
+	WorkspaceID         string           `json:"workspaceId"`
+	ScheduleID          string           `json:"scheduleId"`
+	ContentID           string           `json:"contentId"`
+	MediaAccountID      string           `json:"mediaAccountId"`
+	Status              PublishJobStatus `json:"status"`
+	ScheduledAt         time.Time        `json:"scheduledAt"`
+	ExternalURL         string           `json:"externalUrl"`
+	LastMessage         string           `json:"lastMessage"`
+	AttributionMetadata map[string]any   `json:"attributionMetadata"`
 }

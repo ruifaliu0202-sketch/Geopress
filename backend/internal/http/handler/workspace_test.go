@@ -53,6 +53,110 @@ func TestCreateXiaohongshuMediaAccountWithQRLogin(t *testing.T) {
 	if account.Status != "pending_login" {
 		t.Fatalf("status = %q, want pending_login", account.Status)
 	}
+	if account.HealthStatus != "needs_authorization" {
+		t.Fatalf("health status = %q, want needs_authorization", account.HealthStatus)
+	}
+	if account.ContentCategories == nil {
+		t.Fatal("contentCategories should be an empty array, not null")
+	}
+	if account.MatrixMetadata == nil {
+		t.Fatal("matrixMetadata should be an empty object, not null")
+	}
+}
+
+func TestMediaAccountMatrixListsAccounts(t *testing.T) {
+	router := testWorkspaceRouter()
+	req := httptest.NewRequest(http.MethodGet, "/api/media-account-matrix", nil)
+	req.Header.Set("Authorization", "Bearer demo-token")
+	req.Header.Set("X-Workspace-ID", "wks_acme")
+
+	rec := httptest.NewRecorder()
+	router.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d, body = %s", rec.Code, http.StatusOK, rec.Body.String())
+	}
+
+	var response struct {
+		Items []model.MediaAccountMatrixItem `json:"items"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &response); err != nil {
+		t.Fatalf("unmarshal response: %v", err)
+	}
+	if response.Items == nil {
+		t.Fatal("items should be an empty array or populated array, not null")
+	}
+	if len(response.Items) == 0 {
+		t.Fatal("expected demo matrix account")
+	}
+	if response.Items[0].Account.ID == "" || response.Items[0].Platform.ID == "" {
+		t.Fatalf("unexpected matrix item: %#v", response.Items[0])
+	}
+	if response.Items[0].Warnings == nil {
+		t.Fatal("warnings should be an empty array or populated array, not null")
+	}
+}
+
+func TestMediaMatrixMetricListsReturnEmptyArrays(t *testing.T) {
+	router := testWorkspaceRouter()
+	for _, path := range []string{
+		"/api/media-account-matrix/acc_xhs_acme/metric-snapshots",
+		"/api/content-metrics?mediaAccountId=acc_xhs_acme",
+	} {
+		req := httptest.NewRequest(http.MethodGet, path, nil)
+		req.Header.Set("Authorization", "Bearer demo-token")
+		req.Header.Set("X-Workspace-ID", "wks_acme")
+
+		rec := httptest.NewRecorder()
+		router.ServeHTTP(rec, req)
+		if rec.Code != http.StatusOK {
+			t.Fatalf("%s status = %d, want %d, body = %s", path, rec.Code, http.StatusOK, rec.Body.String())
+		}
+
+		var response struct {
+			Items []json.RawMessage `json:"items"`
+		}
+		if err := json.Unmarshal(rec.Body.Bytes(), &response); err != nil {
+			t.Fatalf("unmarshal %s response: %v", path, err)
+		}
+		if response.Items == nil {
+			t.Fatalf("%s items should be [], not null", path)
+		}
+		if len(response.Items) != 0 {
+			t.Fatalf("%s items = %d, want 0", path, len(response.Items))
+		}
+	}
+}
+
+func TestCreateMediaAccountSyncJobRecordsQueuedRequest(t *testing.T) {
+	router := testWorkspaceRouter()
+	body := bytes.NewBufferString(`{
+		"syncType": "metrics",
+		"idempotencyKey": "test-sync-key",
+		"requestPayload": {"reason": "manual"}
+	}`)
+	req := httptest.NewRequest(http.MethodPost, "/api/media-account-matrix/acc_xhs_acme/sync-jobs", body)
+	req.Header.Set("Authorization", "Bearer demo-token")
+	req.Header.Set("X-Workspace-ID", "wks_acme")
+	req.Header.Set("Content-Type", "application/json")
+
+	rec := httptest.NewRecorder()
+	router.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusAccepted {
+		t.Fatalf("status = %d, want %d, body = %s", rec.Code, http.StatusAccepted, rec.Body.String())
+	}
+
+	var job model.MediaAccountSyncJob
+	if err := json.Unmarshal(rec.Body.Bytes(), &job); err != nil {
+		t.Fatalf("unmarshal response: %v", err)
+	}
+	if job.Status != "queued" || job.IdempotencyKey != "test-sync-key" {
+		t.Fatalf("unexpected sync job: %#v", job)
+	}
+	if job.RequestPayload == nil || job.ResultSummary == nil {
+		t.Fatalf("sync job maps should not be nil: %#v", job)
+	}
 }
 
 func TestDemoPasswordHashMatchesDocumentedPassword(t *testing.T) {

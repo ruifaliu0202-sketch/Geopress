@@ -541,7 +541,34 @@ func (db *DB) loadMediaPlatforms(ctx context.Context) ([]model.MediaPlatform, er
 
 func (db *DB) loadMediaAccounts(ctx context.Context) ([]model.MediaAccount, error) {
 	rows, err := db.conn.QueryContext(ctx, `
-		SELECT id, workspace_id, platform_id, name, external_id, status, credentials::text, expires_at, COALESCE(last_checked_at, updated_at)
+		SELECT
+			id,
+			workspace_id,
+			platform_id,
+			name,
+			external_id,
+			status,
+			credentials::text,
+			expires_at,
+			COALESCE(last_checked_at, updated_at),
+			account_group,
+			ownership_type,
+			operating_role,
+			persona,
+			positioning,
+			target_audience,
+			to_json(content_categories)::text,
+			health_status,
+			health_notes,
+			to_json(authorization_scopes)::text,
+			sync_enabled,
+			last_sync_job_id,
+			last_sync_status,
+			last_sync_message,
+			last_profile_synced_at,
+			last_metrics_synced_at,
+			next_sync_at,
+			matrix_metadata::text
 		FROM media_accounts
 		ORDER BY updated_at DESC, id ASC
 	`)
@@ -555,18 +582,44 @@ func (db *DB) loadMediaAccounts(ctx context.Context) ([]model.MediaAccount, erro
 		var item model.MediaAccount
 		var credentials string
 		var expiresAt sql.NullTime
-		if err := rows.Scan(&item.ID, &item.WorkspaceID, &item.PlatformID, &item.Name, &item.ExternalID, &item.Status, &credentials, &expiresAt, &item.LastCheckedAt); err != nil {
+		var contentCategories string
+		var authorizationScopes string
+		var matrixMetadata string
+		var lastProfileSyncedAt sql.NullTime
+		var lastMetricsSyncedAt sql.NullTime
+		var nextSyncAt sql.NullTime
+		if err := rows.Scan(
+			&item.ID,
+			&item.WorkspaceID,
+			&item.PlatformID,
+			&item.Name,
+			&item.ExternalID,
+			&item.Status,
+			&credentials,
+			&expiresAt,
+			&item.LastCheckedAt,
+			&item.AccountGroup,
+			&item.OwnershipType,
+			&item.OperatingRole,
+			&item.Persona,
+			&item.Positioning,
+			&item.TargetAudience,
+			&contentCategories,
+			&item.HealthStatus,
+			&item.HealthNotes,
+			&authorizationScopes,
+			&item.SyncEnabled,
+			&item.LastSyncJobID,
+			&item.LastSyncStatus,
+			&item.LastSyncMessage,
+			&lastProfileSyncedAt,
+			&lastMetricsSyncedAt,
+			&nextSyncAt,
+			&matrixMetadata,
+		); err != nil {
 			return nil, err
 		}
-		item.CredentialMeta = decodeStringMap(credentials)
-		item.LoginMethod = item.CredentialMeta["loginMethod"]
-		if item.LoginMethod == "" {
-			item.LoginMethod = "manual"
-		}
-		delete(item.CredentialMeta, "loginMethod")
-		if expiresAt.Valid {
-			item.ExpiresAt = &expiresAt.Time
-		}
+		hydrateMediaAccountFromStorage(&item, credentials, contentCategories, authorizationScopes, matrixMetadata, expiresAt, lastProfileSyncedAt, lastMetricsSyncedAt, nextSyncAt)
 		items = append(items, item)
 	}
 	return items, rows.Err()
@@ -574,7 +627,20 @@ func (db *DB) loadMediaAccounts(ctx context.Context) ([]model.MediaAccount, erro
 
 func (db *DB) loadContents(ctx context.Context) ([]model.Content, error) {
 	rows, err := db.conn.QueryContext(ctx, `
-		SELECT id, workspace_id, COALESCE(knowledge_base_id, ''), title, summary, body, to_json(keywords)::text, status, author_name, source, updated_at
+		SELECT
+			id,
+			workspace_id,
+			COALESCE(knowledge_base_id, ''),
+			COALESCE(attributed_media_account_id, ''),
+			title,
+			summary,
+			body,
+			to_json(keywords)::text,
+			status,
+			author_name,
+			source,
+			metadata::text,
+			updated_at
 		FROM contents
 		ORDER BY updated_at DESC, id ASC
 	`)
@@ -588,11 +654,13 @@ func (db *DB) loadContents(ctx context.Context) ([]model.Content, error) {
 		var item model.Content
 		var keywords string
 		var status string
-		if err := rows.Scan(&item.ID, &item.WorkspaceID, &item.KnowledgeBaseID, &item.Title, &item.Summary, &item.Body, &keywords, &status, &item.Author, &item.Source, &item.UpdatedAt); err != nil {
+		var metadata string
+		if err := rows.Scan(&item.ID, &item.WorkspaceID, &item.KnowledgeBaseID, &item.AttributedMediaAccountID, &item.Title, &item.Summary, &item.Body, &keywords, &status, &item.Author, &item.Source, &metadata, &item.UpdatedAt); err != nil {
 			return nil, err
 		}
 		item.Keywords = decodeStringSlice(keywords)
 		item.Status = model.ContentStatus(status)
+		item.AttributionMetadata = decodeAnyMap(metadata)
 		items = append(items, item)
 	}
 	return items, rows.Err()
@@ -624,7 +692,7 @@ func (db *DB) loadPublishSchedules(ctx context.Context) ([]model.PublishSchedule
 
 func (db *DB) loadPublishJobs(ctx context.Context) ([]model.PublishJob, error) {
 	rows, err := db.conn.QueryContext(ctx, `
-		SELECT id, workspace_id, COALESCE(schedule_id, ''), COALESCE(content_id, ''), media_account_id, status, scheduled_at, external_url, last_message
+		SELECT id, workspace_id, COALESCE(schedule_id, ''), COALESCE(content_id, ''), media_account_id, status, scheduled_at, external_url, last_message, attribution_metadata::text
 		FROM publish_jobs
 		ORDER BY scheduled_at DESC, id ASC
 	`)
@@ -637,10 +705,12 @@ func (db *DB) loadPublishJobs(ctx context.Context) ([]model.PublishJob, error) {
 	for rows.Next() {
 		var item model.PublishJob
 		var status string
-		if err := rows.Scan(&item.ID, &item.WorkspaceID, &item.ScheduleID, &item.ContentID, &item.MediaAccountID, &status, &item.ScheduledAt, &item.ExternalURL, &item.LastMessage); err != nil {
+		var attributionMetadata string
+		if err := rows.Scan(&item.ID, &item.WorkspaceID, &item.ScheduleID, &item.ContentID, &item.MediaAccountID, &status, &item.ScheduledAt, &item.ExternalURL, &item.LastMessage, &attributionMetadata); err != nil {
 			return nil, err
 		}
 		item.Status = model.PublishJobStatus(status)
+		item.AttributionMetadata = decodeAnyMap(attributionMetadata)
 		items = append(items, item)
 	}
 	return items, rows.Err()
@@ -1064,15 +1134,23 @@ func (db *DB) SaveMediaAccount(ctx context.Context, item model.MediaAccount) err
 	if err != nil {
 		return err
 	}
+	matrixMetadata, err := jsonText(item.MatrixMetadata)
+	if err != nil {
+		return err
+	}
 	lastCheckedAt := item.LastCheckedAt
 	if lastCheckedAt.IsZero() {
 		lastCheckedAt = time.Now().UTC()
 	}
 	_, err = db.conn.ExecContext(ctx, `
 		INSERT INTO media_accounts (
-			id, workspace_id, platform_id, name, external_id, status, credentials, expires_at, last_checked_at, created_at, updated_at
+			id, workspace_id, platform_id, name, external_id, status, credentials, expires_at, last_checked_at,
+			account_group, ownership_type, operating_role, persona, positioning, target_audience,
+			content_categories, health_status, health_notes, authorization_scopes, sync_enabled,
+			last_sync_job_id, last_sync_status, last_sync_message, last_profile_synced_at, last_metrics_synced_at,
+			next_sync_at, matrix_metadata, created_at, updated_at
 		)
-		VALUES ($1, $2, $3, $4, $5, $6, $7::jsonb, $8, $9, $10, $11)
+		VALUES ($1, $2, $3, $4, $5, $6, $7::jsonb, $8, $9, $10, $11, $12, $13, $14, $15, $16::text[], $17, $18, $19::text[], $20, $21, $22, $23, $24, $25, $26, $27::jsonb, $28, $29)
 		ON CONFLICT (id) DO UPDATE SET
 			workspace_id = EXCLUDED.workspace_id,
 			platform_id = EXCLUDED.platform_id,
@@ -1082,8 +1160,55 @@ func (db *DB) SaveMediaAccount(ctx context.Context, item model.MediaAccount) err
 			credentials = EXCLUDED.credentials,
 			expires_at = EXCLUDED.expires_at,
 			last_checked_at = EXCLUDED.last_checked_at,
+			account_group = EXCLUDED.account_group,
+			ownership_type = EXCLUDED.ownership_type,
+			operating_role = EXCLUDED.operating_role,
+			persona = EXCLUDED.persona,
+			positioning = EXCLUDED.positioning,
+			target_audience = EXCLUDED.target_audience,
+			content_categories = EXCLUDED.content_categories,
+			health_status = EXCLUDED.health_status,
+			health_notes = EXCLUDED.health_notes,
+			authorization_scopes = EXCLUDED.authorization_scopes,
+			sync_enabled = EXCLUDED.sync_enabled,
+			last_sync_job_id = EXCLUDED.last_sync_job_id,
+			last_sync_status = EXCLUDED.last_sync_status,
+			last_sync_message = EXCLUDED.last_sync_message,
+			last_profile_synced_at = EXCLUDED.last_profile_synced_at,
+			last_metrics_synced_at = EXCLUDED.last_metrics_synced_at,
+			next_sync_at = EXCLUDED.next_sync_at,
+			matrix_metadata = EXCLUDED.matrix_metadata,
 			updated_at = EXCLUDED.updated_at
-	`, item.ID, item.WorkspaceID, item.PlatformID, item.Name, item.ExternalID, item.Status, string(credentialsJSON), item.ExpiresAt, lastCheckedAt, lastCheckedAt, time.Now().UTC())
+	`, item.ID,
+		item.WorkspaceID,
+		item.PlatformID,
+		item.Name,
+		item.ExternalID,
+		item.Status,
+		string(credentialsJSON),
+		item.ExpiresAt,
+		lastCheckedAt,
+		item.AccountGroup,
+		defaultString(item.OwnershipType, "owned"),
+		defaultString(item.OperatingRole, "primary"),
+		item.Persona,
+		item.Positioning,
+		item.TargetAudience,
+		pgTextArray(item.ContentCategories),
+		defaultString(item.HealthStatus, mediaAccountHealthFromStatus(item.Status)),
+		item.HealthNotes,
+		pgTextArray(item.AuthorizationScopes),
+		item.SyncEnabled,
+		item.LastSyncJobID,
+		item.LastSyncStatus,
+		item.LastSyncMessage,
+		item.LastProfileSyncedAt,
+		item.LastMetricsSyncedAt,
+		item.NextSyncAt,
+		matrixMetadata,
+		lastCheckedAt,
+		time.Now().UTC(),
+	)
 	return err
 }
 
@@ -1120,11 +1245,15 @@ func (db *DB) SavePublishJob(ctx context.Context, item model.PublishJob) error {
 	if scheduledAt.IsZero() {
 		scheduledAt = time.Now().UTC()
 	}
-	_, err := db.conn.ExecContext(ctx, `
+	attributionMetadata, err := jsonText(publishJobAttributionMetadata(item))
+	if err != nil {
+		return err
+	}
+	_, err = db.conn.ExecContext(ctx, `
 		INSERT INTO publish_jobs (
-			id, workspace_id, schedule_id, content_id, media_account_id, status, scheduled_at, external_url, idempotency_key, last_message, created_at, updated_at
+			id, workspace_id, schedule_id, content_id, media_account_id, status, scheduled_at, external_url, idempotency_key, last_message, attribution_metadata, created_at, updated_at
 		)
-		VALUES ($1, $2, nullif($3, ''), nullif($4, ''), $5, $6, $7, $8, $9, $10, $11, $12)
+		VALUES ($1, $2, nullif($3, ''), nullif($4, ''), $5, $6, $7, $8, $9, $10, $11::jsonb, $12, $13)
 		ON CONFLICT (id) DO UPDATE SET
 			schedule_id = EXCLUDED.schedule_id,
 			content_id = EXCLUDED.content_id,
@@ -1133,8 +1262,9 @@ func (db *DB) SavePublishJob(ctx context.Context, item model.PublishJob) error {
 			scheduled_at = EXCLUDED.scheduled_at,
 			external_url = EXCLUDED.external_url,
 			last_message = EXCLUDED.last_message,
+			attribution_metadata = EXCLUDED.attribution_metadata,
 			updated_at = EXCLUDED.updated_at
-	`, item.ID, item.WorkspaceID, item.ScheduleID, item.ContentID, item.MediaAccountID, item.Status, scheduledAt, item.ExternalURL, item.ID, item.LastMessage, scheduledAt, time.Now().UTC())
+	`, item.ID, item.WorkspaceID, item.ScheduleID, item.ContentID, item.MediaAccountID, item.Status, scheduledAt, item.ExternalURL, item.ID, item.LastMessage, attributionMetadata, scheduledAt, time.Now().UTC())
 	return err
 }
 
@@ -1183,11 +1313,16 @@ func saveContentTx(ctx context.Context, tx *sql.Tx, item model.Content) error {
 	if updatedAt.IsZero() {
 		updatedAt = time.Now().UTC()
 	}
-	_, err := tx.ExecContext(ctx, `
+	attributionMetadata, err := jsonText(item.AttributionMetadata)
+	if err != nil {
+		return err
+	}
+	_, err = tx.ExecContext(ctx, `
 		INSERT INTO contents (
 			id,
 			workspace_id,
 			knowledge_base_id,
+			attributed_media_account_id,
 			title,
 			summary,
 			body,
@@ -1195,12 +1330,14 @@ func saveContentTx(ctx context.Context, tx *sql.Tx, item model.Content) error {
 			status,
 			author_name,
 			source,
+			metadata,
 			created_at,
 			updated_at
 		)
-		VALUES ($1, $2, nullif($3, ''), $4, $5, $6, $7::text[], $8, $9, $10, $11, $12)
+		VALUES ($1, $2, nullif($3, ''), nullif($4, ''), $5, $6, $7, $8::text[], $9, $10, $11, $12::jsonb, $13, $14)
 		ON CONFLICT (id) DO UPDATE SET
 			knowledge_base_id = EXCLUDED.knowledge_base_id,
+			attributed_media_account_id = EXCLUDED.attributed_media_account_id,
 			title = EXCLUDED.title,
 			summary = EXCLUDED.summary,
 			body = EXCLUDED.body,
@@ -1208,10 +1345,12 @@ func saveContentTx(ctx context.Context, tx *sql.Tx, item model.Content) error {
 			status = EXCLUDED.status,
 			author_name = EXCLUDED.author_name,
 			source = EXCLUDED.source,
+			metadata = EXCLUDED.metadata,
 			updated_at = EXCLUDED.updated_at
 	`, item.ID,
 		item.WorkspaceID,
 		item.KnowledgeBaseID,
+		item.AttributedMediaAccountID,
 		item.Title,
 		item.Summary,
 		item.Body,
@@ -1219,6 +1358,7 @@ func saveContentTx(ctx context.Context, tx *sql.Tx, item model.Content) error {
 		item.Status,
 		item.Author,
 		item.Source,
+		attributionMetadata,
 		updatedAt,
 		updatedAt,
 	)
@@ -1284,11 +1424,15 @@ func savePublishJobTx(ctx context.Context, tx *sql.Tx, item model.PublishJob) er
 	if scheduledAt.IsZero() {
 		scheduledAt = time.Now().UTC()
 	}
-	_, err := tx.ExecContext(ctx, `
+	attributionMetadata, err := jsonText(publishJobAttributionMetadata(item))
+	if err != nil {
+		return err
+	}
+	_, err = tx.ExecContext(ctx, `
 		INSERT INTO publish_jobs (
-			id, workspace_id, schedule_id, content_id, media_account_id, status, scheduled_at, external_url, idempotency_key, last_message, created_at, updated_at
+			id, workspace_id, schedule_id, content_id, media_account_id, status, scheduled_at, external_url, idempotency_key, last_message, attribution_metadata, created_at, updated_at
 		)
-		VALUES ($1, $2, nullif($3, ''), nullif($4, ''), $5, $6, $7, $8, $9, $10, $11, $12)
+		VALUES ($1, $2, nullif($3, ''), nullif($4, ''), $5, $6, $7, $8, $9, $10, $11::jsonb, $12, $13)
 		ON CONFLICT (id) DO UPDATE SET
 			schedule_id = EXCLUDED.schedule_id,
 			content_id = EXCLUDED.content_id,
@@ -1297,9 +1441,27 @@ func savePublishJobTx(ctx context.Context, tx *sql.Tx, item model.PublishJob) er
 			scheduled_at = EXCLUDED.scheduled_at,
 			external_url = EXCLUDED.external_url,
 			last_message = EXCLUDED.last_message,
+			attribution_metadata = EXCLUDED.attribution_metadata,
 			updated_at = EXCLUDED.updated_at
-	`, item.ID, item.WorkspaceID, item.ScheduleID, item.ContentID, item.MediaAccountID, item.Status, scheduledAt, item.ExternalURL, item.ID, item.LastMessage, scheduledAt, time.Now().UTC())
+	`, item.ID, item.WorkspaceID, item.ScheduleID, item.ContentID, item.MediaAccountID, item.Status, scheduledAt, item.ExternalURL, item.ID, item.LastMessage, attributionMetadata, scheduledAt, time.Now().UTC())
 	return err
+}
+
+func publishJobAttributionMetadata(item model.PublishJob) map[string]any {
+	metadata := nonNilAnyMap(item.AttributionMetadata)
+	if _, ok := metadata["contentId"]; !ok && item.ContentID != "" {
+		metadata["contentId"] = item.ContentID
+	}
+	if _, ok := metadata["mediaAccountId"]; !ok && item.MediaAccountID != "" {
+		metadata["mediaAccountId"] = item.MediaAccountID
+	}
+	if _, ok := metadata["scheduleId"]; !ok && item.ScheduleID != "" {
+		metadata["scheduleId"] = item.ScheduleID
+	}
+	if _, ok := metadata["attributionSource"]; !ok {
+		metadata["attributionSource"] = "publish_job"
+	}
+	return metadata
 }
 
 func defaultTime(value time.Time) time.Time {
