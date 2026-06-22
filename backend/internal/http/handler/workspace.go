@@ -68,6 +68,14 @@ type WorkspaceHandler struct {
 	skillEntitlements         []model.WorkspaceSkillEntitlement
 	skillUsageMetrics         []model.SkillPackageUsageMetric
 	skillRevenueMetrics       []model.SkillPackageRevenueMetric
+	brandAssets               []model.BrandAsset
+	brandGuardrails           []model.BrandGuardrail
+	approvalWorkflows         []model.ApprovalWorkflow
+	approvalTasks             []model.ApprovalTask
+	complianceChecks          []model.ComplianceCheck
+	agencyClientRelations     []model.AgencyClientRelation
+	reportPackages            []model.ReportPackage
+	strategyRecommendations   []model.StrategyRecommendation
 	userSessions              map[string]string
 	browserLogin              xiaohongshu.BrowserLoginService
 }
@@ -730,6 +738,24 @@ func (h *WorkspaceHandler) Register(router gin.IRouter, auth gin.HandlerFunc) {
 	protected.POST("/creator-deliverables/:deliverableId/publication-proof", h.RecordCreatorPublicationProof)
 	protected.GET("/creator-settlements", h.ListCreatorSettlements)
 	protected.GET("/creator-compliance-evidence", h.ListCreatorComplianceEvidence)
+	protected.GET("/brand-assets", h.ListBrandAssets)
+	protected.POST("/brand-assets", h.CreateBrandAsset)
+	protected.GET("/brand-assets/:assetId", h.GetBrandAsset)
+	protected.PUT("/brand-assets/:assetId", h.UpdateBrandAsset)
+	protected.DELETE("/brand-assets/:assetId", h.ArchiveBrandAsset)
+	protected.GET("/brand-guardrails", h.ListBrandGuardrails)
+	protected.POST("/brand-guardrails", h.CreateBrandGuardrail)
+	protected.GET("/approval-workflows", h.ListApprovalWorkflows)
+	protected.POST("/approval-workflows", h.CreateApprovalWorkflow)
+	protected.GET("/approval-tasks", h.ListApprovalTasks)
+	protected.POST("/approval-tasks/:taskId/process", h.ProcessApprovalTask)
+	protected.GET("/compliance-checks", h.ListComplianceChecks)
+	protected.POST("/compliance-checks", h.SubmitComplianceCheck)
+	protected.GET("/agency-client-relations", h.ListAgencyClientRelations)
+	protected.POST("/agency-client-relations", h.CreateAgencyClientRelation)
+	protected.GET("/report-packages", h.ListReportPackages)
+	protected.POST("/report-packages/generate", h.GenerateReportPackage)
+	protected.GET("/strategy-recommendations", h.ListStrategyRecommendations)
 
 	admin := protected.Group("/admin")
 	admin.Use(h.requirePlatformAdmin())
@@ -3198,14 +3224,14 @@ func (h *WorkspaceHandler) loadDatabaseSnapshot(ctx context.Context) bool {
 	h.campaignCalendarItems = snapshot.CampaignCalendarItems
 	h.campaignMetrics = snapshot.CampaignMetrics
 	h.campaignRollups = snapshot.CampaignRollups
-	h.creators = snapshot.Creators
-	h.creatorMediaAccounts = snapshot.CreatorMediaAccounts
-	h.creatorShortlists = snapshot.CreatorShortlists
-	h.creatorBriefs = snapshot.CreatorBriefs
-	h.creatorOrders = snapshot.CreatorOrders
-	h.creatorDeliverables = snapshot.CreatorDeliverables
-	h.creatorSettlements = snapshot.CreatorSettlements
-	h.creatorComplianceEvidence = snapshot.CreatorComplianceEvidence
+	h.brandAssets = snapshot.BrandAssets
+	h.brandGuardrails = snapshot.BrandGuardrails
+	h.approvalWorkflows = snapshot.ApprovalWorkflows
+	h.approvalTasks = snapshot.ApprovalTasks
+	h.complianceChecks = snapshot.ComplianceChecks
+	h.agencyClientRelations = snapshot.AgencyClientRelations
+	h.reportPackages = snapshot.ReportPackages
+	h.strategyRecommendations = snapshot.StrategyRecommendations
 	h.skillPackages = []model.SkillPackage{}
 	h.skillPackageVersions = []model.SkillPackageVersion{}
 	h.skillPackageAssets = []model.SkillPackageAsset{}

@@ -684,6 +684,158 @@ export type CampaignReportSummary = {
   updatedAt: string;
 };
 
+export type BrandAssetStatus = 'active' | 'archived';
+
+export type BrandAsset = {
+  id: string;
+  workspaceId: string;
+  type: string;
+  name: string;
+  description: string;
+  content: string;
+  channels: string[];
+  tags: string[];
+  source: string;
+  status: BrandAssetStatus;
+  metadata: Record<string, string>;
+  createdAt: string;
+  updatedAt: string;
+};
+
+export type BrandGuardrail = {
+  id: string;
+  workspaceId: string;
+  assetId: string;
+  name: string;
+  category: string;
+  channel: string;
+  sourceType: string;
+  sourceId: string;
+  severity: string;
+  rules: string[];
+  action: string;
+  enabled: boolean;
+  createdAt: string;
+  updatedAt: string;
+};
+
+export type ApprovalWorkflowStatus = 'draft' | 'active' | 'completed' | 'canceled';
+
+export type ApprovalStage = {
+  name: string;
+  approverRole: string;
+  requiredApprovals: number;
+};
+
+export type ApprovalWorkflow = {
+  id: string;
+  workspaceId: string;
+  resourceType: string;
+  resourceId: string;
+  name: string;
+  status: ApprovalWorkflowStatus;
+  stages: ApprovalStage[];
+  createdByUserId: string;
+  createdAt: string;
+  updatedAt: string;
+};
+
+export type ApprovalTaskStatus = 'pending' | 'approved' | 'rejected' | 'skipped' | 'canceled';
+
+export type ApprovalTask = {
+  id: string;
+  workspaceId: string;
+  workflowId: string;
+  resourceType: string;
+  resourceId: string;
+  stageName: string;
+  assigneeUserId: string;
+  assigneeRole: string;
+  status: ApprovalTaskStatus;
+  decision: string;
+  comment: string;
+  processedByUserId: string;
+  dueAt?: string;
+  processedAt?: string;
+  createdAt: string;
+  updatedAt: string;
+};
+
+export type ComplianceFinding = {
+  id: string;
+  checkId: string;
+  workspaceId: string;
+  severity: string;
+  category: string;
+  evidence: string;
+  finding: string;
+  action: string;
+  sourceType: string;
+  sourceId: string;
+  createdAt: string;
+};
+
+export type ComplianceCheckStatus = 'queued' | 'running' | 'completed' | 'failed';
+
+export type ComplianceCheck = {
+  id: string;
+  workspaceId: string;
+  resourceType: string;
+  resourceId: string;
+  channel: string;
+  status: ComplianceCheckStatus;
+  riskLevel: string;
+  summary: string;
+  findings: ComplianceFinding[];
+  createdByUserId: string;
+  createdAt: string;
+  updatedAt: string;
+};
+
+export type AgencyClientRelation = {
+  id: string;
+  agencyWorkspaceId: string;
+  clientWorkspaceId: string;
+  clientName: string;
+  status: string;
+  scopes: string[];
+  notes: string;
+  createdAt: string;
+  updatedAt: string;
+};
+
+export type ReportPackage = {
+  id: string;
+  workspaceId: string;
+  name: string;
+  reportType: string;
+  audience: string;
+  periodStart: string;
+  periodEnd: string;
+  status: string;
+  sections: string[];
+  metrics: Record<string, unknown>;
+  summary: string;
+  generatedByUserId: string;
+  createdAt: string;
+  updatedAt: string;
+};
+
+export type StrategyRecommendation = {
+  id: string;
+  workspaceId: string;
+  sourceType: string;
+  recommendationType: string;
+  title: string;
+  rationale: string;
+  evidence: string[];
+  action: string;
+  confidence: number;
+  status: string;
+  createdAt: string;
+  updatedAt: string;
+};
+
 export type PreparedPostCopyBlock = {
   label: string;
   value: string;
@@ -1036,6 +1188,74 @@ export type RunPublishJobResponse = {
   job: PublishJob;
   preparedPost: PreparedPost;
   publishResult: PublishResult;
+};
+
+export type CreateBrandAssetPayload = {
+  type?: string;
+  name: string;
+  description?: string;
+  content?: string;
+  channels?: string[];
+  tags?: string[];
+  source?: string;
+  status?: BrandAssetStatus;
+  metadata?: Record<string, string>;
+};
+
+export type CreateBrandGuardrailPayload = {
+  assetId?: string;
+  name: string;
+  category?: string;
+  channel?: string;
+  sourceType?: string;
+  sourceId?: string;
+  severity?: string;
+  rules: string[];
+  action?: string;
+  enabled?: boolean;
+};
+
+export type CreateApprovalWorkflowPayload = {
+  resourceType?: string;
+  resourceId?: string;
+  name: string;
+  status?: 'draft' | 'active';
+  stages: ApprovalStage[];
+};
+
+export type CreateApprovalWorkflowResponse = {
+  workflow: ApprovalWorkflow;
+  tasks: ApprovalTask[];
+};
+
+export type ProcessApprovalTaskPayload = {
+  decision: 'approve' | 'reject' | 'skip' | 'cancel' | string;
+  comment?: string;
+};
+
+export type SubmitComplianceCheckPayload = {
+  resourceType?: string;
+  resourceId?: string;
+  channel?: string;
+  title?: string;
+  content?: string;
+};
+
+export type CreateAgencyClientRelationPayload = {
+  clientWorkspaceId: string;
+  clientName?: string;
+  status?: string;
+  scopes?: string[];
+  notes?: string;
+};
+
+export type GenerateReportPackagePayload = {
+  name?: string;
+  reportType?: string;
+  audience?: string;
+  periodStart?: string;
+  periodEnd?: string;
+  sections?: string[];
 };
 
 export type CreateMediaPlatformPayload = {
