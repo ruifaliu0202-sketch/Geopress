@@ -105,8 +105,101 @@ export type MediaAccount = {
   loginMethod: string;
   credentialMeta?: Record<string, string>;
   status: string;
+  accountGroup: string;
+  ownershipType: string;
+  operatingRole: string;
+  persona: string;
+  positioning: string;
+  targetAudience: string;
+  contentCategories: string[];
+  healthStatus: string;
+  healthNotes: string;
+  authorizationScopes: string[];
+  syncEnabled: boolean;
+  lastSyncJobId: string;
+  lastSyncStatus: string;
+  lastSyncMessage: string;
+  lastProfileSyncedAt?: string;
+  lastMetricsSyncedAt?: string;
+  nextSyncAt?: string;
+  matrixMetadata: Record<string, unknown>;
   expiresAt?: string;
   lastCheckedAt: string;
+};
+
+export type MediaAccountMetricSnapshot = {
+  id: string;
+  workspaceId: string;
+  mediaAccountId: string;
+  platformId: string;
+  source: string;
+  capturedAt: string;
+  followerCount: number;
+  followingCount: number;
+  contentCount: number;
+  totalLikeCount: number;
+  totalFavoriteCount: number;
+  totalCommentCount: number;
+  totalShareCount: number;
+  engagementRate: number;
+  audienceSignals: Record<string, unknown>;
+  profile: Record<string, unknown>;
+  rawMetrics: Record<string, unknown>;
+  freshnessStatus: string;
+  createdAt: string;
+};
+
+export type ContentMetric = {
+  id: string;
+  workspaceId: string;
+  contentId: string;
+  publishJobId: string;
+  mediaAccountId: string;
+  platformId: string;
+  externalContentId: string;
+  externalUrl: string;
+  metricDate: string;
+  capturedAt: string;
+  impressionCount: number;
+  viewCount: number;
+  likeCount: number;
+  commentCount: number;
+  shareCount: number;
+  favoriteCount: number;
+  clickCount: number;
+  engagementRate: number;
+  attributionMetadata: Record<string, unknown>;
+  rawMetrics: Record<string, unknown>;
+  createdAt: string;
+};
+
+export type MediaAccountSyncJob = {
+  id: string;
+  workspaceId: string;
+  mediaAccountId: string;
+  platformId: string;
+  requestedByUserId: string;
+  syncType: string;
+  status: string;
+  requestedAt: string;
+  startedAt?: string;
+  finishedAt?: string;
+  idempotencyKey: string;
+  requestPayload: Record<string, unknown>;
+  resultSummary: Record<string, unknown>;
+  errorMessage: string;
+  createdAt: string;
+  updatedAt: string;
+};
+
+export type MediaAccountMatrixItem = {
+  account: MediaAccount;
+  platform: MediaPlatform;
+  latestSnapshot?: MediaAccountMetricSnapshot;
+  latestSyncJob?: MediaAccountSyncJob;
+  contentMetricCount: number;
+  dataFreshness: string;
+  warnings: string[];
 };
 
 export type ContentStatus = 'draft' | 'review' | 'approved' | 'scheduled' | 'published' | 'failed' | 'archived';
@@ -115,6 +208,7 @@ export type Content = {
   id: string;
   workspaceId: string;
   knowledgeBaseId: string;
+  attributedMediaAccountId: string;
   title: string;
   summary: string;
   body: string;
@@ -122,6 +216,7 @@ export type Content = {
   status: ContentStatus;
   author: string;
   source: string;
+  attributionMetadata: Record<string, unknown>;
   updatedAt: string;
 };
 
@@ -185,6 +280,7 @@ export type PublishJob = {
   scheduledAt: string;
   externalUrl: string;
   lastMessage: string;
+  attributionMetadata: Record<string, unknown>;
 };
 
 export type PreparedPostCopyBlock = {
@@ -328,6 +424,17 @@ export type CreateMediaAccountPayload = {
   externalId: string;
   loginMethod?: string;
   phoneNumber?: string;
+  accountGroup?: string;
+  ownershipType?: string;
+  operatingRole?: string;
+  persona?: string;
+  positioning?: string;
+  targetAudience?: string;
+  contentCategories?: string[];
+  healthNotes?: string;
+  authorizationScopes?: string[];
+  syncEnabled?: boolean;
+  matrixMetadata?: Record<string, unknown>;
 };
 
 export type StartMediaAccountBrowserLoginPayload = Record<string, never>;
@@ -354,6 +461,7 @@ export type GenerateContentPayload = {
   knowledgeBaseId?: string;
   knowledgeBaseIds?: string[];
   publishFormatId?: string;
+  mediaAccountId?: string;
 };
 
 export type CreateContentPayload = {
@@ -363,6 +471,14 @@ export type CreateContentPayload = {
   author: string;
   knowledgeBaseId: string;
   keywords: string[];
+  attributedMediaAccountId?: string;
+  attributionMetadata?: Record<string, unknown>;
+};
+
+export type RequestMediaAccountSyncPayload = {
+  syncType?: 'profile' | 'metrics' | 'content_metrics' | 'full' | string;
+  idempotencyKey?: string;
+  requestPayload?: Record<string, unknown>;
 };
 
 export type CreatePublishSchedulePayload = {

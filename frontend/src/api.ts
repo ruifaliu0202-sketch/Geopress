@@ -3,6 +3,7 @@ import type {
   CompleteOnboardingPayload,
   CompleteOnboardingResponse,
   Content,
+  ContentMetric,
   CreateContentPayload,
   CreateKnowledgeBasePayload,
   CreateKnowledgeItemPayload,
@@ -16,11 +17,15 @@ import type {
   KnowledgeItem,
   LoginResponse,
   MediaAccount,
+  MediaAccountMatrixItem,
+  MediaAccountMetricSnapshot,
+  MediaAccountSyncJob,
   MediaPlatform,
   Overview,
   ConfirmPublishPayload,
   PreparePublishPayload,
   PreparePublishResponse,
+  RequestMediaAccountSyncPayload,
   RunPublishJobPayload,
   RunPublishJobResponse,
   StartMediaAccountBrowserLoginPayload,
@@ -222,6 +227,68 @@ export async function completeMediaAccountBrowserLogin(
   payload: CompleteMediaAccountBrowserLoginPayload,
 ): Promise<MediaAccount> {
   return request<MediaAccount>(`/media-accounts/${accountId}/browser-login/complete`, token, workspaceId, {
+    method: 'POST',
+    body: JSON.stringify(payload),
+  });
+}
+
+export async function fetchMediaAccountMatrix(
+  token: string,
+  workspaceId: string,
+): Promise<MediaAccountMatrixItem[]> {
+  const response = await request<ListResponse<MediaAccountMatrixItem>>('/media-account-matrix', token, workspaceId);
+  return response.items;
+}
+
+export async function fetchMediaAccountMatrixItem(
+  token: string,
+  workspaceId: string,
+  accountId: string,
+): Promise<MediaAccountMatrixItem> {
+  return request<MediaAccountMatrixItem>(`/media-account-matrix/${accountId}`, token, workspaceId);
+}
+
+export async function fetchMediaAccountMetricSnapshots(
+  token: string,
+  workspaceId: string,
+  accountId: string,
+  limit = 90,
+): Promise<MediaAccountMetricSnapshot[]> {
+  const response = await request<ListResponse<MediaAccountMetricSnapshot>>(
+    `/media-account-matrix/${accountId}/metric-snapshots?limit=${limit}`,
+    token,
+    workspaceId,
+  );
+  return response.items;
+}
+
+export async function fetchContentMetrics(
+  token: string,
+  workspaceId: string,
+  params: { mediaAccountId?: string; contentId?: string; limit?: number } = {},
+): Promise<ContentMetric[]> {
+  const query = new URLSearchParams();
+  if (params.mediaAccountId) {
+    query.set('mediaAccountId', params.mediaAccountId);
+  }
+  if (params.contentId) {
+    query.set('contentId', params.contentId);
+  }
+  if (params.limit) {
+    query.set('limit', String(params.limit));
+  }
+  const suffix = query.toString() ? `?${query.toString()}` : '';
+  const response = await request<ListResponse<ContentMetric>>(`/content-metrics${suffix}`, token, workspaceId);
+  return response.items;
+}
+
+export async function requestMediaAccountSync(
+  token: string,
+  workspaceId: string,
+  accountId: string,
+  payload: RequestMediaAccountSyncPayload = {},
+): Promise<MediaAccountSyncJob> {
+  return request<MediaAccountSyncJob>(`/media-account-matrix/${accountId}/sync-jobs`, token, workspaceId, {
     method: 'POST',
     body: JSON.stringify(payload),
   });

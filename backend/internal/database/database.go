@@ -297,15 +297,23 @@ func (db *DB) SeedWorkspaceData(
 		if marshalErr != nil {
 			return marshalErr
 		}
+		matrixMetadata, marshalErr := jsonText(account.MatrixMetadata)
+		if marshalErr != nil {
+			return marshalErr
+		}
 		lastCheckedAt := account.LastCheckedAt
 		if lastCheckedAt.IsZero() {
 			lastCheckedAt = now
 		}
 		_, err = tx.ExecContext(ctx, `
 			INSERT INTO media_accounts (
-				id, workspace_id, platform_id, name, external_id, status, credentials, expires_at, last_checked_at, created_at, updated_at
+				id, workspace_id, platform_id, name, external_id, status, credentials, expires_at, last_checked_at,
+				account_group, ownership_type, operating_role, persona, positioning, target_audience,
+				content_categories, health_status, health_notes, authorization_scopes, sync_enabled,
+				last_sync_job_id, last_sync_status, last_sync_message, last_profile_synced_at, last_metrics_synced_at,
+				next_sync_at, matrix_metadata, created_at, updated_at
 			)
-			VALUES ($1, $2, $3, $4, $5, $6, $7::jsonb, $8, $9, $10, $11)
+			VALUES ($1, $2, $3, $4, $5, $6, $7::jsonb, $8, $9, $10, $11, $12, $13, $14, $15, $16::text[], $17, $18, $19::text[], $20, $21, $22, $23, $24, $25, $26, $27::jsonb, $28, $29)
 			ON CONFLICT (id) DO UPDATE SET
 				workspace_id = EXCLUDED.workspace_id,
 				platform_id = EXCLUDED.platform_id,
@@ -315,8 +323,55 @@ func (db *DB) SeedWorkspaceData(
 				credentials = EXCLUDED.credentials,
 				expires_at = EXCLUDED.expires_at,
 				last_checked_at = EXCLUDED.last_checked_at,
+				account_group = EXCLUDED.account_group,
+				ownership_type = EXCLUDED.ownership_type,
+				operating_role = EXCLUDED.operating_role,
+				persona = EXCLUDED.persona,
+				positioning = EXCLUDED.positioning,
+				target_audience = EXCLUDED.target_audience,
+				content_categories = EXCLUDED.content_categories,
+				health_status = EXCLUDED.health_status,
+				health_notes = EXCLUDED.health_notes,
+				authorization_scopes = EXCLUDED.authorization_scopes,
+				sync_enabled = EXCLUDED.sync_enabled,
+				last_sync_job_id = EXCLUDED.last_sync_job_id,
+				last_sync_status = EXCLUDED.last_sync_status,
+				last_sync_message = EXCLUDED.last_sync_message,
+				last_profile_synced_at = EXCLUDED.last_profile_synced_at,
+				last_metrics_synced_at = EXCLUDED.last_metrics_synced_at,
+				next_sync_at = EXCLUDED.next_sync_at,
+				matrix_metadata = EXCLUDED.matrix_metadata,
 				updated_at = EXCLUDED.updated_at
-		`, account.ID, account.WorkspaceID, account.PlatformID, account.Name, account.ExternalID, account.Status, string(credentialsJSON), account.ExpiresAt, lastCheckedAt, lastCheckedAt, now)
+		`, account.ID,
+			account.WorkspaceID,
+			account.PlatformID,
+			account.Name,
+			account.ExternalID,
+			account.Status,
+			string(credentialsJSON),
+			account.ExpiresAt,
+			lastCheckedAt,
+			account.AccountGroup,
+			defaultString(account.OwnershipType, "owned"),
+			defaultString(account.OperatingRole, "primary"),
+			account.Persona,
+			account.Positioning,
+			account.TargetAudience,
+			pgTextArray(account.ContentCategories),
+			defaultString(account.HealthStatus, mediaAccountHealthFromStatus(account.Status)),
+			account.HealthNotes,
+			pgTextArray(account.AuthorizationScopes),
+			account.SyncEnabled,
+			account.LastSyncJobID,
+			account.LastSyncStatus,
+			account.LastSyncMessage,
+			account.LastProfileSyncedAt,
+			account.LastMetricsSyncedAt,
+			account.NextSyncAt,
+			matrixMetadata,
+			lastCheckedAt,
+			now,
+		)
 		if err != nil {
 			return err
 		}
@@ -327,13 +382,18 @@ func (db *DB) SeedWorkspaceData(
 		if updatedAt.IsZero() {
 			updatedAt = now
 		}
+		attributionMetadata, marshalErr := jsonText(content.AttributionMetadata)
+		if marshalErr != nil {
+			return marshalErr
+		}
 		_, err = tx.ExecContext(ctx, `
 			INSERT INTO contents (
-				id, workspace_id, knowledge_base_id, title, summary, body, keywords, status, author_name, source, created_at, updated_at
+				id, workspace_id, knowledge_base_id, attributed_media_account_id, title, summary, body, keywords, status, author_name, source, metadata, created_at, updated_at
 			)
-			VALUES ($1, $2, nullif($3, ''), $4, $5, $6, $7::text[], $8, $9, $10, $11, $12)
+			VALUES ($1, $2, nullif($3, ''), nullif($4, ''), $5, $6, $7, $8::text[], $9, $10, $11, $12::jsonb, $13, $14)
 			ON CONFLICT (id) DO UPDATE SET
 				knowledge_base_id = EXCLUDED.knowledge_base_id,
+				attributed_media_account_id = EXCLUDED.attributed_media_account_id,
 				title = EXCLUDED.title,
 				summary = EXCLUDED.summary,
 				body = EXCLUDED.body,
@@ -341,8 +401,9 @@ func (db *DB) SeedWorkspaceData(
 				status = EXCLUDED.status,
 				author_name = EXCLUDED.author_name,
 				source = EXCLUDED.source,
+				metadata = EXCLUDED.metadata,
 				updated_at = EXCLUDED.updated_at
-		`, content.ID, content.WorkspaceID, content.KnowledgeBaseID, content.Title, content.Summary, content.Body, pgTextArray(content.Keywords), content.Status, content.Author, content.Source, updatedAt, updatedAt)
+		`, content.ID, content.WorkspaceID, content.KnowledgeBaseID, content.AttributedMediaAccountID, content.Title, content.Summary, content.Body, pgTextArray(content.Keywords), content.Status, content.Author, content.Source, attributionMetadata, updatedAt, updatedAt)
 		if err != nil {
 			return err
 		}
@@ -415,12 +476,17 @@ func (db *DB) SaveContent(ctx context.Context, item model.Content) error {
 	if updatedAt.IsZero() {
 		updatedAt = time.Now().UTC()
 	}
+	attributionMetadata, err := jsonText(item.AttributionMetadata)
+	if err != nil {
+		return err
+	}
 
-	_, err := db.conn.ExecContext(ctx, `
+	_, err = db.conn.ExecContext(ctx, `
 		INSERT INTO contents (
 			id,
 			workspace_id,
 			knowledge_base_id,
+			attributed_media_account_id,
 			title,
 			summary,
 			body,
@@ -428,11 +494,14 @@ func (db *DB) SaveContent(ctx context.Context, item model.Content) error {
 			status,
 			author_name,
 			source,
+			metadata,
 			created_at,
 			updated_at
 		)
-		VALUES ($1, $2, nullif($3, ''), $4, $5, $6, $7::text[], $8, $9, $10, $11, $12)
+		VALUES ($1, $2, nullif($3, ''), nullif($4, ''), $5, $6, $7, $8::text[], $9, $10, $11, $12::jsonb, $13, $14)
 		ON CONFLICT (id) DO UPDATE SET
+			knowledge_base_id = EXCLUDED.knowledge_base_id,
+			attributed_media_account_id = EXCLUDED.attributed_media_account_id,
 			title = EXCLUDED.title,
 			summary = EXCLUDED.summary,
 			body = EXCLUDED.body,
@@ -440,10 +509,12 @@ func (db *DB) SaveContent(ctx context.Context, item model.Content) error {
 			status = EXCLUDED.status,
 			author_name = EXCLUDED.author_name,
 			source = EXCLUDED.source,
+			metadata = EXCLUDED.metadata,
 			updated_at = EXCLUDED.updated_at
 	`, item.ID,
 		item.WorkspaceID,
 		item.KnowledgeBaseID,
+		item.AttributedMediaAccountID,
 		item.Title,
 		item.Summary,
 		item.Body,
@@ -451,6 +522,7 @@ func (db *DB) SaveContent(ctx context.Context, item model.Content) error {
 		item.Status,
 		item.Author,
 		item.Source,
+		attributionMetadata,
 		updatedAt,
 		updatedAt,
 	)
