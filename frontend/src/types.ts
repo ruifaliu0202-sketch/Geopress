@@ -159,6 +159,94 @@ export type GenerateContentResponse = {
   trace: GenerationTrace;
 };
 
+export type SkillPackageStatus = 'draft' | 'in_review' | 'approved' | 'published' | 'rejected' | 'deprecated';
+
+export type SkillPackageVersionStatus = 'draft' | 'submitted' | 'approved' | 'rejected' | 'published' | 'deprecated';
+
+export type SkillPackage = {
+  id: string;
+  name: string;
+  slug: string;
+  description: string;
+  category: string;
+  targetPlatform: string;
+  targetIndustry: string;
+  supportedContentFormats: string[];
+  authorId: string;
+  authorName: string;
+  listingStatus: SkillPackageStatus;
+  priceCents: number;
+  currency: string;
+  revenueShareBps: number;
+  latestVersionId: string;
+  publishedVersionId: string;
+  createdAt: string;
+  updatedAt: string;
+};
+
+export type SkillPackageVersion = {
+  id: string;
+  packageId: string;
+  version: string;
+  status: SkillPackageVersionStatus;
+  promptContract: string;
+  outputSchema: string;
+  qualityRules: string;
+  qaRules: string;
+  publishPrepRules: string;
+  changeNote: string;
+  submittedAt?: string;
+  reviewedAt?: string;
+  publishedAt?: string;
+  createdAt: string;
+  updatedAt: string;
+};
+
+export type WorkspaceSkillEntitlement = {
+  id: string;
+  workspaceId: string;
+  packageId: string;
+  versionId: string;
+  status: 'active' | 'expired' | 'canceled' | 'uninstalled';
+  source: 'trial' | 'purchase' | 'subscription' | 'admin_grant';
+  seats: number;
+  priceCents: number;
+  currency: string;
+  currentPeriod: string;
+  currentPeriodStartedAt?: string;
+  currentPeriodEndsAt?: string;
+  installedAt: string;
+  expiresAt?: string;
+  createdAt: string;
+  updatedAt: string;
+};
+
+export type SkillPackageMarketplaceItem = {
+  package: SkillPackage;
+  version?: SkillPackageVersion;
+  installed: boolean;
+  entitlement?: WorkspaceSkillEntitlement;
+};
+
+export type InstalledSkillPackage = {
+  entitlement: WorkspaceSkillEntitlement;
+  package?: SkillPackage;
+  version?: SkillPackageVersion;
+};
+
+export type SkillPackageUsageMetric = {
+  id: string;
+  workspaceId: string;
+  packageId: string;
+  versionId: string;
+  generationRequestId: string;
+  contentId: string;
+  metricType: 'generation' | 'formatting' | 'qa' | 'publish_prep';
+  count: number;
+  status: string;
+  createdAt: string;
+};
+
 export type PublishScheduleFrequency = 'once' | 'daily' | 'weekly' | 'monthly';
 
 export type PublishSchedule = {
@@ -354,6 +442,7 @@ export type GenerateContentPayload = {
   knowledgeBaseId?: string;
   knowledgeBaseIds?: string[];
   publishFormatId?: string;
+  skillPackageVersionId?: string;
 };
 
 export type CreateContentPayload = {

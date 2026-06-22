@@ -83,8 +83,24 @@ type GenerateRequest struct {
 	KeywordPrompt    string
 	Workspace        WorkspaceContext
 	Skill            WritingSkill
+	SkillPackage     SkillPackageContext
 	PublishFormat    PublishFormat
 	KnowledgeChunks  []KnowledgeChunk
+}
+
+type SkillPackageContext struct {
+	PackageID        string   `json:"packageId"`
+	VersionID        string   `json:"versionId"`
+	Version          string   `json:"version"`
+	Name             string   `json:"name"`
+	Category         string   `json:"category"`
+	TargetPlatform   string   `json:"targetPlatform"`
+	TargetIndustry   string   `json:"targetIndustry"`
+	SupportedFormats []string `json:"supportedContentFormats"`
+	PromptContract   string   `json:"promptContract"`
+	QualityRules     string   `json:"qualityRules"`
+	QARules          string   `json:"qaRules"`
+	PublishPrepRules string   `json:"publishPrepRules"`
 }
 
 type WorkspaceContext struct {
