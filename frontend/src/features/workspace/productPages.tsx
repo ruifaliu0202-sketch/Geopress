@@ -1,3 +1,4 @@
+import type { ReactNode } from 'react';
 import { useCallback, useEffect, useState } from 'react';
 import {
   Alert,
@@ -11,12 +12,14 @@ import {
   FormControl,
   Grid,
   InputLabel,
+  Link,
   MenuItem,
   Select,
   Stack,
   Table,
   TableBody,
   TableCell,
+  TableContainer,
   TableHead,
   TableRow,
   TextField,
@@ -131,7 +134,7 @@ function statusColor(value: string): 'default' | 'primary' | 'info' | 'success' 
 
 function LoadingRow({ label }: { label: string }) {
   return (
-    <Stack direction="row" spacing={1.25} alignItems="center">
+    <Stack direction="row" spacing={1.25} alignItems="center" sx={{ minHeight: 72, py: 1 }}>
       <CircularProgress size={20} />
       <Typography color="text.secondary">{label}</Typography>
     </Stack>
@@ -139,8 +142,71 @@ function LoadingRow({ label }: { label: string }) {
 }
 
 function EmptyText({ children }: { children: string }) {
-  return <Typography color="text.secondary">{children}</Typography>;
+  return (
+    <Box
+      sx={{
+        minHeight: 72,
+        display: 'flex',
+        alignItems: 'center',
+        border: '1px dashed',
+        borderColor: 'divider',
+        borderRadius: 1,
+        bgcolor: 'action.hover',
+        px: 2,
+        py: 1.5,
+        width: '100%',
+        boxSizing: 'border-box',
+      }}
+    >
+      <Typography color="text.secondary" sx={{ overflowWrap: 'anywhere' }}>
+        {children}
+      </Typography>
+    </Box>
+  );
 }
+
+function ProductTable({
+  children,
+  minWidth = 760,
+  size = 'medium',
+}: {
+  children: ReactNode;
+  minWidth?: number;
+  size?: 'small' | 'medium';
+}) {
+  return (
+    <TableContainer sx={{ width: '100%', overflowX: 'auto', WebkitOverflowScrolling: 'touch' }}>
+      <Table
+        size={size}
+        sx={{
+          minWidth,
+          '& .MuiTableCell-root': {
+            verticalAlign: 'top',
+            overflowWrap: 'anywhere',
+          },
+          '& .MuiTableCell-head': {
+            whiteSpace: 'nowrap',
+          },
+        }}
+      >
+        {children}
+      </Table>
+    </TableContainer>
+  );
+}
+
+const wrappingTextSx = {
+  minWidth: 0,
+  overflowWrap: 'anywhere',
+};
+
+const secondaryTextSx = {
+  ...wrappingTextSx,
+  display: '-webkit-box',
+  WebkitBoxOrient: 'vertical',
+  WebkitLineClamp: 2,
+  overflow: 'hidden',
+} as const;
 
 function commaValue(value: string) {
   return splitKeywords(value);
@@ -220,7 +286,7 @@ export function MediaMatrixView({ token, workspaceId, data }: ProductPageProps) 
           ) : state.items.matrix.length === 0 ? (
             <EmptyText>暂无媒体号矩阵数据</EmptyText>
           ) : (
-            <Table>
+            <ProductTable minWidth={900}>
               <TableHead>
                 <TableRow>
                   <TableCell>账号</TableCell>
@@ -235,16 +301,20 @@ export function MediaMatrixView({ token, workspaceId, data }: ProductPageProps) 
               <TableBody>
                 {state.items.matrix.map((item) => (
                   <TableRow key={item.account.id} hover>
-                    <TableCell>
-                      <Typography fontWeight={700}>{item.account.name}</Typography>
-                      <Typography variant="body2" color="text.secondary">
+                    <TableCell sx={{ minWidth: 160 }}>
+                      <Typography fontWeight={700} sx={wrappingTextSx}>
+                        {item.account.name}
+                      </Typography>
+                      <Typography variant="body2" color="text.secondary" sx={wrappingTextSx}>
                         {item.account.externalId || item.account.id}
                       </Typography>
                     </TableCell>
-                    <TableCell>{item.platform.name}</TableCell>
-                    <TableCell sx={{ maxWidth: 320 }}>
-                      <Typography variant="body2">{item.account.positioning || item.account.persona || '-'}</Typography>
-                      <Typography variant="body2" color="text.secondary">
+                    <TableCell sx={{ minWidth: 120 }}>{item.platform.name}</TableCell>
+                    <TableCell sx={{ minWidth: 220, maxWidth: 320 }}>
+                      <Typography variant="body2" sx={secondaryTextSx}>
+                        {item.account.positioning || item.account.persona || '-'}
+                      </Typography>
+                      <Typography variant="body2" color="text.secondary" sx={secondaryTextSx}>
                         {item.account.targetAudience || '-'}
                       </Typography>
                     </TableCell>
@@ -267,7 +337,7 @@ export function MediaMatrixView({ token, workspaceId, data }: ProductPageProps) 
                       <Stack spacing={0.5}>
                         <Chip size="small" label={item.account.lastSyncStatus || 'never_synced'} color={statusColor(item.account.lastSyncStatus)} />
                         {item.warnings.map((warning) => (
-                          <Typography key={warning} variant="body2" color="text.secondary">
+                          <Typography key={warning} variant="body2" color="text.secondary" sx={wrappingTextSx}>
                             {warning}
                           </Typography>
                         ))}
@@ -279,6 +349,7 @@ export function MediaMatrixView({ token, workspaceId, data }: ProductPageProps) 
                         startIcon={<AutorenewIcon />}
                         disabled={syncingAccountId === item.account.id}
                         onClick={() => requestSync(item.account.id)}
+                        sx={{ whiteSpace: 'nowrap' }}
                       >
                         同步
                       </Button>
@@ -286,7 +357,7 @@ export function MediaMatrixView({ token, workspaceId, data }: ProductPageProps) 
                   </TableRow>
                 ))}
               </TableBody>
-            </Table>
+            </ProductTable>
           )}
         </Stack>
       </Section>
@@ -295,7 +366,7 @@ export function MediaMatrixView({ token, workspaceId, data }: ProductPageProps) 
         {state.items.contentMetrics.length === 0 ? (
           <EmptyText>暂无内容指标</EmptyText>
         ) : (
-          <Table>
+          <ProductTable minWidth={760}>
             <TableHead>
               <TableRow>
                 <TableCell>内容</TableCell>
@@ -308,17 +379,25 @@ export function MediaMatrixView({ token, workspaceId, data }: ProductPageProps) 
             <TableBody>
               {state.items.contentMetrics.map((item) => (
                 <TableRow key={item.id} hover>
-                  <TableCell>{item.contentId}</TableCell>
-                  <TableCell>{accountName(data.mediaAccounts, item.mediaAccountId)}</TableCell>
+                  <TableCell sx={{ minWidth: 160 }}>{item.contentId}</TableCell>
+                  <TableCell sx={{ minWidth: 140 }}>{accountName(data.mediaAccounts, item.mediaAccountId)}</TableCell>
                   <TableCell>
                     {item.impressionCount.toLocaleString()} / {item.likeCount + item.commentCount + item.shareCount}
                   </TableCell>
                   <TableCell>{formatDate(item.metricDate)}</TableCell>
-                  <TableCell>{item.externalUrl || '-'}</TableCell>
+                  <TableCell sx={{ minWidth: 180 }}>
+                    {item.externalUrl ? (
+                      <Link href={item.externalUrl} target="_blank" rel="noreferrer" sx={wrappingTextSx}>
+                        {item.externalUrl}
+                      </Link>
+                    ) : (
+                      '-'
+                    )}
+                  </TableCell>
                 </TableRow>
               ))}
             </TableBody>
-          </Table>
+          </ProductTable>
         )}
       </Section>
     </Stack>
@@ -467,7 +546,7 @@ export function CampaignsView({ token, workspaceId, data }: ProductPageProps) {
               <TextField size="small" label="产品" value={form.products} onChange={(event) => setForm((current) => ({ ...current, products: event.target.value }))} placeholder="逗号分隔" />
               <TextField size="small" label="目标受众" value={form.targetAudiences} onChange={(event) => setForm((current) => ({ ...current, targetAudiences: event.target.value }))} placeholder="逗号分隔" />
               <TextField size="small" label="渠道" value={form.channels} onChange={(event) => setForm((current) => ({ ...current, channels: event.target.value }))} />
-              <Stack direction="row" spacing={1}>
+              <Stack direction={{ xs: 'column', sm: 'row' }} spacing={1}>
                 <TextField size="small" label="预算分" value={form.budgetCents} onChange={(event) => setForm((current) => ({ ...current, budgetCents: event.target.value }))} type="number" />
                 <TextField size="small" label="内容配额" value={form.contentQuota} onChange={(event) => setForm((current) => ({ ...current, contentQuota: event.target.value }))} type="number" />
               </Stack>
@@ -492,7 +571,7 @@ export function CampaignsView({ token, workspaceId, data }: ProductPageProps) {
             ) : state.items.length === 0 ? (
               <EmptyText>暂无战役</EmptyText>
             ) : (
-              <Table>
+              <ProductTable minWidth={780}>
                 <TableHead>
                   <TableRow>
                     <TableCell>名称</TableCell>
@@ -511,22 +590,24 @@ export function CampaignsView({ token, workspaceId, data }: ProductPageProps) {
                       onClick={() => setSelectedCampaignId(campaign.id)}
                       sx={{ cursor: 'pointer' }}
                     >
-                      <TableCell>
-                        <Typography fontWeight={700}>{campaign.name}</Typography>
-                        <Typography variant="body2" color="text.secondary">
+                      <TableCell sx={{ minWidth: 180 }}>
+                        <Typography fontWeight={700} sx={wrappingTextSx}>
+                          {campaign.name}
+                        </Typography>
+                        <Typography variant="body2" color="text.secondary" sx={secondaryTextSx}>
                           {campaign.description || campaign.id}
                         </Typography>
                       </TableCell>
-                      <TableCell>{campaign.goal || '-'}</TableCell>
+                      <TableCell sx={{ minWidth: 180 }}>{campaign.goal || '-'}</TableCell>
                       <TableCell>
                         <Chip size="small" label={campaign.status} color={statusColor(campaign.status)} />
                       </TableCell>
-                      <TableCell>{campaign.channels.join(', ') || '-'}</TableCell>
+                      <TableCell sx={{ minWidth: 140 }}>{campaign.channels.join(', ') || '-'}</TableCell>
                       <TableCell>{formatMoney(campaign.budgetCents, campaign.currency)}</TableCell>
                     </TableRow>
                   ))}
                 </TableBody>
-              </Table>
+              </ProductTable>
             )}
           </Section>
         </Grid>
@@ -536,7 +617,9 @@ export function CampaignsView({ token, workspaceId, data }: ProductPageProps) {
         <Grid size={{ xs: 12, lg: 4 }}>
           <Section title="新增排期">
             <Stack spacing={1.5}>
-              <Typography color="text.secondary">{selectedCampaign ? selectedCampaign.name : '请选择战役'}</Typography>
+              <Typography color="text.secondary" sx={wrappingTextSx}>
+                {selectedCampaign ? selectedCampaign.name : '请选择战役'}
+              </Typography>
               <TextField size="small" label="排期标题" value={calendarForm.title} onChange={(event) => setCalendarForm((current) => ({ ...current, title: event.target.value }))} />
               <TextField size="small" label="渠道" value={calendarForm.channel} onChange={(event) => setCalendarForm((current) => ({ ...current, channel: event.target.value }))} />
               <FormControl size="small" fullWidth>
@@ -561,7 +644,7 @@ export function CampaignsView({ token, workspaceId, data }: ProductPageProps) {
             {calendarItems.length === 0 ? (
               <EmptyText>暂无排期</EmptyText>
             ) : (
-              <Table>
+              <ProductTable minWidth={760}>
                 <TableHead>
                   <TableRow>
                     <TableCell>标题</TableCell>
@@ -574,13 +657,15 @@ export function CampaignsView({ token, workspaceId, data }: ProductPageProps) {
                 <TableBody>
                   {calendarItems.map((item) => (
                     <TableRow key={item.id} hover>
-                      <TableCell>
-                        <Typography fontWeight={700}>{item.title}</Typography>
-                        <Typography variant="body2" color="text.secondary">
+                      <TableCell sx={{ minWidth: 180 }}>
+                        <Typography fontWeight={700} sx={wrappingTextSx}>
+                          {item.title}
+                        </Typography>
+                        <Typography variant="body2" color="text.secondary" sx={secondaryTextSx}>
                           {item.brief || item.contentType}
                         </Typography>
                       </TableCell>
-                      <TableCell>{accountName(data.mediaAccounts, item.mediaAccountId)}</TableCell>
+                      <TableCell sx={{ minWidth: 140 }}>{accountName(data.mediaAccounts, item.mediaAccountId)}</TableCell>
                       <TableCell>
                         <Chip size="small" label={item.status} color={statusColor(item.status)} />
                       </TableCell>
@@ -589,7 +674,7 @@ export function CampaignsView({ token, workspaceId, data }: ProductPageProps) {
                     </TableRow>
                   ))}
                 </TableBody>
-              </Table>
+              </ProductTable>
             )}
           </Section>
         </Grid>
@@ -732,8 +817,10 @@ export function CreatorsView({ token, workspaceId }: ProductPageProps) {
           >
             {state.loading ? (
               <LoadingRow label="正在加载达人库" />
+            ) : state.items.creators.length === 0 ? (
+              <EmptyText>暂无达人数据</EmptyText>
             ) : (
-              <Table>
+              <ProductTable minWidth={800}>
                 <TableHead>
                   <TableRow>
                     <TableCell>达人</TableCell>
@@ -745,27 +832,43 @@ export function CreatorsView({ token, workspaceId }: ProductPageProps) {
                 </TableHead>
                 <TableBody>
                   {state.items.creators.map((creator) => (
-                    <TableRow key={creator.id} hover selected={creator.id === selectedCreatorId} onClick={() => setSelectedCreatorId(creator.id)} sx={{ cursor: 'pointer' }}>
-                      <TableCell>
-                        <Typography fontWeight={700}>{creator.displayName}</Typography>
-                        <Typography variant="body2" color="text.secondary">
+                    <TableRow
+                      key={creator.id}
+                      hover
+                      selected={creator.id === selectedCreatorId}
+                      onClick={() => setSelectedCreatorId(creator.id)}
+                      sx={{ cursor: 'pointer' }}
+                    >
+                      <TableCell sx={{ minWidth: 220 }}>
+                        <Typography fontWeight={700} sx={wrappingTextSx}>
+                          {creator.displayName}
+                        </Typography>
+                        <Typography variant="body2" color="text.secondary" sx={secondaryTextSx}>
                           {creator.bio}
                         </Typography>
                       </TableCell>
-                      <TableCell>{creator.verticals.join(', ') || '-'}</TableCell>
+                      <TableCell sx={{ minWidth: 140 }}>{creator.verticals.join(', ') || '-'}</TableCell>
                       <TableCell>{formatMoney(creator.basePriceCents, creator.currency)}</TableCell>
                       <TableCell>
                         <Chip size="small" label={`${creator.verificationState}/${creator.availabilityStatus}`} color={statusColor(creator.verificationState)} />
                       </TableCell>
                       <TableCell align="right">
-                        <Button size="small" onClick={(event) => { event.stopPropagation(); void addShortlist(creator); }} disabled={submitting}>
+                        <Button
+                          size="small"
+                          onClick={(event) => {
+                            event.stopPropagation();
+                            void addShortlist(creator);
+                          }}
+                          disabled={submitting}
+                          sx={{ whiteSpace: 'nowrap' }}
+                        >
                           加候选
                         </Button>
                       </TableCell>
                     </TableRow>
                   ))}
                 </TableBody>
-              </Table>
+              </ProductTable>
             )}
           </Section>
         </Grid>
@@ -793,7 +896,7 @@ export function CreatorsView({ token, workspaceId }: ProductPageProps) {
             {state.items.orders.length === 0 ? (
               <EmptyText>暂无订单</EmptyText>
             ) : (
-              <Table>
+              <ProductTable minWidth={620}>
                 <TableHead>
                   <TableRow>
                     <TableCell>达人</TableCell>
@@ -805,23 +908,25 @@ export function CreatorsView({ token, workspaceId }: ProductPageProps) {
                 <TableBody>
                   {state.items.orders.map((order) => (
                     <TableRow key={order.id} hover>
-                      <TableCell>{state.items.creators.find((creator) => creator.id === order.creatorId)?.displayName ?? order.creatorId}</TableCell>
+                      <TableCell sx={{ minWidth: 160 }}>
+                        {state.items.creators.find((creator) => creator.id === order.creatorId)?.displayName ?? order.creatorId}
+                      </TableCell>
                       <TableCell>
                         <Chip size="small" label={order.status} color={statusColor(order.status)} />
                       </TableCell>
                       <TableCell>{formatMoney(order.priceCents, order.currency)}</TableCell>
-                      <TableCell>{order.lastMessage || '-'}</TableCell>
+                      <TableCell sx={{ minWidth: 180 }}>{order.lastMessage || '-'}</TableCell>
                     </TableRow>
                   ))}
                 </TableBody>
-              </Table>
+              </ProductTable>
             )}
           </Section>
         </Grid>
         <Grid size={{ xs: 12, lg: 6 }}>
           <Section title="交付与结算">
             <Stack spacing={2}>
-              <Stack direction="row" spacing={1} flexWrap="wrap" useFlexGap>
+              <Stack direction="row" spacing={1} flexWrap="wrap" useFlexGap sx={{ minWidth: 0 }}>
                 {state.items.deliverables.map((item) => (
                   <Chip key={item.id} label={`${item.title || item.id}: ${item.status}`} color={statusColor(item.status)} />
                 ))}
@@ -913,14 +1018,16 @@ export function SkillPackagesView({ token, workspaceId }: ProductPageProps) {
           <Grid container spacing={2}>
             {state.items.marketplace.map((item) => (
               <Grid key={item.package.id} size={{ xs: 12, md: 6, xl: 4 }}>
-                <Card variant="outlined">
-                  <CardContent>
-                    <Stack spacing={1.5}>
-                      <Stack direction="row" justifyContent="space-between" spacing={2}>
-                        <Typography variant="h3">{item.package.name}</Typography>
+                <Card variant="outlined" sx={{ height: '100%' }}>
+                  <CardContent sx={{ height: '100%', minHeight: 244 }}>
+                    <Stack spacing={1.5} sx={{ height: '100%' }}>
+                      <Stack direction={{ xs: 'column', sm: 'row' }} justifyContent="space-between" spacing={1} alignItems={{ xs: 'flex-start', sm: 'center' }}>
+                        <Typography variant="h3" sx={wrappingTextSx}>
+                          {item.package.name}
+                        </Typography>
                         <Chip size="small" label={item.installed ? '已安装' : item.package.category || '技能'} color={item.installed ? 'success' : 'info'} />
                       </Stack>
-                      <Typography color="text.secondary" sx={{ minHeight: 48 }}>
+                      <Typography color="text.secondary" sx={{ ...secondaryTextSx, minHeight: 48 }}>
                         {item.package.description || '-'}
                       </Typography>
                       <Stack direction="row" spacing={1} flexWrap="wrap" useFlexGap>
@@ -928,10 +1035,10 @@ export function SkillPackagesView({ token, workspaceId }: ProductPageProps) {
                         <Chip size="small" label={item.package.targetIndustry || '通用行业'} />
                         <Chip size="small" label={formatMoney(item.package.priceCents, item.package.currency)} />
                       </Stack>
-                      <Typography variant="body2" color="text.secondary">
+                      <Typography variant="body2" color="text.secondary" sx={wrappingTextSx}>
                         版本 {item.version?.version ?? '-'} / 作者 {item.package.authorName || item.package.authorId || '-'}
                       </Typography>
-                      <Stack direction="row" spacing={1}>
+                      <Stack direction={{ xs: 'column', sm: 'row' }} spacing={1} sx={{ mt: 'auto' }}>
                         <Button variant="contained" disabled={item.installed || installingId === item.package.id} onClick={() => install(item, false)}>
                           试用安装
                         </Button>
@@ -952,7 +1059,7 @@ export function SkillPackagesView({ token, workspaceId }: ProductPageProps) {
         {state.items.installed.length === 0 ? (
           <EmptyText>暂无已安装技能包</EmptyText>
         ) : (
-          <Table>
+          <ProductTable minWidth={720}>
             <TableHead>
               <TableRow>
                 <TableCell>技能包</TableCell>
@@ -965,8 +1072,8 @@ export function SkillPackagesView({ token, workspaceId }: ProductPageProps) {
             <TableBody>
               {state.items.installed.map((item) => (
                 <TableRow key={item.entitlement.id} hover>
-                  <TableCell>{item.package?.name ?? item.entitlement.packageId}</TableCell>
-                  <TableCell>{item.version?.version ?? item.entitlement.versionId}</TableCell>
+                  <TableCell sx={{ minWidth: 180 }}>{item.package?.name ?? item.entitlement.packageId}</TableCell>
+                  <TableCell sx={{ minWidth: 140 }}>{item.version?.version ?? item.entitlement.versionId}</TableCell>
                   <TableCell>
                     <Chip size="small" label={item.entitlement.source} color={statusColor(item.entitlement.status)} />
                   </TableCell>
@@ -975,7 +1082,7 @@ export function SkillPackagesView({ token, workspaceId }: ProductPageProps) {
                 </TableRow>
               ))}
             </TableBody>
-          </Table>
+          </ProductTable>
         )}
       </Section>
     </Stack>
@@ -1204,7 +1311,7 @@ export function BrandComplianceView({ token, workspaceId, data }: ProductPagePro
             ) : state.items.assets.length === 0 ? (
               <EmptyText>暂无品牌资产</EmptyText>
             ) : (
-              <Table>
+              <ProductTable minWidth={720}>
                 <TableHead>
                   <TableRow>
                     <TableCell>资产</TableCell>
@@ -1216,21 +1323,23 @@ export function BrandComplianceView({ token, workspaceId, data }: ProductPagePro
                 <TableBody>
                   {state.items.assets.map((asset) => (
                     <TableRow key={asset.id} hover>
-                      <TableCell>
-                        <Typography fontWeight={700}>{asset.name}</Typography>
-                        <Typography variant="body2" color="text.secondary">
+                      <TableCell sx={{ minWidth: 220 }}>
+                        <Typography fontWeight={700} sx={wrappingTextSx}>
+                          {asset.name}
+                        </Typography>
+                        <Typography variant="body2" color="text.secondary" sx={secondaryTextSx}>
                           {asset.content || asset.description || asset.type}
                         </Typography>
                       </TableCell>
-                      <TableCell>{asset.channels.join(', ') || '-'}</TableCell>
-                      <TableCell>{asset.tags.join(', ') || '-'}</TableCell>
+                      <TableCell sx={{ minWidth: 140 }}>{asset.channels.join(', ') || '-'}</TableCell>
+                      <TableCell sx={{ minWidth: 140 }}>{asset.tags.join(', ') || '-'}</TableCell>
                       <TableCell>
                         <Chip size="small" label={asset.status} color={statusColor(asset.status)} />
                       </TableCell>
                     </TableRow>
                   ))}
                 </TableBody>
-              </Table>
+              </ProductTable>
             )}
           </Section>
         </Grid>
@@ -1255,44 +1364,59 @@ export function BrandComplianceView({ token, workspaceId, data }: ProductPagePro
         <Grid size={{ xs: 12, lg: 8 }}>
           <Section title="检查与审批">
             <Stack spacing={2}>
-              <Table>
-                <TableHead>
-                  <TableRow>
-                    <TableCell>检查</TableCell>
-                    <TableCell>风险</TableCell>
-                    <TableCell>发现</TableCell>
-                    <TableCell>时间</TableCell>
-                  </TableRow>
-                </TableHead>
-                <TableBody>
-                  {state.items.checks.map((check) => (
-                    <TableRow key={check.id} hover>
-                      <TableCell>
-                        <Typography fontWeight={700}>{check.summary || check.resourceType}</Typography>
-                        <Typography variant="body2" color="text.secondary">
-                          {check.channel}
-                        </Typography>
-                      </TableCell>
-                      <TableCell>
-                        <Chip size="small" label={check.riskLevel || check.status} color={check.riskLevel === 'high' ? 'error' : statusColor(check.status)} />
-                      </TableCell>
-                      <TableCell>{check.findings.length}</TableCell>
-                      <TableCell>{formatDate(check.createdAt)}</TableCell>
+              {state.items.checks.length === 0 ? (
+                <EmptyText>暂无合规检查</EmptyText>
+              ) : (
+                <ProductTable minWidth={680}>
+                  <TableHead>
+                    <TableRow>
+                      <TableCell>检查</TableCell>
+                      <TableCell>风险</TableCell>
+                      <TableCell>发现</TableCell>
+                      <TableCell>时间</TableCell>
                     </TableRow>
-                  ))}
-                </TableBody>
-              </Table>
+                  </TableHead>
+                  <TableBody>
+                    {state.items.checks.map((check) => (
+                      <TableRow key={check.id} hover>
+                        <TableCell sx={{ minWidth: 220 }}>
+                          <Typography fontWeight={700} sx={wrappingTextSx}>
+                            {check.summary || check.resourceType}
+                          </Typography>
+                          <Typography variant="body2" color="text.secondary" sx={wrappingTextSx}>
+                            {check.channel}
+                          </Typography>
+                        </TableCell>
+                        <TableCell>
+                          <Chip size="small" label={check.riskLevel || check.status} color={check.riskLevel === 'high' ? 'error' : statusColor(check.status)} />
+                        </TableCell>
+                        <TableCell>{check.findings.length}</TableCell>
+                        <TableCell>{formatDate(check.createdAt)}</TableCell>
+                      </TableRow>
+                    ))}
+                  </TableBody>
+                </ProductTable>
+              )}
               <Divider />
               <Stack spacing={1}>
                 {state.items.tasks.map((task) => (
-                  <Stack key={task.id} direction={{ xs: 'column', md: 'row' }} spacing={1} alignItems={{ xs: 'stretch', md: 'center' }} justifyContent="space-between">
-                    <Box>
-                      <Typography fontWeight={700}>{task.stageName}</Typography>
-                      <Typography variant="body2" color="text.secondary">
+                  <Stack
+                    key={task.id}
+                    direction={{ xs: 'column', md: 'row' }}
+                    spacing={1}
+                    alignItems={{ xs: 'stretch', md: 'center' }}
+                    justifyContent="space-between"
+                    sx={{ border: '1px solid', borderColor: 'divider', borderRadius: 1, p: 1.25, minWidth: 0 }}
+                  >
+                    <Box sx={{ minWidth: 0 }}>
+                      <Typography fontWeight={700} sx={wrappingTextSx}>
+                        {task.stageName}
+                      </Typography>
+                      <Typography variant="body2" color="text.secondary" sx={wrappingTextSx}>
                         {task.resourceType}/{task.resourceId}
                       </Typography>
                     </Box>
-                    <Stack direction="row" spacing={1} alignItems="center">
+                    <Stack direction="row" spacing={1} alignItems="center" justifyContent={{ xs: 'space-between', md: 'flex-end' }}>
                       <Chip size="small" label={task.status} color={statusColor(task.status)} />
                       <Button size="small" disabled={task.status !== 'pending' || submitting} onClick={() => approveTask(task)}>
                         通过
@@ -1325,12 +1449,16 @@ export function BrandComplianceView({ token, workspaceId, data }: ProductPagePro
                   <Card key={report.id} variant="outlined">
                     <CardContent>
                       <Stack spacing={1}>
-                        <Stack direction="row" justifyContent="space-between">
-                          <Typography variant="h3">{report.name}</Typography>
+                        <Stack direction={{ xs: 'column', sm: 'row' }} justifyContent="space-between" spacing={1} alignItems={{ xs: 'flex-start', sm: 'center' }}>
+                          <Typography variant="h3" sx={wrappingTextSx}>
+                            {report.name}
+                          </Typography>
                           <Chip size="small" label={report.status} color={statusColor(report.status)} />
                         </Stack>
-                        <Typography color="text.secondary">{report.summary || report.reportType}</Typography>
-                        <Typography variant="body2" color="text.secondary">
+                        <Typography color="text.secondary" sx={secondaryTextSx}>
+                          {report.summary || report.reportType}
+                        </Typography>
+                        <Typography variant="body2" color="text.secondary" sx={wrappingTextSx}>
                           {report.sections.join(', ')}
                         </Typography>
                       </Stack>
@@ -1362,11 +1490,13 @@ export function BrandComplianceView({ token, workspaceId, data }: ProductPagePro
                 {state.items.recommendations.map((item) => (
                   <Card key={item.id} variant="outlined">
                     <CardContent>
-                      <Typography variant="h3">{item.title}</Typography>
-                      <Typography color="text.secondary" sx={{ mt: 0.75 }}>
+                      <Typography variant="h3" sx={wrappingTextSx}>
+                        {item.title}
+                      </Typography>
+                      <Typography color="text.secondary" sx={{ ...secondaryTextSx, mt: 0.75 }}>
                         {item.rationale}
                       </Typography>
-                      <Typography variant="body2" sx={{ mt: 1 }}>
+                      <Typography variant="body2" sx={{ ...wrappingTextSx, mt: 1 }}>
                         {item.action}
                       </Typography>
                     </CardContent>

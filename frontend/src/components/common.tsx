@@ -300,11 +300,15 @@ export function MetricCard({
 }) {
   return (
     <Grid size={{ xs: 12, sm: 6, lg: 3 }}>
-      <ProductSurface padded sx={{ height: '100%' }}>
+      <ProductSurface padded sx={{ height: '100%', minHeight: 132 }}>
         <Typography variant="body2" color="text.secondary">
           {label}
         </Typography>
-        <Typography variant="h1" color={tone === 'error' ? 'error.main' : 'text.primary'} sx={{ mt: 1 }}>
+        <Typography
+          variant="h1"
+          color={tone === 'error' ? 'error.main' : 'text.primary'}
+          sx={{ mt: 1, overflowWrap: 'anywhere' }}
+        >
           {value}
         </Typography>
         <Typography variant="body2" color="text.secondary" sx={{ mt: 1 }}>
@@ -317,22 +321,57 @@ export function MetricCard({
 
 export function Section({ title, action, children }: { title: string; action?: ReactNode; children: ReactNode }) {
   return (
-    <ProductSurface sx={{ overflow: 'hidden' }}>
-      <Stack direction="row" alignItems="center" justifyContent="space-between" spacing={2} sx={{ px: 2, py: 1.5 }}>
-        <Typography variant="h3">{title}</Typography>
-        {action}
+    <ProductSurface sx={{ overflow: 'hidden', minWidth: 0 }}>
+      <Stack
+        direction={{ xs: 'column', sm: 'row' }}
+        alignItems={{ xs: 'stretch', sm: 'center' }}
+        justifyContent="space-between"
+        spacing={1.5}
+        sx={{ px: { xs: 1.5, sm: 2 }, py: 1.5, minWidth: 0 }}
+      >
+        <Typography variant="h3" sx={{ minWidth: 0, overflowWrap: 'anywhere' }}>
+          {title}
+        </Typography>
+        {action && (
+          <Box
+            sx={{
+              display: 'flex',
+              justifyContent: { xs: 'flex-start', sm: 'flex-end' },
+              maxWidth: '100%',
+              minWidth: 0,
+              '& > .MuiStack-root': {
+                flexWrap: 'wrap',
+              },
+              '& .MuiButton-root': {
+                whiteSpace: 'nowrap',
+              },
+            }}
+          >
+            {action}
+          </Box>
+        )}
       </Stack>
       <Divider />
-      <Box sx={{ p: 2, overflowX: 'auto' }}>{children}</Box>
+      <Box sx={{ p: { xs: 1.5, sm: 2 }, overflowX: 'auto', WebkitOverflowScrolling: 'touch', minWidth: 0 }}>
+        {children}
+      </Box>
     </ProductSurface>
   );
 }
 
 export function InfoRow({ label, value }: { label: string; value: string }) {
   return (
-    <Stack direction="row" justifyContent="space-between" spacing={2} sx={{ py: 1.25 }}>
-      <Typography color="text.secondary">{label}</Typography>
-      <Typography fontWeight={700} sx={{ textAlign: 'right', overflowWrap: 'anywhere' }}>
+    <Stack
+      direction={{ xs: 'column', sm: 'row' }}
+      justifyContent="space-between"
+      alignItems={{ xs: 'flex-start', sm: 'center' }}
+      spacing={{ xs: 0.25, sm: 2 }}
+      sx={{ py: 1.25, minWidth: 0 }}
+    >
+      <Typography color="text.secondary" sx={{ flexShrink: 0 }}>
+        {label}
+      </Typography>
+      <Typography fontWeight={700} sx={{ textAlign: { xs: 'left', sm: 'right' }, overflowWrap: 'anywhere', minWidth: 0 }}>
         {value}
       </Typography>
     </Stack>
