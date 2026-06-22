@@ -202,6 +202,195 @@ export type MediaAccountMatrixItem = {
   warnings: string[];
 };
 
+export type CreatorVerificationState = 'unverified' | 'pending' | 'verified' | 'rejected';
+
+export type CreatorAvailabilityStatus = 'available' | 'limited' | 'unavailable';
+
+export type Creator = {
+  id: string;
+  displayName: string;
+  legalName?: string;
+  bio: string;
+  avatarUrl: string;
+  contactEmail?: string;
+  verticals: string[];
+  audienceAttributes: Record<string, string>;
+  basePriceCents: number;
+  currency: string;
+  availabilityStatus: CreatorAvailabilityStatus;
+  collaborationPolicy: string;
+  verificationState: CreatorVerificationState;
+  brandSafetyLevel: string;
+  createdAt: string;
+  updatedAt: string;
+};
+
+export type CreatorMediaAccount = {
+  id: string;
+  creatorId: string;
+  platformId: string;
+  platformName: string;
+  handle: string;
+  profileUrl: string;
+  followerCount: number;
+  averageEngagementRate: number;
+  verticals: string[];
+  audienceAttributes: Record<string, string>;
+  accountAccessMode: 'creator_operated' | 'agency_authorized' | 'public_profile' | string;
+  verified: boolean;
+  createdAt: string;
+  updatedAt: string;
+};
+
+export type CreatorShortlist = {
+  id: string;
+  workspaceId: string;
+  creatorId: string;
+  name: string;
+  fitScore: number;
+  qualificationStatus: 'watching' | 'qualified' | 'rejected' | 'ordered' | string;
+  brandSafetyLevel: string;
+  brandSafetyNotes: string;
+  operatorNotes: string;
+  createdByUserId: string;
+  createdAt: string;
+  updatedAt: string;
+};
+
+export type CreatorCampaignBriefStatus = 'draft' | 'active' | 'archived';
+
+export type CreatorCampaignBrief = {
+  id: string;
+  workspaceId: string;
+  title: string;
+  objective: string;
+  productName: string;
+  targetAudience: string;
+  platformTargets: string[];
+  deliverableRequirements: string[];
+  disclosureRequirements: string[];
+  prohibitedClaims: string[];
+  authorizationScope: string;
+  contentUsageRights: string;
+  reviewWindowHours: number;
+  deadlineAt?: string;
+  budgetCents: number;
+  currency: string;
+  status: CreatorCampaignBriefStatus;
+  createdByUserId: string;
+  createdAt: string;
+  updatedAt: string;
+};
+
+export type CreatorOrderStatus =
+  | 'proposed'
+  | 'accepted'
+  | 'in_progress'
+  | 'submitted'
+  | 'approved'
+  | 'published'
+  | 'completed'
+  | 'canceled'
+  | 'disputed';
+
+export type CreatorOrder = {
+  id: string;
+  workspaceId: string;
+  briefId: string;
+  creatorId: string;
+  status: CreatorOrderStatus;
+  priceCents: number;
+  depositCents: number;
+  serviceFeeCents: number;
+  currency: string;
+  disclosureRequirements: string[];
+  deliverableRequirements: string[];
+  authorizationScope: string;
+  contentUsageRights: string;
+  dueAt?: string;
+  acceptedAt?: string;
+  completedAt?: string;
+  lastMessage: string;
+  createdByUserId: string;
+  createdAt: string;
+  updatedAt: string;
+};
+
+export type CreatorDeliverableStatus = 'submitted' | 'revision_requested' | 'approved' | 'rejected' | 'published';
+
+export type CreatorDeliverable = {
+  id: string;
+  workspaceId: string;
+  orderId: string;
+  creatorId: string;
+  type: string;
+  title: string;
+  content: string;
+  assetUrls: string[];
+  status: CreatorDeliverableStatus;
+  externalUrl: string;
+  publicationProofUrl: string;
+  publicationProofNote: string;
+  reviewFeedback: string;
+  revision: number;
+  submittedAt: string;
+  reviewedAt?: string;
+  publishedAt?: string;
+  createdAt: string;
+  updatedAt: string;
+};
+
+export type CreatorSettlementStatus = 'pending' | 'invoiced' | 'payable' | 'paid' | 'refunded' | 'disputed' | 'canceled';
+
+export type CreatorSettlement = {
+  id: string;
+  workspaceId: string;
+  orderId: string;
+  creatorId: string;
+  status: CreatorSettlementStatus;
+  priceCents: number;
+  depositCents: number;
+  serviceFeeCents: number;
+  creatorPayoutCents: number;
+  currency: string;
+  invoiceId: string;
+  dueAt?: string;
+  paidAt?: string;
+  createdAt: string;
+  updatedAt: string;
+};
+
+export type CreatorComplianceEvidenceType =
+  | 'ad_disclosure'
+  | 'authorization_record'
+  | 'usage_rights'
+  | 'review_log'
+  | 'publication_proof'
+  | 'dispute_record';
+
+export type CreatorComplianceEvidence = {
+  id: string;
+  workspaceId: string;
+  orderId: string;
+  deliverableId: string;
+  creatorId: string;
+  evidenceType: CreatorComplianceEvidenceType;
+  disclosureText: string;
+  authorizationScope: string;
+  contentUsageRights: string;
+  externalUrl: string;
+  fileUrl: string;
+  notes: string;
+  createdByUserId: string;
+  createdAt: string;
+};
+
+export type CreatorDetail = {
+  creator: Creator;
+  mediaAccounts: CreatorMediaAccount[];
+  shortlists: CreatorShortlist[];
+};
+
 export type ContentStatus = 'draft' | 'review' | 'approved' | 'scheduled' | 'published' | 'failed' | 'archived';
 
 export type Content = {
@@ -559,6 +748,82 @@ export type CreateMediaAccountPayload = {
   authorizationScopes?: string[];
   syncEnabled?: boolean;
   matrixMetadata?: Record<string, unknown>;
+};
+
+export type CreateCreatorShortlistPayload = {
+  creatorId: string;
+  name?: string;
+  fitScore?: number;
+  qualificationStatus?: string;
+  brandSafetyLevel?: string;
+  brandSafetyNotes?: string;
+  operatorNotes?: string;
+};
+
+export type CreateCreatorCampaignBriefPayload = {
+  title: string;
+  objective?: string;
+  productName?: string;
+  targetAudience?: string;
+  platformTargets?: string[];
+  deliverableRequirements?: string[];
+  disclosureRequirements?: string[];
+  prohibitedClaims?: string[];
+  authorizationScope?: string;
+  contentUsageRights?: string;
+  reviewWindowHours?: number;
+  deadlineAt?: string;
+  budgetCents?: number;
+  currency?: string;
+  status?: CreatorCampaignBriefStatus;
+};
+
+export type CreateCreatorOrderPayload = {
+  briefId: string;
+  creatorId: string;
+  priceCents?: number;
+  depositCents?: number;
+  serviceFeeCents?: number;
+  currency?: string;
+  disclosureRequirements?: string[];
+  deliverableRequirements?: string[];
+  authorizationScope?: string;
+  contentUsageRights?: string;
+  dueAt?: string;
+  lastMessage?: string;
+};
+
+export type CreateCreatorOrderResponse = {
+  order: CreatorOrder;
+  settlement: CreatorSettlement;
+};
+
+export type SubmitCreatorDeliverablePayload = {
+  type?: string;
+  title?: string;
+  content?: string;
+  assetUrls?: string[];
+};
+
+export type ReviewCreatorDeliverablePayload = {
+  decision: 'approve' | 'request_revision' | 'reject';
+  feedback?: string;
+};
+
+export type RecordCreatorPublicationProofPayload = {
+  externalUrl: string;
+  publicationProofUrl?: string;
+  publicationProofNote?: string;
+  disclosureText: string;
+  notes?: string;
+  publishedAt?: string;
+};
+
+export type RecordCreatorPublicationProofResponse = {
+  deliverable: CreatorDeliverable;
+  order: CreatorOrder;
+  settlement: CreatorSettlement;
+  evidence: CreatorComplianceEvidence;
 };
 
 export type StartMediaAccountBrowserLoginPayload = Record<string, never>;

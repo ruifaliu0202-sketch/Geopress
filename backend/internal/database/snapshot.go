@@ -36,6 +36,17 @@ type Snapshot struct {
 	CampaignRollups        []model.CampaignRollup
 }
 
+type CreatorSnapshot struct {
+	Creators           []model.Creator
+	MediaAccounts      []model.CreatorMediaAccount
+	Shortlists         []model.CreatorShortlist
+	Briefs             []model.CreatorCampaignBrief
+	Orders             []model.CreatorOrder
+	Deliverables       []model.CreatorDeliverable
+	Settlements        []model.CreatorSettlement
+	ComplianceEvidence []model.CreatorComplianceEvidence
+}
+
 type UserCredentials struct {
 	User         model.User
 	PasswordHash string

@@ -1196,6 +1196,250 @@ func TestGenerateContentRejectsUnsupportedContentType(t *testing.T) {
 	}
 }
 
+func TestCreatorCollaborationWorkflow(t *testing.T) {
+	router := testWorkspaceRouter()
+
+	listReq := httptest.NewRequest(http.MethodGet, "/api/creators", nil)
+	listReq.Header.Set("Authorization", "Bearer demo-token")
+	listReq.Header.Set("X-Workspace-ID", "wks_acme")
+	listRec := httptest.NewRecorder()
+	router.ServeHTTP(listRec, listReq)
+	if listRec.Code != http.StatusOK {
+		t.Fatalf("creator list status = %d, want %d, body = %s", listRec.Code, http.StatusOK, listRec.Body.String())
+	}
+	var creatorList struct {
+		Items []model.Creator `json:"items"`
+	}
+	if err := json.Unmarshal(listRec.Body.Bytes(), &creatorList); err != nil {
+		t.Fatalf("unmarshal creator list: %v", err)
+	}
+	if len(creatorList.Items) == 0 {
+		t.Fatal("expected seeded creators")
+	}
+	creatorID := creatorList.Items[0].ID
+
+	detailReq := httptest.NewRequest(http.MethodGet, "/api/creators/"+creatorID, nil)
+	detailReq.Header.Set("Authorization", "Bearer demo-token")
+	detailReq.Header.Set("X-Workspace-ID", "wks_acme")
+	detailRec := httptest.NewRecorder()
+	router.ServeHTTP(detailRec, detailReq)
+	if detailRec.Code != http.StatusOK {
+		t.Fatalf("creator detail status = %d, want %d, body = %s", detailRec.Code, http.StatusOK, detailRec.Body.String())
+	}
+	var detail struct {
+		Creator       model.Creator               `json:"creator"`
+		MediaAccounts []model.CreatorMediaAccount `json:"mediaAccounts"`
+		Shortlists    []model.CreatorShortlist    `json:"shortlists"`
+	}
+	if err := json.Unmarshal(detailRec.Body.Bytes(), &detail); err != nil {
+		t.Fatalf("unmarshal creator detail: %v", err)
+	}
+	if detail.Creator.ID != creatorID || len(detail.MediaAccounts) == 0 {
+		t.Fatalf("unexpected creator detail: %#v", detail)
+	}
+	if detail.MediaAccounts[0].AccountAccessMode != "creator_operated" {
+		t.Fatalf("creator account should not be tenant-login managed: %#v", detail.MediaAccounts[0])
+	}
+
+	shortlistBody := bytes.NewBufferString(fmt.Sprintf(`{
+		"creatorId": %q,
+		"name": "Q3 Launch",
+		"fitScore": 86,
+		"qualificationStatus": "qualified",
+		"brandSafetyLevel": "low",
+		"brandSafetyNotes": "历史内容无明显高风险宣称",
+		"operatorNotes": "适合新品教育内容"
+	}`, creatorID))
+	shortlistReq := httptest.NewRequest(http.MethodPost, "/api/creator-shortlists", shortlistBody)
+	shortlistReq.Header.Set("Authorization", "Bearer demo-token")
+	shortlistReq.Header.Set("X-Workspace-ID", "wks_acme")
+	shortlistReq.Header.Set("Content-Type", "application/json")
+	shortlistRec := httptest.NewRecorder()
+	router.ServeHTTP(shortlistRec, shortlistReq)
+	if shortlistRec.Code != http.StatusCreated {
+		t.Fatalf("shortlist status = %d, want %d, body = %s", shortlistRec.Code, http.StatusCreated, shortlistRec.Body.String())
+	}
+
+	briefBody := bytes.NewBufferString(`{
+		"title": "Q3 产品发布达人合作",
+		"objective": "教育潜在客户理解产品场景",
+		"productName": "Acme Growth",
+		"targetAudience": "B2B SaaS 市场负责人",
+		"platformTargets": ["小红书"],
+		"deliverableRequirements": ["1 篇图文笔记", "发布后保留 30 天"],
+		"disclosureRequirements": ["正文需标注品牌合作"],
+		"prohibitedClaims": ["不得承诺增长效果"],
+		"authorizationScope": "达人自行发布，品牌不得登录达人账号",
+		"contentUsageRights": "品牌可在自有渠道二次使用 90 天",
+		"reviewWindowHours": 48,
+		"budgetCents": 100000,
+		"currency": "cny",
+		"status": "active"
+	}`)
+	briefReq := httptest.NewRequest(http.MethodPost, "/api/creator-briefs", briefBody)
+	briefReq.Header.Set("Authorization", "Bearer demo-token")
+	briefReq.Header.Set("X-Workspace-ID", "wks_acme")
+	briefReq.Header.Set("Content-Type", "application/json")
+	briefRec := httptest.NewRecorder()
+	router.ServeHTTP(briefRec, briefReq)
+	if briefRec.Code != http.StatusCreated {
+		t.Fatalf("brief status = %d, want %d, body = %s", briefRec.Code, http.StatusCreated, briefRec.Body.String())
+	}
+	var brief model.CreatorCampaignBrief
+	if err := json.Unmarshal(briefRec.Body.Bytes(), &brief); err != nil {
+		t.Fatalf("unmarshal brief: %v", err)
+	}
+	if brief.Currency != "CNY" || len(brief.DisclosureRequirements) == 0 || brief.AuthorizationScope == "" || brief.ContentUsageRights == "" {
+		t.Fatalf("brief missed compliance contract fields: %#v", brief)
+	}
+
+	orderBody := bytes.NewBufferString(fmt.Sprintf(`{
+		"briefId": %q,
+		"creatorId": %q,
+		"depositCents": 30000,
+		"lastMessage": "请按 brief 提交初稿"
+	}`, brief.ID, creatorID))
+	orderReq := httptest.NewRequest(http.MethodPost, "/api/creator-orders", orderBody)
+	orderReq.Header.Set("Authorization", "Bearer demo-token")
+	orderReq.Header.Set("X-Workspace-ID", "wks_acme")
+	orderReq.Header.Set("Content-Type", "application/json")
+	orderRec := httptest.NewRecorder()
+	router.ServeHTTP(orderRec, orderReq)
+	if orderRec.Code != http.StatusCreated {
+		t.Fatalf("order status = %d, want %d, body = %s", orderRec.Code, http.StatusCreated, orderRec.Body.String())
+	}
+	var orderResponse struct {
+		Order      model.CreatorOrder      `json:"order"`
+		Settlement model.CreatorSettlement `json:"settlement"`
+	}
+	if err := json.Unmarshal(orderRec.Body.Bytes(), &orderResponse); err != nil {
+		t.Fatalf("unmarshal order: %v", err)
+	}
+	order := orderResponse.Order
+	if order.Status != model.CreatorOrderProposed || order.PriceCents != brief.BudgetCents || order.AuthorizationScope != brief.AuthorizationScope {
+		t.Fatalf("unexpected order: %#v", order)
+	}
+	if orderResponse.Settlement.Status != model.CreatorSettlementPending || orderResponse.Settlement.CreatorPayoutCents != 90000 {
+		t.Fatalf("unexpected settlement: %#v", orderResponse.Settlement)
+	}
+
+	deliverableBody := bytes.NewBufferString(`{
+		"type": "draft",
+		"title": "产品发布笔记初稿",
+		"content": "这是一版达人自行创作的品牌合作内容。",
+		"assetUrls": ["https://example.com/assets/draft-1.png"]
+	}`)
+	deliverableReq := httptest.NewRequest(http.MethodPost, "/api/creator-orders/"+order.ID+"/deliverables", deliverableBody)
+	deliverableReq.Header.Set("Authorization", "Bearer demo-token")
+	deliverableReq.Header.Set("X-Workspace-ID", "wks_acme")
+	deliverableReq.Header.Set("Content-Type", "application/json")
+	deliverableRec := httptest.NewRecorder()
+	router.ServeHTTP(deliverableRec, deliverableReq)
+	if deliverableRec.Code != http.StatusCreated {
+		t.Fatalf("deliverable status = %d, want %d, body = %s", deliverableRec.Code, http.StatusCreated, deliverableRec.Body.String())
+	}
+	var deliverable model.CreatorDeliverable
+	if err := json.Unmarshal(deliverableRec.Body.Bytes(), &deliverable); err != nil {
+		t.Fatalf("unmarshal deliverable: %v", err)
+	}
+	if deliverable.Status != model.CreatorDeliverableSubmitted || deliverable.Revision != 1 {
+		t.Fatalf("unexpected deliverable: %#v", deliverable)
+	}
+
+	duplicateSubmitReq := httptest.NewRequest(http.MethodPost, "/api/creator-orders/"+order.ID+"/deliverables", bytes.NewBufferString(`{"title":"重复提交"}`))
+	duplicateSubmitReq.Header.Set("Authorization", "Bearer demo-token")
+	duplicateSubmitReq.Header.Set("X-Workspace-ID", "wks_acme")
+	duplicateSubmitReq.Header.Set("Content-Type", "application/json")
+	duplicateSubmitRec := httptest.NewRecorder()
+	router.ServeHTTP(duplicateSubmitRec, duplicateSubmitReq)
+	if duplicateSubmitRec.Code != http.StatusConflict {
+		t.Fatalf("duplicate submit status = %d, want %d, body = %s", duplicateSubmitRec.Code, http.StatusConflict, duplicateSubmitRec.Body.String())
+	}
+
+	reviewBody := bytes.NewBufferString(`{
+		"decision": "approve",
+		"feedback": "披露和禁用宣称都符合 brief"
+	}`)
+	reviewReq := httptest.NewRequest(http.MethodPost, "/api/creator-deliverables/"+deliverable.ID+"/review", reviewBody)
+	reviewReq.Header.Set("Authorization", "Bearer demo-token")
+	reviewReq.Header.Set("X-Workspace-ID", "wks_acme")
+	reviewReq.Header.Set("Content-Type", "application/json")
+	reviewRec := httptest.NewRecorder()
+	router.ServeHTTP(reviewRec, reviewReq)
+	if reviewRec.Code != http.StatusOK {
+		t.Fatalf("review status = %d, want %d, body = %s", reviewRec.Code, http.StatusOK, reviewRec.Body.String())
+	}
+	var reviewed model.CreatorDeliverable
+	if err := json.Unmarshal(reviewRec.Body.Bytes(), &reviewed); err != nil {
+		t.Fatalf("unmarshal reviewed deliverable: %v", err)
+	}
+	if reviewed.Status != model.CreatorDeliverableApproved || reviewed.ReviewedAt == nil {
+		t.Fatalf("unexpected reviewed deliverable: %#v", reviewed)
+	}
+
+	proofWithoutDisclosureReq := httptest.NewRequest(http.MethodPost, "/api/creator-deliverables/"+deliverable.ID+"/publication-proof", bytes.NewBufferString(`{
+		"externalUrl": "https://example.com/posts/creator-1"
+	}`))
+	proofWithoutDisclosureReq.Header.Set("Authorization", "Bearer demo-token")
+	proofWithoutDisclosureReq.Header.Set("X-Workspace-ID", "wks_acme")
+	proofWithoutDisclosureReq.Header.Set("Content-Type", "application/json")
+	proofWithoutDisclosureRec := httptest.NewRecorder()
+	router.ServeHTTP(proofWithoutDisclosureRec, proofWithoutDisclosureReq)
+	if proofWithoutDisclosureRec.Code != http.StatusBadRequest {
+		t.Fatalf("proof without disclosure status = %d, want %d, body = %s", proofWithoutDisclosureRec.Code, http.StatusBadRequest, proofWithoutDisclosureRec.Body.String())
+	}
+
+	proofBody := bytes.NewBufferString(`{
+		"externalUrl": "https://example.com/posts/creator-1",
+		"publicationProofUrl": "https://example.com/proofs/screenshot-1.png",
+		"publicationProofNote": "截图保留了发布时间和账号主页",
+		"disclosureText": "品牌合作：Acme Growth",
+		"notes": "已确认外链可访问"
+	}`)
+	proofReq := httptest.NewRequest(http.MethodPost, "/api/creator-deliverables/"+deliverable.ID+"/publication-proof", proofBody)
+	proofReq.Header.Set("Authorization", "Bearer demo-token")
+	proofReq.Header.Set("X-Workspace-ID", "wks_acme")
+	proofReq.Header.Set("Content-Type", "application/json")
+	proofRec := httptest.NewRecorder()
+	router.ServeHTTP(proofRec, proofReq)
+	if proofRec.Code != http.StatusOK {
+		t.Fatalf("proof status = %d, want %d, body = %s", proofRec.Code, http.StatusOK, proofRec.Body.String())
+	}
+	var proofResponse struct {
+		Deliverable model.CreatorDeliverable        `json:"deliverable"`
+		Order       model.CreatorOrder              `json:"order"`
+		Settlement  model.CreatorSettlement         `json:"settlement"`
+		Evidence    model.CreatorComplianceEvidence `json:"evidence"`
+	}
+	if err := json.Unmarshal(proofRec.Body.Bytes(), &proofResponse); err != nil {
+		t.Fatalf("unmarshal proof response: %v", err)
+	}
+	if proofResponse.Deliverable.Status != model.CreatorDeliverablePublished || proofResponse.Order.Status != model.CreatorOrderPublished {
+		t.Fatalf("unexpected proof state: %#v", proofResponse)
+	}
+	if proofResponse.Settlement.Status != model.CreatorSettlementPayable {
+		t.Fatalf("settlement status = %q, want payable", proofResponse.Settlement.Status)
+	}
+	if proofResponse.Evidence.EvidenceType != model.CreatorEvidencePublicationProof ||
+		proofResponse.Evidence.DisclosureText == "" ||
+		proofResponse.Evidence.AuthorizationScope == "" ||
+		proofResponse.Evidence.ContentUsageRights == "" {
+		t.Fatalf("publication evidence missed compliance fields: %#v", proofResponse.Evidence)
+	}
+
+	settlementReq := httptest.NewRequest(http.MethodGet, "/api/creator-settlements", nil)
+	settlementReq.Header.Set("Authorization", "Bearer demo-token")
+	settlementReq.Header.Set("X-Workspace-ID", "wks_acme")
+	settlementRec := httptest.NewRecorder()
+	router.ServeHTTP(settlementRec, settlementReq)
+	if settlementRec.Code != http.StatusOK {
+		t.Fatalf("settlement list status = %d, want %d, body = %s", settlementRec.Code, http.StatusOK, settlementRec.Body.String())
+	}
+	if !bytes.Contains(settlementRec.Body.Bytes(), []byte(`"status":"payable"`)) {
+		t.Fatalf("settlement list does not include payable settlement: %s", settlementRec.Body.String())
+	}
+}
+
 func traceHasStep(trace ai.GenerationTrace, id string, status string) bool {
 	for _, step := range trace.Steps {
 		if step.ID == id && step.Status == status {
