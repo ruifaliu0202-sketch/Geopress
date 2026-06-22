@@ -1,3 +1,4 @@
+import type { ReactNode } from 'react';
 import {
   Button,
   Checkbox,
@@ -7,6 +8,7 @@ import {
   Table,
   TableBody,
   TableCell,
+  TableContainer,
   TableHead,
   TableRow,
   Typography,
@@ -63,6 +65,59 @@ const frequencyLabel: Record<PublishScheduleFrequency, string> = {
   monthly: '每月',
 };
 
+const wrappingTextSx = {
+  minWidth: 0,
+  overflowWrap: 'anywhere',
+};
+
+const secondaryTextSx = {
+  ...wrappingTextSx,
+  display: '-webkit-box',
+  WebkitBoxOrient: 'vertical',
+  WebkitLineClamp: 2,
+  overflow: 'hidden',
+} as const;
+
+function DataTableFrame({
+  children,
+  minWidth = 760,
+  size = 'medium',
+}: {
+  children: ReactNode;
+  minWidth?: number;
+  size?: 'small' | 'medium';
+}) {
+  return (
+    <TableContainer sx={{ width: '100%', overflowX: 'auto', WebkitOverflowScrolling: 'touch' }}>
+      <Table
+        size={size}
+        sx={{
+          minWidth,
+          '& .MuiTableCell-root': {
+            verticalAlign: 'top',
+            overflowWrap: 'anywhere',
+          },
+          '& .MuiTableCell-head': {
+            whiteSpace: 'nowrap',
+          },
+        }}
+      >
+        {children}
+      </Table>
+    </TableContainer>
+  );
+}
+
+function EmptyTableRow({ colSpan, label }: { colSpan: number; label: string }) {
+  return (
+    <TableRow>
+      <TableCell colSpan={colSpan} sx={{ py: 4, textAlign: 'center' }}>
+        <Typography color="text.secondary">{label}</Typography>
+      </TableCell>
+    </TableRow>
+  );
+}
+
 export function KnowledgeItemsTable({
   items,
   bases,
@@ -94,7 +149,7 @@ export function KnowledgeItemsTable({
   };
 
   return (
-    <Table>
+    <DataTableFrame minWidth={selectable ? 820 : 760}>
       <TableHead>
         <TableRow>
           {selectable && (
@@ -114,6 +169,7 @@ export function KnowledgeItemsTable({
         </TableRow>
       </TableHead>
       <TableBody>
+        {items.length === 0 && <EmptyTableRow colSpan={selectable ? 6 : 5} label="暂无知识条目" />}
         {items.map((item) => (
           <TableRow key={item.id} hover>
             {selectable && (
@@ -125,13 +181,15 @@ export function KnowledgeItemsTable({
               </TableCell>
             )}
             <TableCell>
-              <Typography fontWeight={700}>{item.title}</Typography>
-              <Typography variant="body2" color="text.secondary" sx={{ maxWidth: 520 }}>
+              <Typography fontWeight={700} sx={wrappingTextSx}>
+                {item.title}
+              </Typography>
+              <Typography variant="body2" color="text.secondary" sx={{ ...secondaryTextSx, maxWidth: 520 }}>
                 {item.content}
               </Typography>
             </TableCell>
-            <TableCell>{knowledgeBaseNames(bases, item.knowledgeBaseIds)}</TableCell>
-            <TableCell>{item.type}</TableCell>
+            <TableCell sx={{ minWidth: 140 }}>{knowledgeBaseNames(bases, item.knowledgeBaseIds)}</TableCell>
+            <TableCell sx={{ minWidth: 96 }}>{item.type}</TableCell>
             <TableCell>
               <Chip size="small" label={item.enabled ? '启用' : '停用'} color={item.enabled ? 'success' : 'default'} />
             </TableCell>
@@ -139,13 +197,13 @@ export function KnowledgeItemsTable({
           </TableRow>
         ))}
       </TableBody>
-    </Table>
+    </DataTableFrame>
   );
 }
 
 export function MediaPlatformTable({ platforms }: { platforms: MediaPlatform[] }) {
   return (
-    <Table>
+    <DataTableFrame minWidth={720}>
       <TableHead>
         <TableRow>
           <TableCell>平台</TableCell>
@@ -156,12 +214,13 @@ export function MediaPlatformTable({ platforms }: { platforms: MediaPlatform[] }
         </TableRow>
       </TableHead>
       <TableBody>
+        {platforms.length === 0 && <EmptyTableRow colSpan={5} label="暂无可绑定媒体平台" />}
         {platforms.map((platform) => (
           <TableRow key={platform.id} hover>
-            <TableCell>{platform.name}</TableCell>
-            <TableCell>{platform.type}</TableCell>
+            <TableCell sx={{ minWidth: 120 }}>{platform.name}</TableCell>
+            <TableCell sx={{ minWidth: 112 }}>{platform.type}</TableCell>
             <TableCell>
-              <Stack direction="row" spacing={0.5}>
+              <Stack direction="row" spacing={0.5} flexWrap="wrap" useFlexGap>
                 {platform.supportsArticle && <Chip size="small" label="文章" />}
                 {platform.supportsImage && <Chip size="small" label="图片" />}
                 {platform.supportsScheduling && <Chip size="small" label="定时" />}
@@ -170,11 +229,11 @@ export function MediaPlatformTable({ platforms }: { platforms: MediaPlatform[] }
             <TableCell>
               <Chip size="small" label={platform.enabled ? '启用' : '停用'} color={platform.enabled ? 'success' : 'default'} />
             </TableCell>
-            <TableCell>{platform.credentialFields.map(credentialFieldLabel).join(', ')}</TableCell>
+            <TableCell sx={{ minWidth: 180 }}>{platform.credentialFields.map(credentialFieldLabel).join(', ')}</TableCell>
           </TableRow>
         ))}
       </TableBody>
-    </Table>
+    </DataTableFrame>
   );
 }
 
@@ -188,7 +247,7 @@ export function MediaAccountsTable({
   onLogin?: (accountId: string) => void;
 }) {
   return (
-    <Table>
+    <DataTableFrame minWidth={onLogin ? 920 : 840}>
       <TableHead>
         <TableRow>
           <TableCell>账号</TableCell>
@@ -202,16 +261,17 @@ export function MediaAccountsTable({
         </TableRow>
       </TableHead>
       <TableBody>
+        {accounts.length === 0 && <EmptyTableRow colSpan={onLogin ? 8 : 7} label="暂无绑定媒体账号" />}
         {accounts.map((account) => {
           const platform = platforms.find((item) => item.id === account.platformId);
           const canLogin = supportsBrowserLogin(platform?.type) && account.loginMethod === 'qr' && account.status !== 'connected';
           return (
             <TableRow key={account.id} hover>
-              <TableCell>{account.name}</TableCell>
-              <TableCell>{platform?.name ?? account.platformId}</TableCell>
+              <TableCell sx={{ minWidth: 140 }}>{account.name}</TableCell>
+              <TableCell sx={{ minWidth: 120 }}>{platform?.name ?? account.platformId}</TableCell>
               <TableCell>{loginMethodLabel(account.loginMethod)}</TableCell>
-              <TableCell>{account.loginMethod === 'qr' ? '服务端二维码' : account.credentialMeta?.phoneNumber ?? '-'}</TableCell>
-              <TableCell>{account.externalId}</TableCell>
+              <TableCell sx={{ minWidth: 140 }}>{account.loginMethod === 'qr' ? '服务端二维码' : account.credentialMeta?.phoneNumber ?? '-'}</TableCell>
+              <TableCell sx={{ minWidth: 128 }}>{account.externalId || '-'}</TableCell>
               <TableCell>
                 <Chip size="small" label={mediaAccountStatusLabel(account.status)} color={mediaAccountStatusColor(account.status)} />
               </TableCell>
@@ -219,7 +279,7 @@ export function MediaAccountsTable({
               {onLogin && (
                 <TableCell align="right">
                   {canLogin ? (
-                    <Button size="small" startIcon={<LoginOutlinedIcon />} onClick={() => onLogin(account.id)}>
+                    <Button size="small" startIcon={<LoginOutlinedIcon />} onClick={() => onLogin(account.id)} sx={{ whiteSpace: 'nowrap' }}>
                       登录绑定
                     </Button>
                   ) : (
@@ -231,7 +291,7 @@ export function MediaAccountsTable({
           );
         })}
       </TableBody>
-    </Table>
+    </DataTableFrame>
   );
 }
 
@@ -243,7 +303,7 @@ export function ContentTable({
   onPreparePublish?: (contentId: string) => void;
 }) {
   return (
-    <Table>
+    <DataTableFrame minWidth={onPreparePublish ? 840 : 760}>
       <TableHead>
         <TableRow>
           <TableCell>标题</TableCell>
@@ -255,17 +315,20 @@ export function ContentTable({
         </TableRow>
       </TableHead>
       <TableBody>
+        {contents.length === 0 && <EmptyTableRow colSpan={onPreparePublish ? 6 : 5} label="暂无内容" />}
         {contents.map((content) => {
           const status = contentStatusMap[content.status];
           return (
             <TableRow key={content.id} hover>
               <TableCell>
-                <Typography fontWeight={700}>{content.title}</Typography>
-                <Typography variant="body2" color="text.secondary">
+                <Typography fontWeight={700} sx={wrappingTextSx}>
+                  {content.title}
+                </Typography>
+                <Typography variant="body2" color="text.secondary" sx={secondaryTextSx}>
                   {content.summary}
                 </Typography>
               </TableCell>
-              <TableCell>{content.keywords.join(', ')}</TableCell>
+              <TableCell sx={{ minWidth: 160 }}>{content.keywords.join(', ')}</TableCell>
               <TableCell>
                 <Chip size="small" label={status.label} color={status.color} />
               </TableCell>
@@ -278,6 +341,7 @@ export function ContentTable({
                     startIcon={<PublishOutlinedIcon />}
                     onClick={() => onPreparePublish(content.id)}
                     data-tour-id="content-publish-action"
+                    sx={{ whiteSpace: 'nowrap' }}
                   >
                     小红书发布
                   </Button>
@@ -287,13 +351,13 @@ export function ContentTable({
           );
         })}
       </TableBody>
-    </Table>
+    </DataTableFrame>
   );
 }
 
 export function SchedulesTable({ data }: { data: WorkspaceData }) {
   return (
-    <Table>
+    <DataTableFrame minWidth={800}>
       <TableHead>
         <TableRow>
           <TableCell>计划</TableCell>
@@ -305,11 +369,12 @@ export function SchedulesTable({ data }: { data: WorkspaceData }) {
         </TableRow>
       </TableHead>
       <TableBody>
+        {data.publishSchedules.length === 0 && <EmptyTableRow colSpan={6} label="暂无发布计划" />}
         {data.publishSchedules.map((schedule) => (
           <TableRow key={schedule.id} hover>
-            <TableCell>{schedule.name}</TableCell>
-            <TableCell>{contentName(data.contents, schedule.contentId)}</TableCell>
-            <TableCell>{accountName(data.mediaAccounts, schedule.mediaAccountId)}</TableCell>
+            <TableCell sx={{ minWidth: 140 }}>{schedule.name}</TableCell>
+            <TableCell sx={{ minWidth: 160 }}>{contentName(data.contents, schedule.contentId)}</TableCell>
+            <TableCell sx={{ minWidth: 140 }}>{accountName(data.mediaAccounts, schedule.mediaAccountId)}</TableCell>
             <TableCell>{frequencyLabel[schedule.frequency]}</TableCell>
             <TableCell>{formatDate(schedule.nextRunAt)}</TableCell>
             <TableCell>
@@ -318,13 +383,13 @@ export function SchedulesTable({ data }: { data: WorkspaceData }) {
           </TableRow>
         ))}
       </TableBody>
-    </Table>
+    </DataTableFrame>
   );
 }
 
 export function JobsTable({ data, dense = false }: { data: WorkspaceData; dense?: boolean }) {
   return (
-    <Table size={dense ? 'small' : 'medium'}>
+    <DataTableFrame minWidth={dense ? 720 : 860} size={dense ? 'small' : 'medium'}>
       <TableHead>
         <TableRow>
           <TableCell>内容</TableCell>
@@ -336,17 +401,18 @@ export function JobsTable({ data, dense = false }: { data: WorkspaceData; dense?
         </TableRow>
       </TableHead>
       <TableBody>
+        {data.publishJobs.length === 0 && <EmptyTableRow colSpan={6} label="暂无发布任务" />}
         {data.publishJobs.map((job) => {
           const status = jobStatusMap[job.status];
           return (
             <TableRow key={job.id} hover>
-              <TableCell>{contentName(data.contents, job.contentId)}</TableCell>
-              <TableCell>{accountName(data.mediaAccounts, job.mediaAccountId)}</TableCell>
+              <TableCell sx={{ minWidth: 160 }}>{contentName(data.contents, job.contentId)}</TableCell>
+              <TableCell sx={{ minWidth: 140 }}>{accountName(data.mediaAccounts, job.mediaAccountId)}</TableCell>
               <TableCell>
                 <Chip size="small" label={status.label} color={status.color} />
               </TableCell>
               <TableCell>{formatDate(job.scheduledAt)}</TableCell>
-              <TableCell>{job.lastMessage}</TableCell>
+              <TableCell sx={{ minWidth: 160 }}>{job.lastMessage || '-'}</TableCell>
               <TableCell>
                 {job.externalUrl ? (
                   <Link href={job.externalUrl} target="_blank" rel="noreferrer">
@@ -360,6 +426,6 @@ export function JobsTable({ data, dense = false }: { data: WorkspaceData; dense?
           );
         })}
       </TableBody>
-    </Table>
+    </DataTableFrame>
   );
 }

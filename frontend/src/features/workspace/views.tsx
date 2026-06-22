@@ -665,16 +665,34 @@ function KnowledgeView({
           </Stack>
         }
       >
-        <Stack direction="row" alignItems="center" spacing={1.5}>
+        <Stack direction="row" alignItems="center" spacing={{ xs: 0.75, sm: 1.5 }} sx={{ minWidth: 0 }}>
           <IconButton
             aria-label="上一页知识库包"
-            disabled={packagePage === 0}
+            disabled={packagePage === 0 || data.knowledgeBases.length === 0}
             onClick={() => setPackagePage((value) => Math.max(0, value - 1))}
+            sx={{ flexShrink: 0 }}
           >
             <ChevronLeftIcon />
           </IconButton>
-          <Box ref={packageViewportRef} sx={{ flex: 1, overflow: 'hidden' }}>
+          <Box ref={packageViewportRef} sx={{ flex: 1, minWidth: 0, overflow: 'hidden' }}>
             <Stack direction="row" spacing={1.5} sx={{ minHeight: 148 }}>
+              {data.knowledgeBases.length === 0 && (
+                <Paper
+                  elevation={0}
+                  sx={{
+                    width: '100%',
+                    minHeight: 148,
+                    display: 'flex',
+                    alignItems: 'center',
+                    border: '1px dashed',
+                    borderColor: 'divider',
+                    bgcolor: 'action.hover',
+                    p: 2,
+                  }}
+                >
+                  <Typography color="text.secondary">暂无知识库包，请先新建包。</Typography>
+                </Paper>
+              )}
               {visiblePackages.map((base) => (
                 <Card
                   key={base.id}
@@ -688,16 +706,26 @@ function KnowledgeView({
                     boxShadow: selectedBaseId === base.id ? 2 : 0,
                   }}
                 >
-                  <CardContent>
-                    <Stack spacing={1.25}>
-                      <Stack direction="row" justifyContent="space-between" spacing={2}>
+                  <CardContent sx={{ minHeight: 148 }}>
+                    <Stack spacing={1.25} sx={{ height: '100%' }}>
+                      <Stack direction="row" justifyContent="space-between" spacing={1} alignItems="flex-start">
                         <Typography variant="h3" sx={{ overflowWrap: 'anywhere' }}>{base.name}</Typography>
-                        <Chip label={`${base.itemCount} 条`} size="small" color={selectedBaseId === base.id ? 'primary' : 'info'} />
+                        <Chip label={`${base.itemCount} 条`} size="small" color={selectedBaseId === base.id ? 'primary' : 'info'} sx={{ flexShrink: 0 }} />
                       </Stack>
-                      <Typography color="text.secondary" sx={{ minHeight: 44 }}>
+                      <Typography
+                        color="text.secondary"
+                        sx={{
+                          minHeight: 44,
+                          overflowWrap: 'anywhere',
+                          display: '-webkit-box',
+                          WebkitBoxOrient: 'vertical',
+                          WebkitLineClamp: 2,
+                          overflow: 'hidden',
+                        }}
+                      >
                         {base.description || '暂无说明'}
                       </Typography>
-                      <Typography variant="body2" color="text.secondary">
+                      <Typography variant="body2" color="text.secondary" sx={{ mt: 'auto' }}>
                         更新于 {formatDate(base.updatedAt)}
                       </Typography>
                     </Stack>
@@ -708,8 +736,9 @@ function KnowledgeView({
           </Box>
           <IconButton
             aria-label="下一页知识库包"
-            disabled={packagePage >= totalPackagePages - 1}
+            disabled={packagePage >= totalPackagePages - 1 || data.knowledgeBases.length === 0}
             onClick={() => setPackagePage((value) => Math.min(totalPackagePages - 1, value + 1))}
+            sx={{ flexShrink: 0 }}
           >
             <ChevronRightIcon />
           </IconButton>
@@ -720,7 +749,7 @@ function KnowledgeView({
         title="知识条目检索"
         action={
           <Stack direction={{ xs: 'column', md: 'row' }} spacing={1} alignItems={{ xs: 'stretch', md: 'center' }}>
-            <FormControl size="small" sx={{ minWidth: 220 }}>
+            <FormControl size="small" sx={{ width: { xs: '100%', sm: 260 }, minWidth: 0 }}>
               <InputLabel>批量加入知识库包</InputLabel>
               <Select
                 multiple
