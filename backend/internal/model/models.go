@@ -368,6 +368,171 @@ type GenerationRequest struct {
 	CreatedAt             time.Time `json:"createdAt"`
 }
 
+type CampaignStatus string
+
+const (
+	CampaignDraft     CampaignStatus = "draft"
+	CampaignPlanned   CampaignStatus = "planned"
+	CampaignActive    CampaignStatus = "active"
+	CampaignPaused    CampaignStatus = "paused"
+	CampaignCompleted CampaignStatus = "completed"
+	CampaignArchived  CampaignStatus = "archived"
+)
+
+type Campaign struct {
+	ID              string         `json:"id"`
+	WorkspaceID     string         `json:"workspaceId"`
+	Name            string         `json:"name"`
+	Description     string         `json:"description"`
+	Status          CampaignStatus `json:"status"`
+	Goal            string         `json:"goal"`
+	Products        []string       `json:"products"`
+	TargetAudiences []string       `json:"targetAudiences"`
+	Channels        []string       `json:"channels"`
+	MediaAccountIDs []string       `json:"mediaAccountIds"`
+	StartAt         *time.Time     `json:"startAt,omitempty"`
+	EndAt           *time.Time     `json:"endAt,omitempty"`
+	BudgetCents     int            `json:"budgetCents"`
+	Currency        string         `json:"currency"`
+	ContentQuota    int            `json:"contentQuota"`
+	ApprovalPolicy  string         `json:"approvalPolicy"`
+	SuccessMetrics  []string       `json:"successMetrics"`
+	Metadata        map[string]any `json:"metadata"`
+	CreatedAt       time.Time      `json:"createdAt"`
+	UpdatedAt       time.Time      `json:"updatedAt"`
+}
+
+type CampaignTopicStatus string
+
+const (
+	CampaignTopicIdea      CampaignTopicStatus = "idea"
+	CampaignTopicPlanned   CampaignTopicStatus = "planned"
+	CampaignTopicDrafted   CampaignTopicStatus = "drafted"
+	CampaignTopicApproved  CampaignTopicStatus = "approved"
+	CampaignTopicScheduled CampaignTopicStatus = "scheduled"
+	CampaignTopicPublished CampaignTopicStatus = "published"
+	CampaignTopicCanceled  CampaignTopicStatus = "canceled"
+)
+
+type CampaignTopic struct {
+	ID             string              `json:"id"`
+	WorkspaceID    string              `json:"workspaceId"`
+	CampaignID     string              `json:"campaignId"`
+	Title          string              `json:"title"`
+	Brief          string              `json:"brief"`
+	ContentType    string              `json:"contentType"`
+	TargetAudience string              `json:"targetAudience"`
+	FunnelStage    string              `json:"funnelStage"`
+	Keywords       []string            `json:"keywords"`
+	Status         CampaignTopicStatus `json:"status"`
+	ContentID      string              `json:"contentId"`
+	Metadata       map[string]any      `json:"metadata"`
+	CreatedAt      time.Time           `json:"createdAt"`
+	UpdatedAt      time.Time           `json:"updatedAt"`
+}
+
+type CampaignCalendarItemStatus string
+
+const (
+	CampaignCalendarPlanned   CampaignCalendarItemStatus = "planned"
+	CampaignCalendarDrafting  CampaignCalendarItemStatus = "drafting"
+	CampaignCalendarReview    CampaignCalendarItemStatus = "review"
+	CampaignCalendarScheduled CampaignCalendarItemStatus = "scheduled"
+	CampaignCalendarPublished CampaignCalendarItemStatus = "published"
+	CampaignCalendarSkipped   CampaignCalendarItemStatus = "skipped"
+	CampaignCalendarCanceled  CampaignCalendarItemStatus = "canceled"
+)
+
+type CampaignCalendarItem struct {
+	ID                   string                     `json:"id"`
+	WorkspaceID          string                     `json:"workspaceId"`
+	CampaignID           string                     `json:"campaignId"`
+	TopicID              string                     `json:"topicId"`
+	ContentID            string                     `json:"contentId"`
+	PublishScheduleID    string                     `json:"publishScheduleId"`
+	PublishJobID         string                     `json:"publishJobId"`
+	MediaAccountID       string                     `json:"mediaAccountId"`
+	AssignedUserID       string                     `json:"assignedUserId"`
+	Title                string                     `json:"title"`
+	Brief                string                     `json:"brief"`
+	ContentType          string                     `json:"contentType"`
+	Channel              string                     `json:"channel"`
+	PublishWindowStartAt *time.Time                 `json:"publishWindowStartAt,omitempty"`
+	PublishWindowEndAt   *time.Time                 `json:"publishWindowEndAt,omitempty"`
+	Status               CampaignCalendarItemStatus `json:"status"`
+	DependencyItemIDs    []string                   `json:"dependencyItemIds"`
+	ApprovalRequired     bool                       `json:"approvalRequired"`
+	ApprovalStatus       string                     `json:"approvalStatus"`
+	Metadata             map[string]any             `json:"metadata"`
+	CreatedAt            time.Time                  `json:"createdAt"`
+	UpdatedAt            time.Time                  `json:"updatedAt"`
+}
+
+type CampaignMetric struct {
+	ID             string         `json:"id"`
+	WorkspaceID    string         `json:"workspaceId"`
+	CampaignID     string         `json:"campaignId"`
+	CalendarItemID string         `json:"calendarItemId"`
+	ContentID      string         `json:"contentId"`
+	PublishJobID   string         `json:"publishJobId"`
+	MediaAccountID string         `json:"mediaAccountId"`
+	MetricName     string         `json:"metricName"`
+	MetricValue    float64        `json:"metricValue"`
+	MetricUnit     string         `json:"metricUnit"`
+	Source         string         `json:"source"`
+	CollectedAt    time.Time      `json:"collectedAt"`
+	Metadata       map[string]any `json:"metadata"`
+	CreatedAt      time.Time      `json:"createdAt"`
+}
+
+type CampaignRollup struct {
+	ID              string         `json:"id"`
+	WorkspaceID     string         `json:"workspaceId"`
+	CampaignID      string         `json:"campaignId"`
+	PeriodStart     time.Time      `json:"periodStart"`
+	PeriodEnd       time.Time      `json:"periodEnd"`
+	ContentCount    int            `json:"contentCount"`
+	ScheduledCount  int            `json:"scheduledCount"`
+	PublishedCount  int            `json:"publishedCount"`
+	FailedCount     int            `json:"failedCount"`
+	ImpressionCount int64          `json:"impressionCount"`
+	EngagementCount int64          `json:"engagementCount"`
+	ClickCount      int64          `json:"clickCount"`
+	ConversionCount int64          `json:"conversionCount"`
+	SpendCents      int            `json:"spendCents"`
+	RevenueCents    int            `json:"revenueCents"`
+	Metadata        map[string]any `json:"metadata"`
+	CreatedAt       time.Time      `json:"createdAt"`
+}
+
+type CampaignRecommendation struct {
+	Type     string         `json:"type"`
+	Title    string         `json:"title"`
+	Reason   string         `json:"reason"`
+	Metadata map[string]any `json:"metadata"`
+}
+
+type CampaignReportSummary struct {
+	WorkspaceID         string                   `json:"workspaceId"`
+	CampaignID          string                   `json:"campaignId"`
+	Status              CampaignStatus           `json:"status"`
+	CalendarItemCount   int                      `json:"calendarItemCount"`
+	ContentCount        int                      `json:"contentCount"`
+	PublishJobCount     int                      `json:"publishJobCount"`
+	PlannedItemCount    int                      `json:"plannedItemCount"`
+	ScheduledItemCount  int                      `json:"scheduledItemCount"`
+	PublishedItemCount  int                      `json:"publishedItemCount"`
+	FailedItemCount     int                      `json:"failedItemCount"`
+	StatusCounts        map[string]int           `json:"statusCounts"`
+	MetricTotals        map[string]float64       `json:"metricTotals"`
+	Metrics             []CampaignMetric         `json:"metrics"`
+	Rollups             []CampaignRollup         `json:"rollups"`
+	Recommendations     []CampaignRecommendation `json:"recommendations"`
+	ReportingWindowFrom *time.Time               `json:"reportingWindowFrom,omitempty"`
+	ReportingWindowTo   *time.Time               `json:"reportingWindowTo,omitempty"`
+	UpdatedAt           time.Time                `json:"updatedAt"`
+}
+
 type PublishScheduleFrequency string
 
 const (

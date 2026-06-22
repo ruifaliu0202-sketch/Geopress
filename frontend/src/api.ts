@@ -33,6 +33,12 @@ import type {
   CompleteMediaAccountBrowserLoginPayload,
   PublishJob,
   PublishSchedule,
+  Campaign,
+  CampaignCalendarItem,
+  CampaignReportSummary,
+  CreateCampaignPayload,
+  UpdateCampaignPayload,
+  CreateCampaignCalendarItemPayload,
   RegisterPayload,
   SubscriptionPlan,
   User,
@@ -338,6 +344,67 @@ export async function createPublishSchedule(
     method: 'POST',
     body: JSON.stringify(payload),
   });
+}
+
+export async function fetchCampaigns(token: string, workspaceId: string): Promise<Campaign[]> {
+  const response = await request<ListResponse<Campaign>>('/campaigns', token, workspaceId);
+  return response.items;
+}
+
+export async function createCampaign(
+  token: string,
+  workspaceId: string,
+  payload: CreateCampaignPayload,
+): Promise<Campaign> {
+  return request<Campaign>('/campaigns', token, workspaceId, {
+    method: 'POST',
+    body: JSON.stringify(payload),
+  });
+}
+
+export async function updateCampaign(
+  token: string,
+  workspaceId: string,
+  campaignId: string,
+  payload: UpdateCampaignPayload,
+): Promise<Campaign> {
+  return request<Campaign>(`/campaigns/${campaignId}`, token, workspaceId, {
+    method: 'PUT',
+    body: JSON.stringify(payload),
+  });
+}
+
+export async function fetchCampaignCalendarItems(
+  token: string,
+  workspaceId: string,
+  campaignId: string,
+): Promise<CampaignCalendarItem[]> {
+  const response = await request<ListResponse<CampaignCalendarItem>>(
+    `/campaigns/${campaignId}/calendar-items`,
+    token,
+    workspaceId,
+  );
+  return response.items;
+}
+
+export async function createCampaignCalendarItem(
+  token: string,
+  workspaceId: string,
+  campaignId: string,
+  payload: CreateCampaignCalendarItemPayload,
+): Promise<CampaignCalendarItem> {
+  return request<CampaignCalendarItem>(`/campaigns/${campaignId}/calendar-items`, token, workspaceId, {
+    method: 'POST',
+    body: JSON.stringify(payload),
+  });
+}
+
+export async function fetchCampaignReportSummary(
+  token: string,
+  workspaceId: string,
+  campaignId: string,
+): Promise<CampaignReportSummary> {
+  return request<CampaignReportSummary>(`/campaigns/${campaignId}/report-summary`, token, workspaceId);
 }
 
 export async function preparePublish(

@@ -283,6 +283,130 @@ export type PublishJob = {
   attributionMetadata: Record<string, unknown>;
 };
 
+export type CampaignStatus = 'draft' | 'planned' | 'active' | 'paused' | 'completed' | 'archived';
+
+export type Campaign = {
+  id: string;
+  workspaceId: string;
+  name: string;
+  description: string;
+  status: CampaignStatus;
+  goal: string;
+  products: string[];
+  targetAudiences: string[];
+  channels: string[];
+  mediaAccountIds: string[];
+  startAt?: string | null;
+  endAt?: string | null;
+  budgetCents: number;
+  currency: string;
+  contentQuota: number;
+  approvalPolicy: string;
+  successMetrics: string[];
+  metadata: Record<string, unknown>;
+  createdAt: string;
+  updatedAt: string;
+};
+
+export type CampaignCalendarItemStatus =
+  | 'planned'
+  | 'drafting'
+  | 'review'
+  | 'scheduled'
+  | 'published'
+  | 'skipped'
+  | 'canceled';
+
+export type CampaignCalendarItem = {
+  id: string;
+  workspaceId: string;
+  campaignId: string;
+  topicId: string;
+  contentId: string;
+  publishScheduleId: string;
+  publishJobId: string;
+  mediaAccountId: string;
+  assignedUserId: string;
+  title: string;
+  brief: string;
+  contentType: string;
+  channel: string;
+  publishWindowStartAt?: string;
+  publishWindowEndAt?: string;
+  status: CampaignCalendarItemStatus;
+  dependencyItemIds: string[];
+  approvalRequired: boolean;
+  approvalStatus: string;
+  metadata: Record<string, unknown>;
+  createdAt: string;
+  updatedAt: string;
+};
+
+export type CampaignMetric = {
+  id: string;
+  workspaceId: string;
+  campaignId: string;
+  calendarItemId: string;
+  contentId: string;
+  publishJobId: string;
+  mediaAccountId: string;
+  metricName: string;
+  metricValue: number;
+  metricUnit: string;
+  source: string;
+  collectedAt: string;
+  metadata: Record<string, unknown>;
+  createdAt: string;
+};
+
+export type CampaignRollup = {
+  id: string;
+  workspaceId: string;
+  campaignId: string;
+  periodStart: string;
+  periodEnd: string;
+  contentCount: number;
+  scheduledCount: number;
+  publishedCount: number;
+  failedCount: number;
+  impressionCount: number;
+  engagementCount: number;
+  clickCount: number;
+  conversionCount: number;
+  spendCents: number;
+  revenueCents: number;
+  metadata: Record<string, unknown>;
+  createdAt: string;
+};
+
+export type CampaignRecommendation = {
+  type: string;
+  title: string;
+  reason: string;
+  metadata: Record<string, unknown>;
+};
+
+export type CampaignReportSummary = {
+  workspaceId: string;
+  campaignId: string;
+  status: CampaignStatus;
+  calendarItemCount: number;
+  contentCount: number;
+  publishJobCount: number;
+  plannedItemCount: number;
+  scheduledItemCount: number;
+  publishedItemCount: number;
+  failedItemCount: number;
+  statusCounts: Record<string, number>;
+  metricTotals: Record<string, number>;
+  metrics: CampaignMetric[];
+  rollups: CampaignRollup[];
+  recommendations: CampaignRecommendation[];
+  reportingWindowFrom?: string;
+  reportingWindowTo?: string;
+  updatedAt: string;
+};
+
 export type PreparedPostCopyBlock = {
   label: string;
   value: string;
@@ -487,6 +611,47 @@ export type CreatePublishSchedulePayload = {
   mediaAccountId: string;
   frequency: PublishScheduleFrequency;
   nextRunAt: string;
+};
+
+export type CreateCampaignPayload = {
+  name: string;
+  description?: string;
+  status?: CampaignStatus;
+  goal?: string;
+  products?: string[];
+  targetAudiences?: string[];
+  channels?: string[];
+  mediaAccountIds?: string[];
+  startAt?: string | null;
+  endAt?: string | null;
+  budgetCents?: number;
+  currency?: string;
+  contentQuota?: number;
+  approvalPolicy?: string;
+  successMetrics?: string[];
+  metadata?: Record<string, unknown>;
+};
+
+export type UpdateCampaignPayload = Partial<CreateCampaignPayload>;
+
+export type CreateCampaignCalendarItemPayload = {
+  topicId?: string;
+  contentId?: string;
+  publishScheduleId?: string;
+  publishJobId?: string;
+  mediaAccountId?: string;
+  assignedUserId?: string;
+  title: string;
+  brief?: string;
+  contentType?: string;
+  channel?: string;
+  publishWindowStartAt?: string;
+  publishWindowEndAt?: string;
+  status?: CampaignCalendarItemStatus;
+  dependencyItemIds?: string[];
+  approvalRequired?: boolean;
+  approvalStatus?: string;
+  metadata?: Record<string, unknown>;
 };
 
 export type PreparePublishPayload = {
