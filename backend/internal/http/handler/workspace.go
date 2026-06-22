@@ -46,6 +46,11 @@ type WorkspaceHandler struct {
 	jobs                   []model.PublishJob
 	generations            []model.GenerationRequest
 	tokenUsageEvents       []model.AITokenUsageEvent
+	campaigns              []model.Campaign
+	campaignTopics         []model.CampaignTopic
+	campaignCalendarItems  []model.CampaignCalendarItem
+	campaignMetrics        []model.CampaignMetric
+	campaignRollups        []model.CampaignRollup
 	userSessions           map[string]string
 	browserLogin           xiaohongshu.BrowserLoginService
 }
@@ -554,6 +559,12 @@ func (h *WorkspaceHandler) Register(router gin.IRouter, auth gin.HandlerFunc) {
 	protected.POST("/publish/prepare", h.PreparePublish)
 	protected.POST("/publish-jobs/:jobId/run", h.RunPublishJob)
 	protected.POST("/publish-jobs/:jobId/confirm", h.ConfirmPublishJob)
+	protected.GET("/campaigns", h.ListCampaigns)
+	protected.POST("/campaigns", h.CreateCampaign)
+	protected.PUT("/campaigns/:campaignId", h.UpdateCampaign)
+	protected.GET("/campaigns/:campaignId/calendar-items", h.ListCampaignCalendarItems)
+	protected.POST("/campaigns/:campaignId/calendar-items", h.CreateCampaignCalendarItem)
+	protected.GET("/campaigns/:campaignId/report-summary", h.CampaignReportSummary)
 
 	admin := protected.Group("/admin")
 	admin.Use(h.requirePlatformAdmin())
@@ -2863,6 +2874,11 @@ func (h *WorkspaceHandler) loadDatabaseSnapshot(ctx context.Context) bool {
 	h.jobs = snapshot.Jobs
 	h.generations = snapshot.Generations
 	h.tokenUsageEvents = snapshot.TokenUsageEvents
+	h.campaigns = snapshot.Campaigns
+	h.campaignTopics = snapshot.CampaignTopics
+	h.campaignCalendarItems = snapshot.CampaignCalendarItems
+	h.campaignMetrics = snapshot.CampaignMetrics
+	h.campaignRollups = snapshot.CampaignRollups
 	h.mu.Unlock()
 
 	return true
@@ -3368,6 +3384,18 @@ func (h *WorkspaceHandler) savePublishJobWithContent(ctx context.Context, job mo
 	dbCtx, cancel := context.WithTimeout(ctx, 2*time.Second)
 	defer cancel()
 	return h.db.SavePublishJobWithContent(dbCtx, job, content)
+}
+
+func (h *WorkspaceHandler) saveCampaign(ctx context.Context, item model.Campaign) error {
+	dbCtx, cancel := context.WithTimeout(ctx, 2*time.Second)
+	defer cancel()
+	return h.db.SaveCampaign(dbCtx, item)
+}
+
+func (h *WorkspaceHandler) saveCampaignCalendarItem(ctx context.Context, item model.CampaignCalendarItem) error {
+	dbCtx, cancel := context.WithTimeout(ctx, 2*time.Second)
+	defer cancel()
+	return h.db.SaveCampaignCalendarItem(dbCtx, item)
 }
 
 func (h *WorkspaceHandler) updateUserSubscription(ctx context.Context, user model.User) error {

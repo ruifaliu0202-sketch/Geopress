@@ -28,6 +28,11 @@ type Snapshot struct {
 	Jobs                   []model.PublishJob
 	Generations            []model.GenerationRequest
 	TokenUsageEvents       []model.AITokenUsageEvent
+	Campaigns              []model.Campaign
+	CampaignTopics         []model.CampaignTopic
+	CampaignCalendarItems  []model.CampaignCalendarItem
+	CampaignMetrics        []model.CampaignMetric
+	CampaignRollups        []model.CampaignRollup
 }
 
 type UserCredentials struct {
@@ -85,6 +90,21 @@ func (db *DB) LoadSnapshot(ctx context.Context) (Snapshot, error) {
 		return Snapshot{}, err
 	}
 	if snapshot.TokenUsageEvents, err = db.loadAITokenUsageEvents(ctx); err != nil {
+		return Snapshot{}, err
+	}
+	if snapshot.Campaigns, err = db.loadCampaigns(ctx); err != nil {
+		return Snapshot{}, err
+	}
+	if snapshot.CampaignTopics, err = db.loadCampaignTopics(ctx); err != nil {
+		return Snapshot{}, err
+	}
+	if snapshot.CampaignCalendarItems, err = db.loadCampaignCalendarItems(ctx); err != nil {
+		return Snapshot{}, err
+	}
+	if snapshot.CampaignMetrics, err = db.loadCampaignMetrics(ctx); err != nil {
+		return Snapshot{}, err
+	}
+	if snapshot.CampaignRollups, err = db.loadCampaignRollups(ctx); err != nil {
 		return Snapshot{}, err
 	}
 

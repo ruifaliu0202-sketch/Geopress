@@ -164,6 +164,431 @@ func TestCompleteOnboardingUpdatesWorkspaceAndSubscription(t *testing.T) {
 	}
 }
 
+func TestCampaignListReturnsEmptyArray(t *testing.T) {
+	router := testWorkspaceRouter()
+	req := httptest.NewRequest(http.MethodGet, "/api/campaigns", nil)
+	req.Header.Set("Authorization", "Bearer demo-token")
+	req.Header.Set("X-Workspace-ID", "wks_personal")
+
+	rec := httptest.NewRecorder()
+	router.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d, body = %s", rec.Code, http.StatusOK, rec.Body.String())
+	}
+
+	var response struct {
+		Items []model.Campaign `json:"items"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &response); err != nil {
+		t.Fatalf("unmarshal response: %v", err)
+	}
+	if response.Items == nil {
+		t.Fatalf("items is nil, want empty array")
+	}
+	if len(response.Items) != 0 {
+		t.Fatalf("items length = %d, want 0", len(response.Items))
+	}
+}
+
+func TestCreateCampaignAndLooseCalendarItem(t *testing.T) {
+	router := testWorkspaceRouter()
+	body := bytes.NewBufferString(`{
+		"name": "新品种草战役",
+		"status": "planned",
+		"goal": "验证新品内容方向",
+		"products": ["新品 A"],
+		"targetAudiences": ["年轻白领"],
+		"channels": ["xiaohongshu"],
+		"mediaAccountIds": ["acc_xhs_personal"],
+		"contentQuota": 3,
+		"successMetrics": ["publish_count", "engagement"]
+	}`)
+	req := httptest.NewRequest(http.MethodPost, "/api/campaigns", body)
+	req.Header.Set("Authorization", "Bearer demo-token")
+	req.Header.Set("X-Workspace-ID", "wks_personal")
+	req.Header.Set("Content-Type", "application/json")
+
+	rec := httptest.NewRecorder()
+	router.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("status = %d, want %d, body = %s", rec.Code, http.StatusCreated, rec.Body.String())
+	}
+	var campaign model.Campaign
+	if err := json.Unmarshal(rec.Body.Bytes(), &campaign); err != nil {
+		t.Fatalf("unmarshal campaign: %v", err)
+	}
+	if campaign.Status != model.CampaignPlanned {
+		t.Fatalf("campaign status = %q, want planned", campaign.Status)
+	}
+
+	itemBody := bytes.NewBufferString(`{
+		"title": "第一篇预热选题",
+		"brief": "先验证用户痛点，不绑定已有内容或发布计划",
+		"contentType": "note",
+		"channel": "xiaohongshu",
+		"mediaAccountId": "acc_xhs_personal"
+	}`)
+	itemReq := httptest.NewRequest(http.MethodPost, fmt.Sprintf("/api/campaigns/%s/calendar-items", campaign.ID), itemBody)
+	itemReq.Header.Set("Authorization", "Bearer demo-token")
+	itemReq.Header.Set("X-Workspace-ID", "wks_personal")
+	itemReq.Header.Set("Content-Type", "application/json")
+
+	itemRec := httptest.NewRecorder()
+	router.ServeHTTP(itemRec, itemReq)
+
+	if itemRec.Code != http.StatusCreated {
+		t.Fatalf("status = %d, want %d, body = %s", itemRec.Code, http.StatusCreated, itemRec.Body.String())
+	}
+	var item model.CampaignCalendarItem
+	if err := json.Unmarshal(itemRec.Body.Bytes(), &item); err != nil {
+		t.Fatalf("unmarshal calendar item: %v", err)
+	}
+	if item.ContentID != "" || item.PublishScheduleID != "" || item.PublishJobID != "" {
+		t.Fatalf("calendar item should not require content/schedule/job links: %#v", item)
+	}
+
+	reportReq := httptest.NewRequest(http.MethodGet, fmt.Sprintf("/api/campaigns/%s/report-summary", campaign.ID), nil)
+	reportReq.Header.Set("Authorization", "Bearer demo-token")
+	reportReq.Header.Set("X-Workspace-ID", "wks_personal")
+	reportRec := httptest.NewRecorder()
+	router.ServeHTTP(reportRec, reportReq)
+
+	if reportRec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d, body = %s", reportRec.Code, http.StatusOK, reportRec.Body.String())
+	}
+	var summary model.CampaignReportSummary
+	if err := json.Unmarshal(reportRec.Body.Bytes(), &summary); err != nil {
+		t.Fatalf("unmarshal report summary: %v", err)
+	}
+	if summary.CalendarItemCount != 1 || summary.Metrics == nil || summary.Rollups == nil || summary.Recommendations == nil {
+		t.Fatalf("unexpected report summary: %#v", summary)
+	}
+}
+
+func TestCampaignCalendarListReturnsEmptyArray(t *testing.T) {
+	router := testWorkspaceRouter()
+	body := bytes.NewBufferString(`{"name": "空日历战役"}`)
+	req := httptest.NewRequest(http.MethodPost, "/api/campaigns", body)
+	req.Header.Set("Authorization", "Bearer demo-token")
+	req.Header.Set("X-Workspace-ID", "wks_personal")
+	req.Header.Set("Content-Type", "application/json")
+
+	rec := httptest.NewRecorder()
+	router.ServeHTTP(rec, req)
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("status = %d, want %d, body = %s", rec.Code, http.StatusCreated, rec.Body.String())
+	}
+	var campaign model.Campaign
+	if err := json.Unmarshal(rec.Body.Bytes(), &campaign); err != nil {
+		t.Fatalf("unmarshal campaign: %v", err)
+	}
+
+	listReq := httptest.NewRequest(http.MethodGet, fmt.Sprintf("/api/campaigns/%s/calendar-items", campaign.ID), nil)
+	listReq.Header.Set("Authorization", "Bearer demo-token")
+	listReq.Header.Set("X-Workspace-ID", "wks_personal")
+	listRec := httptest.NewRecorder()
+	router.ServeHTTP(listRec, listReq)
+
+	if listRec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d, body = %s", listRec.Code, http.StatusOK, listRec.Body.String())
+	}
+	var response struct {
+		Items []model.CampaignCalendarItem `json:"items"`
+	}
+	if err := json.Unmarshal(listRec.Body.Bytes(), &response); err != nil {
+		t.Fatalf("unmarshal list response: %v", err)
+	}
+	if response.Items == nil {
+		t.Fatal("items is nil, want empty array")
+	}
+	if len(response.Items) != 0 {
+		t.Fatalf("items length = %d, want 0", len(response.Items))
+	}
+}
+
+func TestUpdateCampaignCanClearTimeline(t *testing.T) {
+	router := testWorkspaceRouter()
+	body := bytes.NewBufferString(`{
+		"name": "时间窗口战役",
+		"startAt": "2026-07-01T00:00:00Z",
+		"endAt": "2026-07-31T23:59:59Z"
+	}`)
+	req := httptest.NewRequest(http.MethodPost, "/api/campaigns", body)
+	req.Header.Set("Authorization", "Bearer demo-token")
+	req.Header.Set("X-Workspace-ID", "wks_personal")
+	req.Header.Set("Content-Type", "application/json")
+
+	rec := httptest.NewRecorder()
+	router.ServeHTTP(rec, req)
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("status = %d, want %d, body = %s", rec.Code, http.StatusCreated, rec.Body.String())
+	}
+	var campaign model.Campaign
+	if err := json.Unmarshal(rec.Body.Bytes(), &campaign); err != nil {
+		t.Fatalf("unmarshal campaign: %v", err)
+	}
+	if campaign.StartAt == nil || campaign.EndAt == nil {
+		t.Fatalf("expected initial timeline, got %#v", campaign)
+	}
+
+	updateBody := bytes.NewBufferString(`{"startAt": null, "endAt": null}`)
+	updateReq := httptest.NewRequest(http.MethodPut, fmt.Sprintf("/api/campaigns/%s", campaign.ID), updateBody)
+	updateReq.Header.Set("Authorization", "Bearer demo-token")
+	updateReq.Header.Set("X-Workspace-ID", "wks_personal")
+	updateReq.Header.Set("Content-Type", "application/json")
+	updateRec := httptest.NewRecorder()
+	router.ServeHTTP(updateRec, updateReq)
+
+	if updateRec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d, body = %s", updateRec.Code, http.StatusOK, updateRec.Body.String())
+	}
+	var updated model.Campaign
+	if err := json.Unmarshal(updateRec.Body.Bytes(), &updated); err != nil {
+		t.Fatalf("unmarshal updated campaign: %v", err)
+	}
+	if updated.StartAt != nil || updated.EndAt != nil {
+		t.Fatalf("timeline was not cleared: %#v", updated)
+	}
+}
+
+func TestCampaignRejectsIllegalStatusTransition(t *testing.T) {
+	router := testWorkspaceRouter()
+	body := bytes.NewBufferString(`{"name": "归档测试战役"}`)
+	req := httptest.NewRequest(http.MethodPost, "/api/campaigns", body)
+	req.Header.Set("Authorization", "Bearer demo-token")
+	req.Header.Set("X-Workspace-ID", "wks_personal")
+	req.Header.Set("Content-Type", "application/json")
+
+	rec := httptest.NewRecorder()
+	router.ServeHTTP(rec, req)
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("status = %d, want %d, body = %s", rec.Code, http.StatusCreated, rec.Body.String())
+	}
+	var campaign model.Campaign
+	if err := json.Unmarshal(rec.Body.Bytes(), &campaign); err != nil {
+		t.Fatalf("unmarshal campaign: %v", err)
+	}
+
+	archiveBody := bytes.NewBufferString(`{"status": "archived"}`)
+	archiveReq := httptest.NewRequest(http.MethodPut, fmt.Sprintf("/api/campaigns/%s", campaign.ID), archiveBody)
+	archiveReq.Header.Set("Authorization", "Bearer demo-token")
+	archiveReq.Header.Set("X-Workspace-ID", "wks_personal")
+	archiveReq.Header.Set("Content-Type", "application/json")
+	archiveRec := httptest.NewRecorder()
+	router.ServeHTTP(archiveRec, archiveReq)
+	if archiveRec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d, body = %s", archiveRec.Code, http.StatusOK, archiveRec.Body.String())
+	}
+
+	activeBody := bytes.NewBufferString(`{"status": "active"}`)
+	activeReq := httptest.NewRequest(http.MethodPut, fmt.Sprintf("/api/campaigns/%s", campaign.ID), activeBody)
+	activeReq.Header.Set("Authorization", "Bearer demo-token")
+	activeReq.Header.Set("X-Workspace-ID", "wks_personal")
+	activeReq.Header.Set("Content-Type", "application/json")
+	activeRec := httptest.NewRecorder()
+	router.ServeHTTP(activeRec, activeReq)
+	if activeRec.Code != http.StatusConflict {
+		t.Fatalf("status = %d, want %d, body = %s", activeRec.Code, http.StatusConflict, activeRec.Body.String())
+	}
+}
+
+func TestCampaignCalendarItemRejectsPublishedCreation(t *testing.T) {
+	router := testWorkspaceRouter()
+	body := bytes.NewBufferString(`{"name": "发布态保护战役"}`)
+	req := httptest.NewRequest(http.MethodPost, "/api/campaigns", body)
+	req.Header.Set("Authorization", "Bearer demo-token")
+	req.Header.Set("X-Workspace-ID", "wks_personal")
+	req.Header.Set("Content-Type", "application/json")
+
+	rec := httptest.NewRecorder()
+	router.ServeHTTP(rec, req)
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("status = %d, want %d, body = %s", rec.Code, http.StatusCreated, rec.Body.String())
+	}
+	var campaign model.Campaign
+	if err := json.Unmarshal(rec.Body.Bytes(), &campaign); err != nil {
+		t.Fatalf("unmarshal campaign: %v", err)
+	}
+
+	itemBody := bytes.NewBufferString(`{
+		"title": "不能直接已发布",
+		"status": "published"
+	}`)
+	itemReq := httptest.NewRequest(http.MethodPost, fmt.Sprintf("/api/campaigns/%s/calendar-items", campaign.ID), itemBody)
+	itemReq.Header.Set("Authorization", "Bearer demo-token")
+	itemReq.Header.Set("X-Workspace-ID", "wks_personal")
+	itemReq.Header.Set("Content-Type", "application/json")
+	itemRec := httptest.NewRecorder()
+	router.ServeHTTP(itemRec, itemReq)
+
+	if itemRec.Code != http.StatusConflict {
+		t.Fatalf("status = %d, want %d, body = %s", itemRec.Code, http.StatusConflict, itemRec.Body.String())
+	}
+}
+
+func TestCampaignCalendarItemRejectsCrossWorkspaceAssignedUser(t *testing.T) {
+	router := testWorkspaceRouter()
+	body := bytes.NewBufferString(`{"name": "指派校验战役"}`)
+	req := httptest.NewRequest(http.MethodPost, "/api/campaigns", body)
+	req.Header.Set("Authorization", "Bearer demo-token")
+	req.Header.Set("X-Workspace-ID", "wks_personal")
+	req.Header.Set("Content-Type", "application/json")
+
+	rec := httptest.NewRecorder()
+	router.ServeHTTP(rec, req)
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("status = %d, want %d, body = %s", rec.Code, http.StatusCreated, rec.Body.String())
+	}
+	var campaign model.Campaign
+	if err := json.Unmarshal(rec.Body.Bytes(), &campaign); err != nil {
+		t.Fatalf("unmarshal campaign: %v", err)
+	}
+
+	itemBody := bytes.NewBufferString(`{
+		"title": "跨工作区指派",
+		"assignedUserId": "usr_growth"
+	}`)
+	itemReq := httptest.NewRequest(http.MethodPost, fmt.Sprintf("/api/campaigns/%s/calendar-items", campaign.ID), itemBody)
+	itemReq.Header.Set("Authorization", "Bearer demo-token")
+	itemReq.Header.Set("X-Workspace-ID", "wks_personal")
+	itemReq.Header.Set("Content-Type", "application/json")
+	itemRec := httptest.NewRecorder()
+	router.ServeHTTP(itemRec, itemReq)
+
+	if itemRec.Code != http.StatusNotFound {
+		t.Fatalf("status = %d, want %d, body = %s", itemRec.Code, http.StatusNotFound, itemRec.Body.String())
+	}
+}
+
+func TestCampaignCalendarItemRejectsMissingDependency(t *testing.T) {
+	router := testWorkspaceRouter()
+	body := bytes.NewBufferString(`{"name": "依赖校验战役"}`)
+	req := httptest.NewRequest(http.MethodPost, "/api/campaigns", body)
+	req.Header.Set("Authorization", "Bearer demo-token")
+	req.Header.Set("X-Workspace-ID", "wks_personal")
+	req.Header.Set("Content-Type", "application/json")
+
+	rec := httptest.NewRecorder()
+	router.ServeHTTP(rec, req)
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("status = %d, want %d, body = %s", rec.Code, http.StatusCreated, rec.Body.String())
+	}
+	var campaign model.Campaign
+	if err := json.Unmarshal(rec.Body.Bytes(), &campaign); err != nil {
+		t.Fatalf("unmarshal campaign: %v", err)
+	}
+
+	itemBody := bytes.NewBufferString(`{
+		"title": "依赖不存在",
+		"dependencyItemIds": ["cci_missing"]
+	}`)
+	itemReq := httptest.NewRequest(http.MethodPost, fmt.Sprintf("/api/campaigns/%s/calendar-items", campaign.ID), itemBody)
+	itemReq.Header.Set("Authorization", "Bearer demo-token")
+	itemReq.Header.Set("X-Workspace-ID", "wks_personal")
+	itemReq.Header.Set("Content-Type", "application/json")
+	itemRec := httptest.NewRecorder()
+	router.ServeHTTP(itemRec, itemReq)
+
+	if itemRec.Code != http.StatusNotFound {
+		t.Fatalf("status = %d, want %d, body = %s", itemRec.Code, http.StatusNotFound, itemRec.Body.String())
+	}
+}
+
+func TestCampaignReportCountsScheduleLinkedThroughCalendarItem(t *testing.T) {
+	router := testWorkspaceRouter()
+	contentBody := bytes.NewBufferString(`{
+		"title": "战役内容",
+		"summary": "用于发布计划关联",
+		"body": "正文"
+	}`)
+	contentReq := httptest.NewRequest(http.MethodPost, "/api/contents", contentBody)
+	contentReq.Header.Set("Authorization", "Bearer demo-token")
+	contentReq.Header.Set("X-Workspace-ID", "wks_personal")
+	contentReq.Header.Set("Content-Type", "application/json")
+	contentRec := httptest.NewRecorder()
+	router.ServeHTTP(contentRec, contentReq)
+	if contentRec.Code != http.StatusCreated {
+		t.Fatalf("status = %d, want %d, body = %s", contentRec.Code, http.StatusCreated, contentRec.Body.String())
+	}
+	var content model.Content
+	if err := json.Unmarshal(contentRec.Body.Bytes(), &content); err != nil {
+		t.Fatalf("unmarshal content: %v", err)
+	}
+
+	scheduleBody := bytes.NewBufferString(fmt.Sprintf(`{
+		"name": "战役发布计划",
+		"contentId": %q,
+		"mediaAccountId": "acc_xhs_personal",
+		"nextRunAt": "2026-07-01T10:00:00Z"
+	}`, content.ID))
+	scheduleReq := httptest.NewRequest(http.MethodPost, "/api/publish-schedules", scheduleBody)
+	scheduleReq.Header.Set("Authorization", "Bearer demo-token")
+	scheduleReq.Header.Set("X-Workspace-ID", "wks_personal")
+	scheduleReq.Header.Set("Content-Type", "application/json")
+	scheduleRec := httptest.NewRecorder()
+	router.ServeHTTP(scheduleRec, scheduleReq)
+	if scheduleRec.Code != http.StatusCreated {
+		t.Fatalf("status = %d, want %d, body = %s", scheduleRec.Code, http.StatusCreated, scheduleRec.Body.String())
+	}
+	var scheduleResponse struct {
+		Schedule model.PublishSchedule `json:"schedule"`
+		Job      model.PublishJob      `json:"job"`
+	}
+	if err := json.Unmarshal(scheduleRec.Body.Bytes(), &scheduleResponse); err != nil {
+		t.Fatalf("unmarshal schedule response: %v", err)
+	}
+
+	campaignBody := bytes.NewBufferString(`{"name": "发布链路报表战役"}`)
+	campaignReq := httptest.NewRequest(http.MethodPost, "/api/campaigns", campaignBody)
+	campaignReq.Header.Set("Authorization", "Bearer demo-token")
+	campaignReq.Header.Set("X-Workspace-ID", "wks_personal")
+	campaignReq.Header.Set("Content-Type", "application/json")
+	campaignRec := httptest.NewRecorder()
+	router.ServeHTTP(campaignRec, campaignReq)
+	if campaignRec.Code != http.StatusCreated {
+		t.Fatalf("status = %d, want %d, body = %s", campaignRec.Code, http.StatusCreated, campaignRec.Body.String())
+	}
+	var campaign model.Campaign
+	if err := json.Unmarshal(campaignRec.Body.Bytes(), &campaign); err != nil {
+		t.Fatalf("unmarshal campaign: %v", err)
+	}
+
+	itemBody := bytes.NewBufferString(fmt.Sprintf(`{
+		"title": "已排期内容",
+		"contentId": %q,
+		"publishScheduleId": %q,
+		"mediaAccountId": "acc_xhs_personal",
+		"status": "scheduled"
+	}`, content.ID, scheduleResponse.Schedule.ID))
+	itemReq := httptest.NewRequest(http.MethodPost, fmt.Sprintf("/api/campaigns/%s/calendar-items", campaign.ID), itemBody)
+	itemReq.Header.Set("Authorization", "Bearer demo-token")
+	itemReq.Header.Set("X-Workspace-ID", "wks_personal")
+	itemReq.Header.Set("Content-Type", "application/json")
+	itemRec := httptest.NewRecorder()
+	router.ServeHTTP(itemRec, itemReq)
+	if itemRec.Code != http.StatusCreated {
+		t.Fatalf("status = %d, want %d, body = %s", itemRec.Code, http.StatusCreated, itemRec.Body.String())
+	}
+
+	reportReq := httptest.NewRequest(http.MethodGet, fmt.Sprintf("/api/campaigns/%s/report-summary", campaign.ID), nil)
+	reportReq.Header.Set("Authorization", "Bearer demo-token")
+	reportReq.Header.Set("X-Workspace-ID", "wks_personal")
+	reportRec := httptest.NewRecorder()
+	router.ServeHTTP(reportRec, reportReq)
+	if reportRec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d, body = %s", reportRec.Code, http.StatusOK, reportRec.Body.String())
+	}
+	var summary model.CampaignReportSummary
+	if err := json.Unmarshal(reportRec.Body.Bytes(), &summary); err != nil {
+		t.Fatalf("unmarshal report summary: %v", err)
+	}
+	if summary.ContentCount != 1 || summary.PublishJobCount != 1 || summary.ScheduledItemCount != 1 {
+		t.Fatalf("unexpected report summary: %#v", summary)
+	}
+}
+
 func TestLoginRejectsWrongDemoPassword(t *testing.T) {
 	router := testWorkspaceRouter()
 	body := bytes.NewBufferString(`{
