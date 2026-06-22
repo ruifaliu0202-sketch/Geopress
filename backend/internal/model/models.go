@@ -575,6 +575,7 @@ type GenerationRequest struct {
 	UserID                string    `json:"userId"`
 	KnowledgeBaseID       string    `json:"knowledgeBaseId"`
 	ContentID             string    `json:"contentId"`
+	SkillPackageVersionID string    `json:"skillPackageVersionId"`
 	Provider              string    `json:"provider"`
 	Model                 string    `json:"model"`
 	ContentType           string    `json:"contentType"`
@@ -757,6 +758,202 @@ type CampaignReportSummary struct {
 	ReportingWindowFrom *time.Time               `json:"reportingWindowFrom,omitempty"`
 	ReportingWindowTo   *time.Time               `json:"reportingWindowTo,omitempty"`
 	UpdatedAt           time.Time                `json:"updatedAt"`
+}
+
+type SkillPackageStatus string
+
+const (
+	SkillPackageStatusDraft      SkillPackageStatus = "draft"
+	SkillPackageStatusInReview   SkillPackageStatus = "in_review"
+	SkillPackageStatusApproved   SkillPackageStatus = "approved"
+	SkillPackageStatusPublished  SkillPackageStatus = "published"
+	SkillPackageStatusRejected   SkillPackageStatus = "rejected"
+	SkillPackageStatusDeprecated SkillPackageStatus = "deprecated"
+)
+
+type SkillPackageVersionStatus string
+
+const (
+	SkillPackageVersionDraft      SkillPackageVersionStatus = "draft"
+	SkillPackageVersionSubmitted  SkillPackageVersionStatus = "submitted"
+	SkillPackageVersionApproved   SkillPackageVersionStatus = "approved"
+	SkillPackageVersionRejected   SkillPackageVersionStatus = "rejected"
+	SkillPackageVersionPublished  SkillPackageVersionStatus = "published"
+	SkillPackageVersionDeprecated SkillPackageVersionStatus = "deprecated"
+)
+
+type SkillPackageAssetType string
+
+const (
+	SkillPackageAssetPrompt  SkillPackageAssetType = "prompt"
+	SkillPackageAssetSchema  SkillPackageAssetType = "schema"
+	SkillPackageAssetRule    SkillPackageAssetType = "rule"
+	SkillPackageAssetExample SkillPackageAssetType = "example"
+	SkillPackageAssetQA      SkillPackageAssetType = "qa"
+	SkillPackageAssetPublish SkillPackageAssetType = "publish"
+)
+
+type SkillPackageReviewDecision string
+
+const (
+	SkillPackageReviewSubmitted SkillPackageReviewDecision = "submitted"
+	SkillPackageReviewApproved  SkillPackageReviewDecision = "approved"
+	SkillPackageReviewRejected  SkillPackageReviewDecision = "rejected"
+)
+
+type WorkspaceSkillEntitlementStatus string
+
+const (
+	WorkspaceSkillEntitlementActive      WorkspaceSkillEntitlementStatus = "active"
+	WorkspaceSkillEntitlementExpired     WorkspaceSkillEntitlementStatus = "expired"
+	WorkspaceSkillEntitlementCanceled    WorkspaceSkillEntitlementStatus = "canceled"
+	WorkspaceSkillEntitlementUninstalled WorkspaceSkillEntitlementStatus = "uninstalled"
+)
+
+type WorkspaceSkillEntitlementSource string
+
+const (
+	WorkspaceSkillEntitlementTrial        WorkspaceSkillEntitlementSource = "trial"
+	WorkspaceSkillEntitlementPurchase     WorkspaceSkillEntitlementSource = "purchase"
+	WorkspaceSkillEntitlementSubscription WorkspaceSkillEntitlementSource = "subscription"
+	WorkspaceSkillEntitlementAdminGrant   WorkspaceSkillEntitlementSource = "admin_grant"
+)
+
+type SkillPackageUsageMetricType string
+
+const (
+	SkillPackageUsageGeneration  SkillPackageUsageMetricType = "generation"
+	SkillPackageUsageFormatting  SkillPackageUsageMetricType = "formatting"
+	SkillPackageUsageQA          SkillPackageUsageMetricType = "qa"
+	SkillPackageUsagePublishPrep SkillPackageUsageMetricType = "publish_prep"
+)
+
+type SkillPackageRevenueMetricType string
+
+const (
+	SkillPackageRevenuePurchase     SkillPackageRevenueMetricType = "purchase"
+	SkillPackageRevenueSubscription SkillPackageRevenueMetricType = "subscription"
+	SkillPackageRevenueRefund       SkillPackageRevenueMetricType = "refund"
+	SkillPackageRevenuePayout       SkillPackageRevenueMetricType = "payout"
+)
+
+type SkillPackage struct {
+	ID                      string             `json:"id"`
+	Name                    string             `json:"name"`
+	Slug                    string             `json:"slug"`
+	Description             string             `json:"description"`
+	Category                string             `json:"category"`
+	TargetPlatform          string             `json:"targetPlatform"`
+	TargetIndustry          string             `json:"targetIndustry"`
+	SupportedContentFormats []string           `json:"supportedContentFormats"`
+	AuthorID                string             `json:"authorId"`
+	AuthorName              string             `json:"authorName"`
+	ListingStatus           SkillPackageStatus `json:"listingStatus"`
+	PriceCents              int                `json:"priceCents"`
+	Currency                string             `json:"currency"`
+	RevenueShareBps         int                `json:"revenueShareBps"`
+	LatestVersionID         string             `json:"latestVersionId"`
+	PublishedVersionID      string             `json:"publishedVersionId"`
+	CreatedAt               time.Time          `json:"createdAt"`
+	UpdatedAt               time.Time          `json:"updatedAt"`
+}
+
+type SkillPackageVersion struct {
+	ID               string                    `json:"id"`
+	PackageID        string                    `json:"packageId"`
+	Version          string                    `json:"version"`
+	Status           SkillPackageVersionStatus `json:"status"`
+	PromptContract   string                    `json:"promptContract"`
+	OutputSchema     string                    `json:"outputSchema"`
+	QualityRules     string                    `json:"qualityRules"`
+	QARules          string                    `json:"qaRules"`
+	PublishPrepRules string                    `json:"publishPrepRules"`
+	ChangeNote       string                    `json:"changeNote"`
+	SubmittedAt      *time.Time                `json:"submittedAt,omitempty"`
+	ReviewedAt       *time.Time                `json:"reviewedAt,omitempty"`
+	PublishedAt      *time.Time                `json:"publishedAt,omitempty"`
+	CreatedAt        time.Time                 `json:"createdAt"`
+	UpdatedAt        time.Time                 `json:"updatedAt"`
+}
+
+type SkillPackageAsset struct {
+	ID        string                `json:"id"`
+	PackageID string                `json:"packageId"`
+	VersionID string                `json:"versionId"`
+	Type      SkillPackageAssetType `json:"type"`
+	Title     string                `json:"title"`
+	Content   string                `json:"content"`
+	Metadata  map[string]string     `json:"metadata"`
+	CreatedAt time.Time             `json:"createdAt"`
+}
+
+type SkillPackageExample struct {
+	ID             string            `json:"id"`
+	PackageID      string            `json:"packageId"`
+	VersionID      string            `json:"versionId"`
+	Title          string            `json:"title"`
+	Input          string            `json:"input"`
+	ExpectedOutput string            `json:"expectedOutput"`
+	Notes          string            `json:"notes"`
+	Metadata       map[string]string `json:"metadata"`
+	CreatedAt      time.Time         `json:"createdAt"`
+}
+
+type SkillPackageReview struct {
+	ID         string                     `json:"id"`
+	PackageID  string                     `json:"packageId"`
+	VersionID  string                     `json:"versionId"`
+	ReviewerID string                     `json:"reviewerId"`
+	Decision   SkillPackageReviewDecision `json:"decision"`
+	Comment    string                     `json:"comment"`
+	CreatedAt  time.Time                  `json:"createdAt"`
+}
+
+type WorkspaceSkillEntitlement struct {
+	ID                     string                          `json:"id"`
+	WorkspaceID            string                          `json:"workspaceId"`
+	PackageID              string                          `json:"packageId"`
+	VersionID              string                          `json:"versionId"`
+	Status                 WorkspaceSkillEntitlementStatus `json:"status"`
+	Source                 WorkspaceSkillEntitlementSource `json:"source"`
+	Seats                  int                             `json:"seats"`
+	PriceCents             int                             `json:"priceCents"`
+	Currency               string                          `json:"currency"`
+	CurrentPeriod          string                          `json:"currentPeriod"`
+	CurrentPeriodStartedAt *time.Time                      `json:"currentPeriodStartedAt,omitempty"`
+	CurrentPeriodEndsAt    *time.Time                      `json:"currentPeriodEndsAt,omitempty"`
+	InstalledAt            time.Time                       `json:"installedAt"`
+	ExpiresAt              *time.Time                      `json:"expiresAt,omitempty"`
+	CreatedAt              time.Time                       `json:"createdAt"`
+	UpdatedAt              time.Time                       `json:"updatedAt"`
+}
+
+type SkillPackageUsageMetric struct {
+	ID                  string                      `json:"id"`
+	WorkspaceID         string                      `json:"workspaceId"`
+	PackageID           string                      `json:"packageId"`
+	VersionID           string                      `json:"versionId"`
+	GenerationRequestID string                      `json:"generationRequestId"`
+	ContentID           string                      `json:"contentId"`
+	MetricType          SkillPackageUsageMetricType `json:"metricType"`
+	Count               int                         `json:"count"`
+	Status              string                      `json:"status"`
+	CreatedAt           time.Time                   `json:"createdAt"`
+}
+
+type SkillPackageRevenueMetric struct {
+	ID                 string                        `json:"id"`
+	PackageID          string                        `json:"packageId"`
+	VersionID          string                        `json:"versionId"`
+	WorkspaceID        string                        `json:"workspaceId"`
+	EntitlementID      string                        `json:"entitlementId"`
+	MetricType         SkillPackageRevenueMetricType `json:"metricType"`
+	AmountCents        int                           `json:"amountCents"`
+	Currency           string                        `json:"currency"`
+	AuthorRevenueCents int                           `json:"authorRevenueCents"`
+	PlatformFeeCents   int                           `json:"platformFeeCents"`
+	BillingPeriod      string                        `json:"billingPeriod"`
+	CreatedAt          time.Time                     `json:"createdAt"`
 }
 
 type PublishScheduleFrequency string

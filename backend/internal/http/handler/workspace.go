@@ -60,6 +60,14 @@ type WorkspaceHandler struct {
 	creatorDeliverables       []model.CreatorDeliverable
 	creatorSettlements        []model.CreatorSettlement
 	creatorComplianceEvidence []model.CreatorComplianceEvidence
+	skillPackages             []model.SkillPackage
+	skillPackageVersions      []model.SkillPackageVersion
+	skillPackageAssets        []model.SkillPackageAsset
+	skillPackageExamples      []model.SkillPackageExample
+	skillPackageReviews       []model.SkillPackageReview
+	skillEntitlements         []model.WorkspaceSkillEntitlement
+	skillUsageMetrics         []model.SkillPackageUsageMetric
+	skillRevenueMetrics       []model.SkillPackageRevenueMetric
 	userSessions              map[string]string
 	browserLogin              xiaohongshu.BrowserLoginService
 }
@@ -162,13 +170,14 @@ type completeMediaAccountBrowserLoginRequest struct {
 }
 
 type generateContentRequest struct {
-	Keywords         []string `json:"keywords"`
-	KeywordPrompt    string   `json:"keywordPrompt"`
-	ContentType      string   `json:"contentType"`
-	KnowledgeBaseID  string   `json:"knowledgeBaseId"`
-	KnowledgeBaseIDs []string `json:"knowledgeBaseIds"`
-	PublishFormatID  string   `json:"publishFormatId"`
-	MediaAccountID   string   `json:"mediaAccountId"`
+	Keywords              []string `json:"keywords"`
+	KeywordPrompt         string   `json:"keywordPrompt"`
+	ContentType           string   `json:"contentType"`
+	KnowledgeBaseID       string   `json:"knowledgeBaseId"`
+	KnowledgeBaseIDs      []string `json:"knowledgeBaseIds"`
+	PublishFormatID       string   `json:"publishFormatId"`
+	MediaAccountID        string   `json:"mediaAccountId"`
+	SkillPackageVersionID string   `json:"skillPackageVersionId"`
 }
 
 type generateContentResponse struct {
@@ -676,6 +685,12 @@ func (h *WorkspaceHandler) Register(router gin.IRouter, auth gin.HandlerFunc) {
 	protected.POST("/knowledge-items", h.CreateKnowledgeItem)
 	protected.POST("/knowledge-items/format", h.FormatKnowledgeItem)
 	protected.POST("/knowledge-items/assign-bases", h.AssignKnowledgeItemsToBases)
+	protected.GET("/skill-packages/marketplace", h.ListSkillPackageMarketplace)
+	protected.GET("/skill-packages/installed", h.ListInstalledSkillPackages)
+	protected.GET("/skill-packages/usage", h.ListWorkspaceSkillPackageUsage)
+	protected.POST("/skill-package-entitlements/:packageId/install", h.InstallSkillPackage)
+	protected.POST("/skill-package-entitlements/:packageId/purchase", h.PurchaseSkillPackage)
+	protected.POST("/skill-package-entitlements/:packageId/subscribe", h.SubscribeSkillPackage)
 	protected.GET("/media-platforms", h.ListMediaPlatforms)
 	protected.GET("/media-accounts", h.ListMediaAccounts)
 	protected.POST("/media-accounts", h.CreateMediaAccount)
@@ -729,6 +744,17 @@ func (h *WorkspaceHandler) Register(router gin.IRouter, auth gin.HandlerFunc) {
 	admin.GET("/platform-knowledge-items", h.AdminListPlatformKnowledgeItems)
 	admin.POST("/platform-knowledge-items", h.AdminCreatePlatformKnowledgeItem)
 	admin.PUT("/platform-knowledge-items/:knowledgeItemId", h.AdminUpdatePlatformKnowledgeItem)
+	admin.GET("/skill-packages", h.AdminListSkillPackages)
+	admin.POST("/skill-packages", h.AdminCreateSkillPackage)
+	admin.PUT("/skill-packages/:packageId", h.AdminUpdateSkillPackage)
+	admin.GET("/skill-packages/:packageId/versions", h.AdminListSkillPackageVersions)
+	admin.GET("/skill-package-reviews", h.AdminListSkillPackageReviews)
+	admin.GET("/skill-package-entitlements", h.AdminListSkillPackageEntitlements)
+	admin.GET("/skill-package-usage", h.AdminListSkillPackageUsage)
+	admin.GET("/skill-package-revenue", h.AdminListSkillPackageRevenue)
+	admin.POST("/skill-packages/:packageId/versions/:versionId/submit", h.AdminSubmitSkillPackageVersion)
+	admin.POST("/skill-packages/:packageId/versions/:versionId/review", h.AdminReviewSkillPackageVersion)
+	admin.POST("/skill-packages/:packageId/versions/:versionId/publish", h.AdminPublishSkillPackageVersion)
 	admin.GET("/media-platforms", h.AdminListMediaPlatforms)
 	admin.POST("/media-platforms", h.AdminCreateMediaPlatform)
 	admin.PUT("/media-platforms/:platformId", h.AdminUpdateMediaPlatform)
@@ -1849,6 +1875,10 @@ func (h *WorkspaceHandler) GenerateContent(c *gin.Context) {
 	}
 	skill := ai.SelectWritingSkill(contentType)
 	publishFormat := ai.SelectPublishFormat(skill.ContentType)
+	skillPackageVersionID := strings.TrimSpace(req.SkillPackageVersionID)
+	var skillPackageContext ai.SkillPackageContext
+	var selectedSkillPackage model.SkillPackage
+	var selectedSkillPackageVersion model.SkillPackageVersion
 
 	h.mu.RLock()
 	user, userOK := h.userByID(userID)
@@ -1867,11 +1897,41 @@ func (h *WorkspaceHandler) GenerateContent(c *gin.Context) {
 		c.JSON(http.StatusNotFound, gin.H{"error": "media account not found"})
 		return
 	}
+	if skillPackageVersionID != "" {
+		// 技能包会改变 AI 行为，所以只接受已发布版本且当前工作区拥有 active 权益；未授权请求直接拒绝，避免静默降级造成付费能力归因不清。
+		version, versionOK := h.skillPackageVersionByIDLocked(skillPackageVersionID)
+		if !versionOK || version.Status != model.SkillPackageVersionPublished {
+			h.mu.RUnlock()
+			c.JSON(http.StatusForbidden, gin.H{"error": "skill package version is not available"})
+			return
+		}
+		entitlement, entitlementOK := h.activeSkillEntitlementLocked(workspaceID, skillPackageVersionID)
+		if !entitlementOK {
+			h.mu.RUnlock()
+			c.JSON(http.StatusForbidden, gin.H{"error": "skill package is not installed for this workspace"})
+			return
+		}
+		if entitlement.PackageID != version.PackageID {
+			h.mu.RUnlock()
+			c.JSON(http.StatusForbidden, gin.H{"error": "skill package entitlement is invalid"})
+			return
+		}
+		contextValue, pkg, packageVersion, contextOK := h.skillPackageContextLocked(version.PackageID, version.ID)
+		if !contextOK {
+			h.mu.RUnlock()
+			c.JSON(http.StatusForbidden, gin.H{"error": "skill package is not available"})
+			return
+		}
+		skillPackageContext = contextValue
+		selectedSkillPackage = pkg
+		selectedSkillPackageVersion = packageVersion
+	}
 	workspace, _ := h.workspaceByID(workspaceID)
 	chunks := h.retrieveKnowledgeChunksLocked(workspaceID, knowledgeBaseIDs, keywords, 8)
 	h.mu.RUnlock()
 	primaryKnowledgeBaseID := firstString(knowledgeBaseIDs)
 
+	// AI 行为边界：技能包只能在完成权益校验后作为系统侧补充合同注入，不能让租户请求直接覆盖发布格式、Schema 或事实边界。
 	aiReq := ai.GenerateRequest{
 		WorkspaceID:      workspaceID,
 		UserID:           userID,
@@ -1887,6 +1947,7 @@ func (h *WorkspaceHandler) GenerateContent(c *gin.Context) {
 			Tone:     workspace.Tone,
 		},
 		Skill:           skill,
+		SkillPackage:    skillPackageContext,
 		PublishFormat:   publishFormat,
 		KnowledgeChunks: chunks,
 	}
@@ -1906,7 +1967,7 @@ func (h *WorkspaceHandler) GenerateContent(c *gin.Context) {
 		stage, err := provider.AnalyzeGenerationInput(c.Request.Context(), aiReq)
 		if err != nil {
 			trace.AddStep(ai.GenerationStageInputAnalysis, "输入分析", "failed", "输入分析失败", nil, []string{err.Error()})
-			h.recordGeneration(c.Request.Context(), failedGenerationLog(now, workspaceID, userID, primaryKnowledgeBaseID, provider, skill, keywords, chunks, trace, err))
+			h.recordGeneration(c.Request.Context(), failedGenerationLog(now, workspaceID, userID, primaryKnowledgeBaseID, skillPackageVersionID, provider, skill, keywords, chunks, trace, err))
 			c.JSON(http.StatusBadGateway, gin.H{"error": "content generation input analysis failed"})
 			return
 		}
@@ -1923,7 +1984,7 @@ func (h *WorkspaceHandler) GenerateContent(c *gin.Context) {
 		stage, err := provider.PlanGeneration(c.Request.Context(), aiReq, analysis)
 		if err != nil {
 			trace.AddStep(ai.GenerationStagePlan, "创作计划", "failed", "创作计划失败", nil, []string{err.Error()})
-			h.recordGeneration(c.Request.Context(), failedGenerationLog(now, workspaceID, userID, primaryKnowledgeBaseID, provider, skill, keywords, chunks, trace, err))
+			h.recordGeneration(c.Request.Context(), failedGenerationLog(now, workspaceID, userID, primaryKnowledgeBaseID, skillPackageVersionID, provider, skill, keywords, chunks, trace, err))
 			c.JSON(http.StatusBadGateway, gin.H{"error": "content generation planning failed"})
 			return
 		}
@@ -1936,7 +1997,7 @@ func (h *WorkspaceHandler) GenerateContent(c *gin.Context) {
 	response, err := provider.Generate(c.Request.Context(), aiReq)
 	if err != nil {
 		trace.AddStep(ai.GenerationStageDraft, "草稿生成", "failed", "草稿生成失败", nil, []string{err.Error()})
-		h.recordGeneration(c.Request.Context(), failedGenerationLog(now, workspaceID, userID, primaryKnowledgeBaseID, provider, skill, keywords, chunks, trace, err))
+		h.recordGeneration(c.Request.Context(), failedGenerationLog(now, workspaceID, userID, primaryKnowledgeBaseID, skillPackageVersionID, provider, skill, keywords, chunks, trace, err))
 		c.JSON(http.StatusBadGateway, gin.H{"error": "content generation failed"})
 		return
 	}
@@ -1949,7 +2010,7 @@ func (h *WorkspaceHandler) GenerateContent(c *gin.Context) {
 
 	if err := response.Draft.Validate(); err != nil {
 		trace.AddStep(ai.GenerationStageDraft, "草稿结构校验", "failed", "生成结果未通过结构校验。", nil, []string{err.Error()})
-		h.recordGeneration(c.Request.Context(), failedGenerationLog(now, workspaceID, userID, primaryKnowledgeBaseID, provider, skill, keywords, chunks, trace, err))
+		h.recordGeneration(c.Request.Context(), failedGenerationLog(now, workspaceID, userID, primaryKnowledgeBaseID, skillPackageVersionID, provider, skill, keywords, chunks, trace, err))
 		c.JSON(http.StatusBadGateway, gin.H{"error": "generated content is invalid"})
 		return
 	}
@@ -1959,7 +2020,7 @@ func (h *WorkspaceHandler) GenerateContent(c *gin.Context) {
 		stage, err := provider.CheckGeneratedDraft(c.Request.Context(), aiReq, response.Draft)
 		if err != nil {
 			trace.AddStep(ai.GenerationStageQualityCheck, "质量检查", "failed", "质量检查失败", nil, []string{err.Error()})
-			h.recordGeneration(c.Request.Context(), failedGenerationLog(now, workspaceID, userID, primaryKnowledgeBaseID, provider, skill, keywords, chunks, trace, err))
+			h.recordGeneration(c.Request.Context(), failedGenerationLog(now, workspaceID, userID, primaryKnowledgeBaseID, skillPackageVersionID, provider, skill, keywords, chunks, trace, err))
 			c.JSON(http.StatusBadGateway, gin.H{"error": "content quality check failed"})
 			return
 		}
@@ -1978,7 +2039,7 @@ func (h *WorkspaceHandler) GenerateContent(c *gin.Context) {
 		rewritten, err := provider.RewriteGeneratedDraft(c.Request.Context(), aiReq, response.Draft, quality)
 		if err != nil {
 			trace.AddStep(ai.GenerationStageRewrite, "草稿重写", "failed", fmt.Sprintf("第 %d 轮重写失败。", round+1), nil, []string{err.Error()})
-			h.recordGeneration(c.Request.Context(), failedGenerationLog(now, workspaceID, userID, primaryKnowledgeBaseID, provider, skill, keywords, chunks, trace, err))
+			h.recordGeneration(c.Request.Context(), failedGenerationLog(now, workspaceID, userID, primaryKnowledgeBaseID, skillPackageVersionID, provider, skill, keywords, chunks, trace, err))
 			c.JSON(http.StatusBadGateway, gin.H{"error": "content rewrite failed"})
 			return
 		}
@@ -2015,7 +2076,7 @@ func (h *WorkspaceHandler) GenerateContent(c *gin.Context) {
 
 	if err := h.saveContent(c.Request.Context(), content); err != nil {
 		trace.AddStep(ai.GenerationStagePersist, "保存草稿", "failed", "AI 输出保存数据库失败。", nil, []string{err.Error()})
-		h.recordGeneration(c.Request.Context(), failedGenerationLog(now, workspaceID, userID, primaryKnowledgeBaseID, provider, skill, keywords, chunks, trace, err))
+		h.recordGeneration(c.Request.Context(), failedGenerationLog(now, workspaceID, userID, primaryKnowledgeBaseID, skillPackageVersionID, provider, skill, keywords, chunks, trace, err))
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "generated content was not persisted"})
 		return
 	}
@@ -2034,6 +2095,7 @@ func (h *WorkspaceHandler) GenerateContent(c *gin.Context) {
 		UserID:                userID,
 		KnowledgeBaseID:       primaryKnowledgeBaseID,
 		ContentID:             content.ID,
+		SkillPackageVersionID: skillPackageVersionID,
 		Provider:              response.Provider,
 		Model:                 response.Model,
 		ContentType:           skill.ContentType,
@@ -2054,6 +2116,20 @@ func (h *WorkspaceHandler) GenerateContent(c *gin.Context) {
 	if generationUsage.TotalTokens > 0 {
 		response.TokenUsage = generationUsage
 		h.recordAITokenUsage(c.Request.Context(), h.buildAITokenUsageEvent(generationID, workspaceID, userID, response, now))
+	}
+	if skillPackageVersionID != "" {
+		h.recordSkillPackageUsage(c.Request.Context(), model.SkillPackageUsageMetric{
+			ID:                  fmt.Sprintf("spu_%d", now.UnixNano()),
+			WorkspaceID:         workspaceID,
+			PackageID:           selectedSkillPackage.ID,
+			VersionID:           selectedSkillPackageVersion.ID,
+			GenerationRequestID: generationID,
+			ContentID:           content.ID,
+			MetricType:          model.SkillPackageUsageGeneration,
+			Count:               1,
+			Status:              "succeeded",
+			CreatedAt:           now,
+		})
 	}
 
 	c.JSON(http.StatusCreated, generateContentResponse{Content: content, Trace: trace})
@@ -3096,6 +3172,10 @@ func (h *WorkspaceHandler) loadDatabaseSnapshot(ctx context.Context) bool {
 		log.Printf("database snapshot load failed: %v", err)
 		return false
 	}
+	skillSnapshot, skillErr := h.loadSkillPackageSnapshot(ctx)
+	if skillErr != nil {
+		log.Printf("skill package snapshot load skipped: %v", skillErr)
+	}
 
 	h.mu.Lock()
 	h.users = snapshot.Users
@@ -3118,6 +3198,32 @@ func (h *WorkspaceHandler) loadDatabaseSnapshot(ctx context.Context) bool {
 	h.campaignCalendarItems = snapshot.CampaignCalendarItems
 	h.campaignMetrics = snapshot.CampaignMetrics
 	h.campaignRollups = snapshot.CampaignRollups
+	h.creators = snapshot.Creators
+	h.creatorMediaAccounts = snapshot.CreatorMediaAccounts
+	h.creatorShortlists = snapshot.CreatorShortlists
+	h.creatorBriefs = snapshot.CreatorBriefs
+	h.creatorOrders = snapshot.CreatorOrders
+	h.creatorDeliverables = snapshot.CreatorDeliverables
+	h.creatorSettlements = snapshot.CreatorSettlements
+	h.creatorComplianceEvidence = snapshot.CreatorComplianceEvidence
+	h.skillPackages = []model.SkillPackage{}
+	h.skillPackageVersions = []model.SkillPackageVersion{}
+	h.skillPackageAssets = []model.SkillPackageAsset{}
+	h.skillPackageExamples = []model.SkillPackageExample{}
+	h.skillPackageReviews = []model.SkillPackageReview{}
+	h.skillEntitlements = []model.WorkspaceSkillEntitlement{}
+	h.skillUsageMetrics = []model.SkillPackageUsageMetric{}
+	h.skillRevenueMetrics = []model.SkillPackageRevenueMetric{}
+	if skillErr == nil {
+		h.skillPackages = skillSnapshot.Packages
+		h.skillPackageVersions = skillSnapshot.Versions
+		h.skillPackageAssets = skillSnapshot.Assets
+		h.skillPackageExamples = skillSnapshot.Examples
+		h.skillPackageReviews = skillSnapshot.Reviews
+		h.skillEntitlements = skillSnapshot.Entitlements
+		h.skillUsageMetrics = skillSnapshot.UsageMetrics
+		h.skillRevenueMetrics = skillSnapshot.RevenueMetric
+	}
 	h.mu.Unlock()
 
 	return true
@@ -3531,6 +3637,18 @@ func (h *WorkspaceHandler) recordGeneration(ctx context.Context, item model.Gene
 	defer cancel()
 	if err := h.db.SaveGenerationRequest(dbCtx, item); err != nil {
 		log.Printf("generation request log was not persisted: %v", err)
+	}
+}
+
+func (h *WorkspaceHandler) recordSkillPackageUsage(ctx context.Context, item model.SkillPackageUsageMetric) {
+	h.mu.Lock()
+	h.skillUsageMetrics = append([]model.SkillPackageUsageMetric{item}, h.skillUsageMetrics...)
+	h.mu.Unlock()
+
+	dbCtx, cancel := context.WithTimeout(ctx, 2*time.Second)
+	defer cancel()
+	if err := h.db.RecordSkillPackageUsageMetric(dbCtx, item); err != nil {
+		log.Printf("skill package usage metric was not persisted: %v", err)
 	}
 }
 
@@ -4153,6 +4271,7 @@ func failedGenerationLog(
 	workspaceID string,
 	userID string,
 	knowledgeBaseID string,
+	skillPackageVersionID string,
 	provider ai.Provider,
 	skill ai.WritingSkill,
 	keywords []string,
@@ -4165,6 +4284,7 @@ func failedGenerationLog(
 		WorkspaceID:           workspaceID,
 		UserID:                userID,
 		KnowledgeBaseID:       knowledgeBaseID,
+		SkillPackageVersionID: skillPackageVersionID,
 		Provider:              provider.Name(),
 		Model:                 provider.Model(),
 		ContentType:           skill.ContentType,

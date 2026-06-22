@@ -1178,6 +1178,52 @@ func TestGenerateContentTraceUsesVIPPipeline(t *testing.T) {
 	}
 }
 
+func TestGenerateContentRejectsUninstalledSkillPackageVersion(t *testing.T) {
+	router := testWorkspaceRouter()
+
+	createBody := bytes.NewBufferString(`{
+		"name": "小红书爆款结构包",
+		"slug": "xhs-growth-structure",
+		"description": "用于测试未安装技能包的权益校验",
+		"category": "xiaohongshu",
+		"targetPlatform": "xiaohongshu",
+		"supportedContentFormats": ["article"],
+		"listingStatus": "published",
+		"version": {
+			"id": "skv_test_uninstalled",
+			"version": "1.0.0",
+			"promptContract": "补充内容结构约束",
+			"outputSchema": "{}"
+		}
+	}`)
+	createReq := httptest.NewRequest(http.MethodPost, "/api/admin/skill-packages", createBody)
+	createReq.Header.Set("Authorization", "Bearer demo-token")
+	createReq.Header.Set("X-Workspace-ID", "wks_acme")
+	createReq.Header.Set("Content-Type", "application/json")
+	createRec := httptest.NewRecorder()
+	router.ServeHTTP(createRec, createReq)
+	if createRec.Code != http.StatusCreated {
+		t.Fatalf("create skill package status = %d, want %d, body = %s", createRec.Code, http.StatusCreated, createRec.Body.String())
+	}
+
+	body := bytes.NewBufferString(`{
+		"keywords": ["内容营销"],
+		"contentType": "article",
+		"knowledgeBaseIds": ["kb_brand"],
+		"skillPackageVersionId": "skv_test_uninstalled"
+	}`)
+	req := httptest.NewRequest(http.MethodPost, "/api/contents/generate", body)
+	req.Header.Set("Authorization", "Bearer demo-token")
+	req.Header.Set("X-Workspace-ID", "wks_acme")
+	req.Header.Set("Content-Type", "application/json")
+
+	rec := httptest.NewRecorder()
+	router.ServeHTTP(rec, req)
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("generate status = %d, want %d, body = %s", rec.Code, http.StatusForbidden, rec.Body.String())
+	}
+}
+
 func TestGenerateContentRejectsUnsupportedContentType(t *testing.T) {
 	router := testWorkspaceRouter()
 	body := bytes.NewBufferString(`{

@@ -13,6 +13,7 @@ import type {
   FormatKnowledgeContentResponse,
   GenerateContentPayload,
   GenerateContentResponse,
+  InstalledSkillPackage,
   KnowledgeBase,
   KnowledgeItem,
   LoginResponse,
@@ -28,6 +29,8 @@ import type {
   RequestMediaAccountSyncPayload,
   RunPublishJobPayload,
   RunPublishJobResponse,
+  SkillPackageMarketplaceItem,
+  SkillPackageUsageMetric,
   StartMediaAccountBrowserLoginPayload,
   StartMediaAccountBrowserLoginResponse,
   CompleteMediaAccountBrowserLoginPayload,
@@ -58,6 +61,7 @@ import type {
   SubscriptionPlan,
   SubmitCreatorDeliverablePayload,
   User,
+  WorkspaceSkillEntitlement,
   Workspace,
   WorkspaceData,
 } from './types';
@@ -217,6 +221,68 @@ export async function assignKnowledgeItemsToBases(
     method: 'POST',
     body: JSON.stringify(payload),
   });
+}
+
+export async function fetchSkillPackageMarketplace(
+  token: string,
+  workspaceId: string,
+): Promise<SkillPackageMarketplaceItem[]> {
+  const response = await request<ListResponse<SkillPackageMarketplaceItem>>('/skill-packages/marketplace', token, workspaceId);
+  return response.items;
+}
+
+export async function fetchInstalledSkillPackages(
+  token: string,
+  workspaceId: string,
+): Promise<InstalledSkillPackage[]> {
+  const response = await request<ListResponse<InstalledSkillPackage>>('/skill-packages/installed', token, workspaceId);
+  return response.items;
+}
+
+export async function installSkillPackage(
+  token: string,
+  workspaceId: string,
+  packageId: string,
+  payload: { versionId?: string; seats?: number } = {},
+): Promise<WorkspaceSkillEntitlement> {
+  return request<WorkspaceSkillEntitlement>(`/skill-package-entitlements/${packageId}/install`, token, workspaceId, {
+    method: 'POST',
+    body: JSON.stringify(payload),
+  });
+}
+
+export async function purchaseSkillPackage(
+  token: string,
+  workspaceId: string,
+  packageId: string,
+  payload: { versionId?: string; seats?: number } = {},
+): Promise<WorkspaceSkillEntitlement> {
+  return request<WorkspaceSkillEntitlement>(`/skill-package-entitlements/${packageId}/purchase`, token, workspaceId, {
+    method: 'POST',
+    body: JSON.stringify(payload),
+  });
+}
+
+export async function subscribeSkillPackage(
+  token: string,
+  workspaceId: string,
+  packageId: string,
+  payload: { versionId?: string; seats?: number } = {},
+): Promise<WorkspaceSkillEntitlement> {
+  return request<WorkspaceSkillEntitlement>(`/skill-package-entitlements/${packageId}/subscribe`, token, workspaceId, {
+    method: 'POST',
+    body: JSON.stringify(payload),
+  });
+}
+
+export async function fetchSkillPackageUsage(
+  token: string,
+  workspaceId: string,
+  packageId?: string,
+): Promise<SkillPackageUsageMetric[]> {
+  const query = packageId ? `?packageId=${encodeURIComponent(packageId)}` : '';
+  const response = await request<ListResponse<SkillPackageUsageMetric>>(`/skill-packages/usage${query}`, token, workspaceId);
+  return response.items;
 }
 
 export async function createMediaAccount(

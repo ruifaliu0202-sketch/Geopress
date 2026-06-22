@@ -531,6 +531,7 @@ func (db *DB) SaveGenerationRequest(ctx context.Context, item model.GenerationRe
 			user_id,
 			knowledge_base_id,
 			content_id,
+			skill_package_version_id,
 			provider,
 			model,
 			content_type,
@@ -550,16 +551,17 @@ func (db *DB) SaveGenerationRequest(ctx context.Context, item model.GenerationRe
 			created_at
 		)
 		VALUES (
-			$1, $2, nullif($3, ''), nullif($4, ''), nullif($5, ''),
-			$6, $7, $8, $9::text[],
-			$10::jsonb, $11, $12, $13, $14::jsonb, $15::jsonb, $16::jsonb,
-			$17, $18, $19, $20, $21, $22
+			$1, $2, nullif($3, ''), nullif($4, ''), nullif($5, ''), $6,
+			$7, $8, $9, $10::text[],
+			$11::jsonb, $12, $13, $14, $15::jsonb, $16::jsonb, $17::jsonb,
+			$18, $19, $20, $21, $22, $23
 		)
 	`, item.ID,
 		item.WorkspaceID,
 		item.UserID,
 		item.KnowledgeBaseID,
 		item.ContentID,
+		item.SkillPackageVersionID,
 		item.Provider,
 		item.Model,
 		item.ContentType,
