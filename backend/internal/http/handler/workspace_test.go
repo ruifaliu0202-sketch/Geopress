@@ -658,6 +658,176 @@ func TestGenerateContentRejectsUnsupportedContentType(t *testing.T) {
 	}
 }
 
+func TestBrandComplianceApprovalAndReportsAPIs(t *testing.T) {
+	router := testWorkspaceRouter()
+
+	assetReq := httptest.NewRequest(http.MethodPost, "/api/brand-assets", bytes.NewBufferString(`{
+		"type": "forbidden_phrase",
+		"name": "禁用承诺表达",
+		"content": "稳赚",
+		"channels": ["xiaohongshu"],
+		"tags": ["compliance"],
+		"metadata": {"owner": "legal"}
+	}`))
+	assetReq.Header.Set("Authorization", "Bearer demo-token")
+	assetReq.Header.Set("X-Workspace-ID", "wks_acme")
+	assetReq.Header.Set("Content-Type", "application/json")
+	assetRec := httptest.NewRecorder()
+	router.ServeHTTP(assetRec, assetReq)
+	if assetRec.Code != http.StatusCreated {
+		t.Fatalf("brand asset status = %d, want %d, body = %s", assetRec.Code, http.StatusCreated, assetRec.Body.String())
+	}
+
+	var asset model.BrandAsset
+	if err := json.Unmarshal(assetRec.Body.Bytes(), &asset); err != nil {
+		t.Fatalf("unmarshal asset: %v", err)
+	}
+	if asset.ID == "" || asset.Status != model.BrandAssetActive || !sameStringSet(asset.Channels, []string{"xiaohongshu"}) {
+		t.Fatalf("unexpected asset: %#v", asset)
+	}
+
+	guardrailBody := fmt.Sprintf(`{
+		"assetId": %q,
+		"name": "禁止收益保证",
+		"category": "claim_risk",
+		"channel": "xiaohongshu",
+		"severity": "high",
+		"rules": ["稳赚"],
+		"action": "提交法务复核"
+	}`, asset.ID)
+	guardrailReq := httptest.NewRequest(http.MethodPost, "/api/brand-guardrails", bytes.NewBufferString(guardrailBody))
+	guardrailReq.Header.Set("Authorization", "Bearer demo-token")
+	guardrailReq.Header.Set("X-Workspace-ID", "wks_acme")
+	guardrailReq.Header.Set("Content-Type", "application/json")
+	guardrailRec := httptest.NewRecorder()
+	router.ServeHTTP(guardrailRec, guardrailReq)
+	if guardrailRec.Code != http.StatusCreated {
+		t.Fatalf("guardrail status = %d, want %d, body = %s", guardrailRec.Code, http.StatusCreated, guardrailRec.Body.String())
+	}
+
+	checkReq := httptest.NewRequest(http.MethodPost, "/api/compliance-checks", bytes.NewBufferString(`{
+		"resourceType": "content",
+		"channel": "xiaohongshu",
+		"title": "高收益方案",
+		"content": "这个方案保证稳赚，欢迎合作。联系人 13800138000"
+	}`))
+	checkReq.Header.Set("Authorization", "Bearer demo-token")
+	checkReq.Header.Set("X-Workspace-ID", "wks_acme")
+	checkReq.Header.Set("Content-Type", "application/json")
+	checkRec := httptest.NewRecorder()
+	router.ServeHTTP(checkRec, checkReq)
+	if checkRec.Code != http.StatusCreated {
+		t.Fatalf("compliance check status = %d, want %d, body = %s", checkRec.Code, http.StatusCreated, checkRec.Body.String())
+	}
+
+	var check model.ComplianceCheck
+	if err := json.Unmarshal(checkRec.Body.Bytes(), &check); err != nil {
+		t.Fatalf("unmarshal compliance check: %v", err)
+	}
+	if check.Status != model.ComplianceCheckCompleted || check.RiskLevel != "high" || len(check.Findings) < 3 {
+		t.Fatalf("unexpected compliance check: %#v", check)
+	}
+	for _, finding := range check.Findings {
+		if finding.Evidence == "" || finding.Finding == "" || finding.Action == "" {
+			t.Fatalf("finding misses evidence/finding/action: %#v", finding)
+		}
+	}
+
+	workflowReq := httptest.NewRequest(http.MethodPost, "/api/approval-workflows", bytes.NewBufferString(`{
+		"resourceType": "content",
+		"resourceId": "cnt_1001",
+		"name": "品牌法务双审",
+		"stages": [
+			{"name": "品牌审核", "approverRole": "brand_manager", "requiredApprovals": 1},
+			{"name": "法务审核", "approverRole": "legal", "requiredApprovals": 1}
+		]
+	}`))
+	workflowReq.Header.Set("Authorization", "Bearer demo-token")
+	workflowReq.Header.Set("X-Workspace-ID", "wks_acme")
+	workflowReq.Header.Set("Content-Type", "application/json")
+	workflowRec := httptest.NewRecorder()
+	router.ServeHTTP(workflowRec, workflowReq)
+	if workflowRec.Code != http.StatusCreated {
+		t.Fatalf("workflow status = %d, want %d, body = %s", workflowRec.Code, http.StatusCreated, workflowRec.Body.String())
+	}
+
+	var workflowResponse struct {
+		Workflow model.ApprovalWorkflow `json:"workflow"`
+		Tasks    []model.ApprovalTask   `json:"tasks"`
+	}
+	if err := json.Unmarshal(workflowRec.Body.Bytes(), &workflowResponse); err != nil {
+		t.Fatalf("unmarshal workflow response: %v", err)
+	}
+	if workflowResponse.Workflow.Status != model.ApprovalWorkflowActive || len(workflowResponse.Tasks) != 2 {
+		t.Fatalf("unexpected workflow response: %#v", workflowResponse)
+	}
+
+	taskID := workflowResponse.Tasks[0].ID
+	processReq := httptest.NewRequest(http.MethodPost, fmt.Sprintf("/api/approval-tasks/%s/process", taskID), bytes.NewBufferString(`{
+		"decision": "approve",
+		"comment": "品牌表达通过"
+	}`))
+	processReq.Header.Set("Authorization", "Bearer demo-token")
+	processReq.Header.Set("X-Workspace-ID", "wks_acme")
+	processReq.Header.Set("Content-Type", "application/json")
+	processRec := httptest.NewRecorder()
+	router.ServeHTTP(processRec, processReq)
+	if processRec.Code != http.StatusOK {
+		t.Fatalf("process status = %d, want %d, body = %s", processRec.Code, http.StatusOK, processRec.Body.String())
+	}
+
+	var processed model.ApprovalTask
+	if err := json.Unmarshal(processRec.Body.Bytes(), &processed); err != nil {
+		t.Fatalf("unmarshal processed task: %v", err)
+	}
+	if processed.Status != model.ApprovalTaskApproved || processed.ProcessedByUserID != "usr_demo" {
+		t.Fatalf("unexpected processed task: %#v", processed)
+	}
+
+	reportReq := httptest.NewRequest(http.MethodPost, "/api/report-packages/generate", bytes.NewBufferString(`{
+		"name": "六月经营报告",
+		"reportType": "monthly",
+		"periodStart": "2026-06-01",
+		"periodEnd": "2026-06-30",
+		"sections": ["content_delivery", "compliance_risks"]
+	}`))
+	reportReq.Header.Set("Authorization", "Bearer demo-token")
+	reportReq.Header.Set("X-Workspace-ID", "wks_acme")
+	reportReq.Header.Set("Content-Type", "application/json")
+	reportRec := httptest.NewRecorder()
+	router.ServeHTTP(reportRec, reportReq)
+	if reportRec.Code != http.StatusCreated {
+		t.Fatalf("report status = %d, want %d, body = %s", reportRec.Code, http.StatusCreated, reportRec.Body.String())
+	}
+
+	var report model.ReportPackage
+	if err := json.Unmarshal(reportRec.Body.Bytes(), &report); err != nil {
+		t.Fatalf("unmarshal report: %v", err)
+	}
+	if report.Status != "generated" || len(report.Sections) != 2 || report.Metrics["brandAssetCount"] == nil {
+		t.Fatalf("unexpected report: %#v", report)
+	}
+
+	recommendationReq := httptest.NewRequest(http.MethodGet, "/api/strategy-recommendations", nil)
+	recommendationReq.Header.Set("Authorization", "Bearer demo-token")
+	recommendationReq.Header.Set("X-Workspace-ID", "wks_acme")
+	recommendationRec := httptest.NewRecorder()
+	router.ServeHTTP(recommendationRec, recommendationReq)
+	if recommendationRec.Code != http.StatusOK {
+		t.Fatalf("recommendations status = %d, want %d, body = %s", recommendationRec.Code, http.StatusOK, recommendationRec.Body.String())
+	}
+
+	var recommendations struct {
+		Items []model.StrategyRecommendation `json:"items"`
+	}
+	if err := json.Unmarshal(recommendationRec.Body.Bytes(), &recommendations); err != nil {
+		t.Fatalf("unmarshal recommendations: %v", err)
+	}
+	if len(recommendations.Items) == 0 {
+		t.Fatalf("expected placeholder recommendations, got %#v", recommendations.Items)
+	}
+}
+
 func traceHasStep(trace ai.GenerationTrace, id string, status string) bool {
 	for _, step := range trace.Steps {
 		if step.ID == id && step.Status == status {

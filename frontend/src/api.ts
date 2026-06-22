@@ -1,13 +1,25 @@
 import type {
+  AgencyClientRelation,
   AssignKnowledgeItemsToBasesPayload,
+  ApprovalTask,
+  ApprovalWorkflow,
+  BrandAsset,
+  BrandGuardrail,
   CompleteOnboardingPayload,
   CompleteOnboardingResponse,
+  ComplianceCheck,
   Content,
+  CreateAgencyClientRelationPayload,
+  CreateApprovalWorkflowPayload,
+  CreateApprovalWorkflowResponse,
+  CreateBrandAssetPayload,
+  CreateBrandGuardrailPayload,
   CreateContentPayload,
   CreateKnowledgeBasePayload,
   CreateKnowledgeItemPayload,
   CreateMediaAccountPayload,
   CreatePublishSchedulePayload,
+  GenerateReportPackagePayload,
   FormatKnowledgeContentPayload,
   FormatKnowledgeContentResponse,
   GenerateContentPayload,
@@ -21,11 +33,15 @@ import type {
   ConfirmPublishPayload,
   PreparePublishPayload,
   PreparePublishResponse,
+  ProcessApprovalTaskPayload,
+  ReportPackage,
   RunPublishJobPayload,
   RunPublishJobResponse,
   StartMediaAccountBrowserLoginPayload,
   StartMediaAccountBrowserLoginResponse,
   CompleteMediaAccountBrowserLoginPayload,
+  StrategyRecommendation,
+  SubmitComplianceCheckPayload,
   PublishJob,
   PublishSchedule,
   RegisterPayload,
@@ -306,4 +322,146 @@ export async function runPublishJob(
     method: 'POST',
     body: JSON.stringify(payload),
   });
+}
+
+export async function fetchBrandAssets(token: string, workspaceId: string): Promise<BrandAsset[]> {
+  const response = await request<ListResponse<BrandAsset>>('/brand-assets', token, workspaceId);
+  return response.items;
+}
+
+export async function createBrandAsset(
+  token: string,
+  workspaceId: string,
+  payload: CreateBrandAssetPayload,
+): Promise<BrandAsset> {
+  return request<BrandAsset>('/brand-assets', token, workspaceId, {
+    method: 'POST',
+    body: JSON.stringify(payload),
+  });
+}
+
+export async function updateBrandAsset(
+  token: string,
+  workspaceId: string,
+  assetId: string,
+  payload: CreateBrandAssetPayload,
+): Promise<BrandAsset> {
+  return request<BrandAsset>(`/brand-assets/${assetId}`, token, workspaceId, {
+    method: 'PUT',
+    body: JSON.stringify(payload),
+  });
+}
+
+export async function archiveBrandAsset(token: string, workspaceId: string, assetId: string): Promise<BrandAsset> {
+  return request<BrandAsset>(`/brand-assets/${assetId}`, token, workspaceId, {
+    method: 'DELETE',
+  });
+}
+
+export async function fetchBrandGuardrails(token: string, workspaceId: string): Promise<BrandGuardrail[]> {
+  const response = await request<ListResponse<BrandGuardrail>>('/brand-guardrails', token, workspaceId);
+  return response.items;
+}
+
+export async function createBrandGuardrail(
+  token: string,
+  workspaceId: string,
+  payload: CreateBrandGuardrailPayload,
+): Promise<BrandGuardrail> {
+  return request<BrandGuardrail>('/brand-guardrails', token, workspaceId, {
+    method: 'POST',
+    body: JSON.stringify(payload),
+  });
+}
+
+export async function fetchApprovalWorkflows(token: string, workspaceId: string): Promise<ApprovalWorkflow[]> {
+  const response = await request<ListResponse<ApprovalWorkflow>>('/approval-workflows', token, workspaceId);
+  return response.items;
+}
+
+export async function createApprovalWorkflow(
+  token: string,
+  workspaceId: string,
+  payload: CreateApprovalWorkflowPayload,
+): Promise<CreateApprovalWorkflowResponse> {
+  return request<CreateApprovalWorkflowResponse>('/approval-workflows', token, workspaceId, {
+    method: 'POST',
+    body: JSON.stringify(payload),
+  });
+}
+
+export async function fetchApprovalTasks(token: string, workspaceId: string): Promise<ApprovalTask[]> {
+  const response = await request<ListResponse<ApprovalTask>>('/approval-tasks', token, workspaceId);
+  return response.items;
+}
+
+export async function processApprovalTask(
+  token: string,
+  workspaceId: string,
+  taskId: string,
+  payload: ProcessApprovalTaskPayload,
+): Promise<ApprovalTask> {
+  return request<ApprovalTask>(`/approval-tasks/${taskId}/process`, token, workspaceId, {
+    method: 'POST',
+    body: JSON.stringify(payload),
+  });
+}
+
+export async function fetchComplianceChecks(token: string, workspaceId: string): Promise<ComplianceCheck[]> {
+  const response = await request<ListResponse<ComplianceCheck>>('/compliance-checks', token, workspaceId);
+  return response.items;
+}
+
+export async function submitComplianceCheck(
+  token: string,
+  workspaceId: string,
+  payload: SubmitComplianceCheckPayload,
+): Promise<ComplianceCheck> {
+  return request<ComplianceCheck>('/compliance-checks', token, workspaceId, {
+    method: 'POST',
+    body: JSON.stringify(payload),
+  });
+}
+
+export async function fetchAgencyClientRelations(
+  token: string,
+  workspaceId: string,
+): Promise<AgencyClientRelation[]> {
+  const response = await request<ListResponse<AgencyClientRelation>>('/agency-client-relations', token, workspaceId);
+  return response.items;
+}
+
+export async function createAgencyClientRelation(
+  token: string,
+  workspaceId: string,
+  payload: CreateAgencyClientRelationPayload,
+): Promise<AgencyClientRelation> {
+  return request<AgencyClientRelation>('/agency-client-relations', token, workspaceId, {
+    method: 'POST',
+    body: JSON.stringify(payload),
+  });
+}
+
+export async function fetchReportPackages(token: string, workspaceId: string): Promise<ReportPackage[]> {
+  const response = await request<ListResponse<ReportPackage>>('/report-packages', token, workspaceId);
+  return response.items;
+}
+
+export async function generateReportPackage(
+  token: string,
+  workspaceId: string,
+  payload: GenerateReportPackagePayload,
+): Promise<ReportPackage> {
+  return request<ReportPackage>('/report-packages/generate', token, workspaceId, {
+    method: 'POST',
+    body: JSON.stringify(payload),
+  });
+}
+
+export async function fetchStrategyRecommendations(
+  token: string,
+  workspaceId: string,
+): Promise<StrategyRecommendation[]> {
+  const response = await request<ListResponse<StrategyRecommendation>>('/strategy-recommendations', token, workspaceId);
+  return response.items;
 }

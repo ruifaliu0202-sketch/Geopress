@@ -28,26 +28,34 @@ import (
 )
 
 type WorkspaceHandler struct {
-	mu                     sync.RWMutex
-	db                     *database.DB
-	aiConfig               *ai.RuntimeConfig
-	users                  []model.User
-	subscriptionPlans      []model.SubscriptionPlan
-	workspaces             []model.Workspace
-	members                []model.WorkspaceMember
-	knowledgeBases         []model.KnowledgeBase
-	knowledgeItems         []model.KnowledgeItem
-	platformKnowledgeBases []model.PlatformKnowledgeBase
-	platformKnowledgeItems []model.PlatformKnowledgeItem
-	platforms              []model.MediaPlatform
-	accounts               []model.MediaAccount
-	contents               []model.Content
-	schedules              []model.PublishSchedule
-	jobs                   []model.PublishJob
-	generations            []model.GenerationRequest
-	tokenUsageEvents       []model.AITokenUsageEvent
-	userSessions           map[string]string
-	browserLogin           xiaohongshu.BrowserLoginService
+	mu                      sync.RWMutex
+	db                      *database.DB
+	aiConfig                *ai.RuntimeConfig
+	users                   []model.User
+	subscriptionPlans       []model.SubscriptionPlan
+	workspaces              []model.Workspace
+	members                 []model.WorkspaceMember
+	knowledgeBases          []model.KnowledgeBase
+	knowledgeItems          []model.KnowledgeItem
+	platformKnowledgeBases  []model.PlatformKnowledgeBase
+	platformKnowledgeItems  []model.PlatformKnowledgeItem
+	platforms               []model.MediaPlatform
+	accounts                []model.MediaAccount
+	contents                []model.Content
+	schedules               []model.PublishSchedule
+	jobs                    []model.PublishJob
+	generations             []model.GenerationRequest
+	tokenUsageEvents        []model.AITokenUsageEvent
+	brandAssets             []model.BrandAsset
+	brandGuardrails         []model.BrandGuardrail
+	approvalWorkflows       []model.ApprovalWorkflow
+	approvalTasks           []model.ApprovalTask
+	complianceChecks        []model.ComplianceCheck
+	agencyClientRelations   []model.AgencyClientRelation
+	reportPackages          []model.ReportPackage
+	strategyRecommendations []model.StrategyRecommendation
+	userSessions            map[string]string
+	browserLogin            xiaohongshu.BrowserLoginService
 }
 
 type loginRequest struct {
@@ -554,6 +562,24 @@ func (h *WorkspaceHandler) Register(router gin.IRouter, auth gin.HandlerFunc) {
 	protected.POST("/publish/prepare", h.PreparePublish)
 	protected.POST("/publish-jobs/:jobId/run", h.RunPublishJob)
 	protected.POST("/publish-jobs/:jobId/confirm", h.ConfirmPublishJob)
+	protected.GET("/brand-assets", h.ListBrandAssets)
+	protected.POST("/brand-assets", h.CreateBrandAsset)
+	protected.GET("/brand-assets/:assetId", h.GetBrandAsset)
+	protected.PUT("/brand-assets/:assetId", h.UpdateBrandAsset)
+	protected.DELETE("/brand-assets/:assetId", h.ArchiveBrandAsset)
+	protected.GET("/brand-guardrails", h.ListBrandGuardrails)
+	protected.POST("/brand-guardrails", h.CreateBrandGuardrail)
+	protected.GET("/approval-workflows", h.ListApprovalWorkflows)
+	protected.POST("/approval-workflows", h.CreateApprovalWorkflow)
+	protected.GET("/approval-tasks", h.ListApprovalTasks)
+	protected.POST("/approval-tasks/:taskId/process", h.ProcessApprovalTask)
+	protected.GET("/compliance-checks", h.ListComplianceChecks)
+	protected.POST("/compliance-checks", h.SubmitComplianceCheck)
+	protected.GET("/agency-client-relations", h.ListAgencyClientRelations)
+	protected.POST("/agency-client-relations", h.CreateAgencyClientRelation)
+	protected.GET("/report-packages", h.ListReportPackages)
+	protected.POST("/report-packages/generate", h.GenerateReportPackage)
+	protected.GET("/strategy-recommendations", h.ListStrategyRecommendations)
 
 	admin := protected.Group("/admin")
 	admin.Use(h.requirePlatformAdmin())
@@ -2863,6 +2889,14 @@ func (h *WorkspaceHandler) loadDatabaseSnapshot(ctx context.Context) bool {
 	h.jobs = snapshot.Jobs
 	h.generations = snapshot.Generations
 	h.tokenUsageEvents = snapshot.TokenUsageEvents
+	h.brandAssets = snapshot.BrandAssets
+	h.brandGuardrails = snapshot.BrandGuardrails
+	h.approvalWorkflows = snapshot.ApprovalWorkflows
+	h.approvalTasks = snapshot.ApprovalTasks
+	h.complianceChecks = snapshot.ComplianceChecks
+	h.agencyClientRelations = snapshot.AgencyClientRelations
+	h.reportPackages = snapshot.ReportPackages
+	h.strategyRecommendations = snapshot.StrategyRecommendations
 	h.mu.Unlock()
 
 	return true

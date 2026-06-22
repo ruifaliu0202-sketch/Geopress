@@ -13,21 +13,29 @@ import (
 )
 
 type Snapshot struct {
-	Users                  []model.User
-	SubscriptionPlans      []model.SubscriptionPlan
-	Workspaces             []model.Workspace
-	Members                []model.WorkspaceMember
-	KnowledgeBases         []model.KnowledgeBase
-	KnowledgeItems         []model.KnowledgeItem
-	PlatformKnowledgeBases []model.PlatformKnowledgeBase
-	PlatformKnowledgeItems []model.PlatformKnowledgeItem
-	Platforms              []model.MediaPlatform
-	Accounts               []model.MediaAccount
-	Contents               []model.Content
-	Schedules              []model.PublishSchedule
-	Jobs                   []model.PublishJob
-	Generations            []model.GenerationRequest
-	TokenUsageEvents       []model.AITokenUsageEvent
+	Users                   []model.User
+	SubscriptionPlans       []model.SubscriptionPlan
+	Workspaces              []model.Workspace
+	Members                 []model.WorkspaceMember
+	KnowledgeBases          []model.KnowledgeBase
+	KnowledgeItems          []model.KnowledgeItem
+	PlatformKnowledgeBases  []model.PlatformKnowledgeBase
+	PlatformKnowledgeItems  []model.PlatformKnowledgeItem
+	Platforms               []model.MediaPlatform
+	Accounts                []model.MediaAccount
+	Contents                []model.Content
+	Schedules               []model.PublishSchedule
+	Jobs                    []model.PublishJob
+	Generations             []model.GenerationRequest
+	TokenUsageEvents        []model.AITokenUsageEvent
+	BrandAssets             []model.BrandAsset
+	BrandGuardrails         []model.BrandGuardrail
+	ApprovalWorkflows       []model.ApprovalWorkflow
+	ApprovalTasks           []model.ApprovalTask
+	ComplianceChecks        []model.ComplianceCheck
+	AgencyClientRelations   []model.AgencyClientRelation
+	ReportPackages          []model.ReportPackage
+	StrategyRecommendations []model.StrategyRecommendation
 }
 
 type UserCredentials struct {
@@ -85,6 +93,30 @@ func (db *DB) LoadSnapshot(ctx context.Context) (Snapshot, error) {
 		return Snapshot{}, err
 	}
 	if snapshot.TokenUsageEvents, err = db.loadAITokenUsageEvents(ctx); err != nil {
+		return Snapshot{}, err
+	}
+	if snapshot.BrandAssets, err = db.loadBrandAssets(ctx); err != nil {
+		return Snapshot{}, err
+	}
+	if snapshot.BrandGuardrails, err = db.loadBrandGuardrails(ctx); err != nil {
+		return Snapshot{}, err
+	}
+	if snapshot.ApprovalWorkflows, err = db.loadApprovalWorkflows(ctx); err != nil {
+		return Snapshot{}, err
+	}
+	if snapshot.ApprovalTasks, err = db.loadApprovalTasks(ctx); err != nil {
+		return Snapshot{}, err
+	}
+	if snapshot.ComplianceChecks, err = db.loadComplianceChecks(ctx); err != nil {
+		return Snapshot{}, err
+	}
+	if snapshot.AgencyClientRelations, err = db.loadAgencyClientRelations(ctx); err != nil {
+		return Snapshot{}, err
+	}
+	if snapshot.ReportPackages, err = db.loadReportPackages(ctx); err != nil {
+		return Snapshot{}, err
+	}
+	if snapshot.StrategyRecommendations, err = db.loadStrategyRecommendations(ctx); err != nil {
 		return Snapshot{}, err
 	}
 
