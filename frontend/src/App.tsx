@@ -38,6 +38,8 @@ import {
   generationThinkingSteps,
   initialThinkingState,
 } from './components/aiThinkingModel';
+import { FloatingWorkspaceAssistant } from './components/assistant';
+import { InfoRow, ProductSurface } from './components/common';
 import { WorkspaceShell } from './components/layout/WorkspaceShell';
 import { OnboardingTour } from './components/OnboardingTour';
 import type { OnboardingTourStep } from './components/OnboardingTour';
@@ -46,7 +48,6 @@ import {
   ActiveView,
   LoginView,
   OnboardingView,
-  WorkspaceWorkbenchPanel,
 } from './features/workspace/views';
 import type { GenerationTrace, User, WorkspaceData } from './types';
 
@@ -125,7 +126,7 @@ const workspaceTourSteps: OnboardingTourStep[] = [
     id: 'generate',
     title: 'Step 7：关键词生成',
     targetId: 'generate-start',
-    fallbackTargetId: 'workbench-generate',
+    fallbackTargetId: 'assistant-generate',
     placement: 'bottom',
     content: '进入 AI 生成，输入关键词并选择知识库包。系统会按后台配置的生成链路产出草稿和 Thinking 过程。',
   },
@@ -214,7 +215,6 @@ function App() {
   const [dialog, setDialog] = useState<DialogKey>(null);
   const [selectedContentId, setSelectedContentId] = useState('');
   const [selectedMediaAccountId, setSelectedMediaAccountId] = useState('');
-  const [workbenchOpen, setWorkbenchOpen] = useState(true);
   const [thinking, setThinking] = useState(initialThinkingState);
   const [tourOpen, setTourOpen] = useState(false);
   const [tourStepIndex, setTourStepIndex] = useState(0);
@@ -469,15 +469,25 @@ function App() {
         </>
       }
       rightContext={
-        <WorkspaceWorkbenchPanel
-          open={workbenchOpen}
-          currentWorkspace={currentWorkspace}
-          user={user}
-          onToggle={() => setWorkbenchOpen((value) => !value)}
-          onGenerate={() => setDialog('generate')}
-          onSchedule={() => setDialog('schedule')}
-          onContent={() => setDialog('content')}
-        />
+        <Stack spacing={2} sx={{ position: { lg: 'sticky' }, top: { lg: 88 } }}>
+          <ProductSurface tone="cream" padded>
+            <Stack spacing={1}>
+              <Typography variant="h3">工作区上下文</Typography>
+              <InfoRow label="名称" value={currentWorkspace?.name ?? '-'} />
+              <InfoRow label="行业" value={currentWorkspace?.industry ?? '-'} />
+              <InfoRow label="语气" value={currentWorkspace?.tone ?? '-'} />
+              <InfoRow label="方案" value={currentWorkspace?.plan ?? '-'} />
+            </Stack>
+          </ProductSurface>
+          <ProductSurface tone="sage" padded>
+            <Stack spacing={0.75}>
+              <Typography variant="h3">AI 工作台</Typography>
+              <Typography color="text.secondary">
+                右下角 Corgi 助手已接入生成、知识库、账号绑定、发布计划和引导动作。
+              </Typography>
+            </Stack>
+          </ProductSurface>
+        </Stack>
       }
     >
       <Stack spacing={3}>
@@ -536,6 +546,22 @@ function App() {
         />
       )}
       <AIThinkingOverlay state={thinking} onClose={closeThinking} />
+      {workspace && (
+        <FloatingWorkspaceAssistant
+          workspace={currentWorkspace}
+          user={user}
+          state={{ loading, error, online: !error }}
+          actionCallbacks={{
+            generateContent: () => setDialog('generate'),
+            createKnowledgeBase: () => setDialog('knowledgeBase'),
+            createKnowledgeItem: () => setDialog('knowledgeItem'),
+            bindMediaAccount: () => setDialog('mediaAccount'),
+            createSchedule: () => setDialog('schedule'),
+            openOnboardingGuide: () => startWorkspaceTour(),
+            refreshWorkspace: () => refresh(),
+          }}
+        />
+      )}
       <OnboardingTour
         open={tourOpen && activeView !== 'admin'}
         steps={workspaceTourSteps}
