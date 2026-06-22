@@ -1,18 +1,13 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import {
   Alert,
-  AppBar,
-  Box,
-  Button,
   CircularProgress,
-  Container,
   FormControl,
   IconButton,
   InputLabel,
   MenuItem,
   Select,
   Stack,
-  Toolbar,
   Tooltip,
   Typography,
 } from '@mui/material';
@@ -43,6 +38,7 @@ import {
   generationThinkingSteps,
   initialThinkingState,
 } from './components/aiThinkingModel';
+import { WorkspaceShell } from './components/layout/WorkspaceShell';
 import { OnboardingTour } from './components/OnboardingTour';
 import type { OnboardingTourStep } from './components/OnboardingTour';
 import { WorkspaceDialogs } from './features/workspace/dialogs';
@@ -91,7 +87,7 @@ const workspaceTourSteps: OnboardingTourStep[] = [
     id: 'knowledge',
     title: 'Step 2：维护知识库',
     targetId: 'nav-knowledge',
-    fallbackTargetId: 'mobile-nav-knowledge',
+    fallbackTargetId: 'mobile-nav-menu',
     placement: 'bottom',
     content: '进入知识库，先创建知识库包，再创建品牌、产品、语气、禁忌等引导条目。AI 生成时会从这些条目里检索上下文。',
   },
@@ -114,7 +110,7 @@ const workspaceTourSteps: OnboardingTourStep[] = [
     id: 'accounts',
     title: 'Step 5：连接小红书',
     targetId: 'nav-accounts',
-    fallbackTargetId: 'mobile-nav-accounts',
+    fallbackTargetId: 'mobile-nav-menu',
     placement: 'bottom',
     content: '进入媒体账号，绑定小红书账号。系统会通过服务端浏览器打开二维码登录页，扫码后保存登录态。',
   },
@@ -145,7 +141,7 @@ const workspaceTourSteps: OnboardingTourStep[] = [
     id: 'jobs',
     title: 'Step 9：确认发布结果',
     targetId: 'jobs-list',
-    fallbackTargetId: 'mobile-nav-jobs',
+    fallbackTargetId: 'mobile-nav-menu',
     placement: 'bottom',
     content: '最后到任务页查看发布状态。若平台需要人工确认，可以在发布流程里补充外部链接并确认结果。',
   },
@@ -405,59 +401,17 @@ function App() {
   }
 
   return (
-    <Box sx={{ minHeight: '100vh', bgcolor: 'background.default' }}>
-      <AppBar
-        position="sticky"
-        color="inherit"
-        elevation={0}
-        sx={{ borderBottom: '1px solid', borderColor: 'divider' }}
-      >
-        <Toolbar sx={{ gap: 2 }}>
-          <Stack direction="row" alignItems="center" spacing={1.25} sx={{ minWidth: 230 }}>
-            <Box
-              sx={{
-                display: 'grid',
-                placeItems: 'center',
-                width: 34,
-                height: 34,
-                borderRadius: 1,
-                bgcolor: 'primary.main',
-                color: 'primary.contrastText',
-                fontWeight: 800,
-              }}
-            >
-              G
-            </Box>
-            <Box>
-              <Typography variant="h3" sx={{ lineHeight: 1 }}>
-                Geopress
-              </Typography>
-              <Typography variant="caption" color="text.secondary">
-                {user ? `${user.name} / ${user.email}` : '内容自动发布平台'}
-              </Typography>
-            </Box>
-          </Stack>
-
-          <Stack
-            direction="row"
-            spacing={0.75}
-            sx={{ flex: 1, display: { xs: 'none', lg: 'flex' }, alignItems: 'center' }}
+    <WorkspaceShell
+      activeView={activeView}
+      navItems={visibleNavItems}
+      onNavigate={setActiveView}
+      topShortcuts={
+        <>
+          <FormControl
+            size="small"
+            sx={{ width: { xs: 156, sm: 240 }, flex: '0 1 auto' }}
+            data-tour-id="workspace-select"
           >
-            {visibleNavItems.map((item) => (
-              <Button
-                key={item.key}
-                startIcon={item.icon}
-                variant={activeView === item.key ? 'contained' : 'text'}
-                color={activeView === item.key ? 'primary' : 'inherit'}
-                onClick={() => setActiveView(item.key)}
-                data-tour-id={`nav-${item.key}`}
-              >
-                {item.label}
-              </Button>
-            ))}
-          </Stack>
-
-          <FormControl size="small" sx={{ minWidth: { xs: 160, sm: 240 } }} data-tour-id="workspace-select">
             <InputLabel id="workspace-select-label">工作区</InputLabel>
             <Select
               labelId="workspace-select-label"
@@ -482,90 +436,78 @@ function App() {
 
           <Tooltip title="刷新数据">
             <span>
-              <IconButton disabled={loading} onClick={refresh}>
+              <IconButton disabled={loading} onClick={refresh} aria-label="刷新数据">
                 <AutorenewIcon />
               </IconButton>
             </span>
           </Tooltip>
           <Tooltip title="教学引导">
-            <IconButton onClick={startWorkspaceTour} data-tour-id="tour-start">
+            <IconButton onClick={startWorkspaceTour} aria-label="教学引导" data-tour-id="tour-start">
               <HelpOutlineIcon />
             </IconButton>
           </Tooltip>
+          {user?.isPlatformAdmin && (
+            <Tooltip title="平台后台">
+              <IconButton onClick={() => setActiveView('admin')} aria-label="平台后台">
+                <ManageAccountsOutlinedIcon />
+              </IconButton>
+            </Tooltip>
+          )}
+          <Stack sx={{ display: { xs: 'none', md: 'flex' }, minWidth: 0, maxWidth: 220 }}>
+            <Typography variant="body2" fontWeight={700} noWrap>
+              {user?.name ?? '用户'}
+            </Typography>
+            <Typography variant="caption" color="text.secondary" noWrap>
+              {user?.email ?? ''}
+            </Typography>
+          </Stack>
           <Tooltip title="退出登录">
-            <IconButton onClick={handleLogout}>
+            <IconButton onClick={handleLogout} aria-label="退出登录">
               <LogoutOutlinedIcon />
             </IconButton>
           </Tooltip>
-        </Toolbar>
-      </AppBar>
-
-      <Container maxWidth="xl" sx={{ py: 3 }}>
-        <Box
-          sx={{
-            display: 'flex',
-            flexDirection: { xs: 'column', md: 'row' },
-            alignItems: 'flex-start',
-            gap: 3,
-          }}
-        >
-          <WorkspaceWorkbenchPanel
-            open={workbenchOpen}
+        </>
+      }
+      rightContext={
+        <WorkspaceWorkbenchPanel
+          open={workbenchOpen}
+          currentWorkspace={currentWorkspace}
+          user={user}
+          onToggle={() => setWorkbenchOpen((value) => !value)}
+          onGenerate={() => setDialog('generate')}
+          onSchedule={() => setDialog('schedule')}
+          onContent={() => setDialog('content')}
+        />
+      }
+    >
+      <Stack spacing={3}>
+        {error && <Alert severity="error">{error}</Alert>}
+        {loading && (
+          <Stack direction="row" alignItems="center" spacing={1.5}>
+            <CircularProgress size={22} />
+            <Typography color="text.secondary">正在加载工作区数据</Typography>
+          </Stack>
+        )}
+        {!loading && workspace && currentWorkspace && (
+          <ActiveView
+            view={activeView}
+            token={token}
+            workspaceId={workspaceId}
+            workspace={workspace}
             currentWorkspace={currentWorkspace}
-            user={user}
-            onToggle={() => setWorkbenchOpen((value) => !value)}
-            onGenerate={() => setDialog('generate')}
-            onSchedule={() => setDialog('schedule')}
-            onContent={() => setDialog('content')}
+            openDialog={setDialog}
+            onChanged={refresh}
+            onLoginMediaAccount={(accountId) => {
+              setSelectedMediaAccountId(accountId);
+              setDialog('mediaAccountLogin');
+            }}
+            onPreparePublish={(contentId) => {
+              setSelectedContentId(contentId);
+              setDialog('publishPrepare');
+            }}
           />
-
-          <Box sx={{ flex: 1, minWidth: 0, width: '100%' }}>
-            <Stack spacing={3}>
-              <Stack direction="row" spacing={1} sx={{ display: { xs: 'flex', lg: 'none' }, overflowX: 'auto', pb: 0.5 }}>
-                {visibleNavItems.map((item) => (
-                  <Button
-                    key={item.key}
-                    startIcon={item.icon}
-                    variant={activeView === item.key ? 'contained' : 'outlined'}
-                    onClick={() => setActiveView(item.key)}
-                    sx={{ whiteSpace: 'nowrap' }}
-                    data-tour-id={`mobile-nav-${item.key}`}
-                  >
-                    {item.label}
-                  </Button>
-                ))}
-              </Stack>
-
-              {error && <Alert severity="error">{error}</Alert>}
-              {loading && (
-                <Stack direction="row" alignItems="center" spacing={1.5}>
-                  <CircularProgress size={22} />
-                  <Typography color="text.secondary">正在加载工作区数据</Typography>
-                </Stack>
-              )}
-              {!loading && workspace && currentWorkspace && (
-                <ActiveView
-                  view={activeView}
-                  token={token}
-                  workspaceId={workspaceId}
-                  workspace={workspace}
-                  currentWorkspace={currentWorkspace}
-                  openDialog={setDialog}
-                  onChanged={refresh}
-                  onLoginMediaAccount={(accountId) => {
-                    setSelectedMediaAccountId(accountId);
-                    setDialog('mediaAccountLogin');
-                  }}
-                  onPreparePublish={(contentId) => {
-                    setSelectedContentId(contentId);
-                    setDialog('publishPrepare');
-                  }}
-                />
-              )}
-            </Stack>
-          </Box>
-        </Box>
-      </Container>
+        )}
+      </Stack>
 
       {workspace && (
         <WorkspaceDialogs
@@ -602,7 +544,7 @@ function App() {
         onClose={closeWorkspaceTour}
         onFinish={completeWorkspaceTour}
       />
-    </Box>
+    </WorkspaceShell>
   );
 }
 
