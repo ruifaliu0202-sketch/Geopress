@@ -26,10 +26,26 @@ import type {
   StartMediaAccountBrowserLoginPayload,
   StartMediaAccountBrowserLoginResponse,
   CompleteMediaAccountBrowserLoginPayload,
+  CreateCreatorCampaignBriefPayload,
+  CreateCreatorOrderPayload,
+  CreateCreatorOrderResponse,
+  CreateCreatorShortlistPayload,
   PublishJob,
   PublishSchedule,
+  Creator,
+  CreatorCampaignBrief,
+  CreatorComplianceEvidence,
+  CreatorDeliverable,
+  CreatorDetail,
+  CreatorOrder,
+  CreatorSettlement,
+  CreatorShortlist,
+  RecordCreatorPublicationProofPayload,
+  RecordCreatorPublicationProofResponse,
   RegisterPayload,
+  ReviewCreatorDeliverablePayload,
   SubscriptionPlan,
+  SubmitCreatorDeliverablePayload,
   User,
   Workspace,
   WorkspaceData,
@@ -201,6 +217,122 @@ export async function createMediaAccount(
     method: 'POST',
     body: JSON.stringify(payload),
   });
+}
+
+export async function fetchCreators(token: string, workspaceId: string): Promise<Creator[]> {
+  const response = await request<ListResponse<Creator>>('/creators', token, workspaceId);
+  return response.items;
+}
+
+export async function fetchCreator(token: string, workspaceId: string, creatorId: string): Promise<CreatorDetail> {
+  return request<CreatorDetail>(`/creators/${creatorId}`, token, workspaceId);
+}
+
+export async function fetchCreatorShortlists(token: string, workspaceId: string): Promise<CreatorShortlist[]> {
+  const response = await request<ListResponse<CreatorShortlist>>('/creator-shortlists', token, workspaceId);
+  return response.items;
+}
+
+export async function createCreatorShortlist(
+  token: string,
+  workspaceId: string,
+  payload: CreateCreatorShortlistPayload,
+): Promise<CreatorShortlist> {
+  return request<CreatorShortlist>('/creator-shortlists', token, workspaceId, {
+    method: 'POST',
+    body: JSON.stringify(payload),
+  });
+}
+
+export async function fetchCreatorCampaignBriefs(token: string, workspaceId: string): Promise<CreatorCampaignBrief[]> {
+  const response = await request<ListResponse<CreatorCampaignBrief>>('/creator-briefs', token, workspaceId);
+  return response.items;
+}
+
+export async function createCreatorCampaignBrief(
+  token: string,
+  workspaceId: string,
+  payload: CreateCreatorCampaignBriefPayload,
+): Promise<CreatorCampaignBrief> {
+  return request<CreatorCampaignBrief>('/creator-briefs', token, workspaceId, {
+    method: 'POST',
+    body: JSON.stringify(payload),
+  });
+}
+
+export async function fetchCreatorOrders(token: string, workspaceId: string): Promise<CreatorOrder[]> {
+  const response = await request<ListResponse<CreatorOrder>>('/creator-orders', token, workspaceId);
+  return response.items;
+}
+
+export async function createCreatorOrder(
+  token: string,
+  workspaceId: string,
+  payload: CreateCreatorOrderPayload,
+): Promise<CreateCreatorOrderResponse> {
+  return request<CreateCreatorOrderResponse>('/creator-orders', token, workspaceId, {
+    method: 'POST',
+    body: JSON.stringify(payload),
+  });
+}
+
+export async function fetchCreatorDeliverables(token: string, workspaceId: string): Promise<CreatorDeliverable[]> {
+  const response = await request<ListResponse<CreatorDeliverable>>('/creator-deliverables', token, workspaceId);
+  return response.items;
+}
+
+export async function submitCreatorDeliverable(
+  token: string,
+  workspaceId: string,
+  orderId: string,
+  payload: SubmitCreatorDeliverablePayload,
+): Promise<CreatorDeliverable> {
+  return request<CreatorDeliverable>(`/creator-orders/${orderId}/deliverables`, token, workspaceId, {
+    method: 'POST',
+    body: JSON.stringify(payload),
+  });
+}
+
+export async function reviewCreatorDeliverable(
+  token: string,
+  workspaceId: string,
+  deliverableId: string,
+  payload: ReviewCreatorDeliverablePayload,
+): Promise<CreatorDeliverable> {
+  return request<CreatorDeliverable>(`/creator-deliverables/${deliverableId}/review`, token, workspaceId, {
+    method: 'POST',
+    body: JSON.stringify(payload),
+  });
+}
+
+export async function recordCreatorPublicationProof(
+  token: string,
+  workspaceId: string,
+  deliverableId: string,
+  payload: RecordCreatorPublicationProofPayload,
+): Promise<RecordCreatorPublicationProofResponse> {
+  return request<RecordCreatorPublicationProofResponse>(
+    `/creator-deliverables/${deliverableId}/publication-proof`,
+    token,
+    workspaceId,
+    {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    },
+  );
+}
+
+export async function fetchCreatorSettlements(token: string, workspaceId: string): Promise<CreatorSettlement[]> {
+  const response = await request<ListResponse<CreatorSettlement>>('/creator-settlements', token, workspaceId);
+  return response.items;
+}
+
+export async function fetchCreatorComplianceEvidence(
+  token: string,
+  workspaceId: string,
+): Promise<CreatorComplianceEvidence[]> {
+  const response = await request<ListResponse<CreatorComplianceEvidence>>('/creator-compliance-evidence', token, workspaceId);
+  return response.items;
 }
 
 export async function startMediaAccountBrowserLogin(

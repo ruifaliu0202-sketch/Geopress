@@ -28,26 +28,34 @@ import (
 )
 
 type WorkspaceHandler struct {
-	mu                     sync.RWMutex
-	db                     *database.DB
-	aiConfig               *ai.RuntimeConfig
-	users                  []model.User
-	subscriptionPlans      []model.SubscriptionPlan
-	workspaces             []model.Workspace
-	members                []model.WorkspaceMember
-	knowledgeBases         []model.KnowledgeBase
-	knowledgeItems         []model.KnowledgeItem
-	platformKnowledgeBases []model.PlatformKnowledgeBase
-	platformKnowledgeItems []model.PlatformKnowledgeItem
-	platforms              []model.MediaPlatform
-	accounts               []model.MediaAccount
-	contents               []model.Content
-	schedules              []model.PublishSchedule
-	jobs                   []model.PublishJob
-	generations            []model.GenerationRequest
-	tokenUsageEvents       []model.AITokenUsageEvent
-	userSessions           map[string]string
-	browserLogin           xiaohongshu.BrowserLoginService
+	mu                        sync.RWMutex
+	db                        *database.DB
+	aiConfig                  *ai.RuntimeConfig
+	users                     []model.User
+	subscriptionPlans         []model.SubscriptionPlan
+	workspaces                []model.Workspace
+	members                   []model.WorkspaceMember
+	knowledgeBases            []model.KnowledgeBase
+	knowledgeItems            []model.KnowledgeItem
+	platformKnowledgeBases    []model.PlatformKnowledgeBase
+	platformKnowledgeItems    []model.PlatformKnowledgeItem
+	platforms                 []model.MediaPlatform
+	accounts                  []model.MediaAccount
+	contents                  []model.Content
+	schedules                 []model.PublishSchedule
+	jobs                      []model.PublishJob
+	generations               []model.GenerationRequest
+	tokenUsageEvents          []model.AITokenUsageEvent
+	creators                  []model.Creator
+	creatorMediaAccounts      []model.CreatorMediaAccount
+	creatorShortlists         []model.CreatorShortlist
+	creatorBriefs             []model.CreatorCampaignBrief
+	creatorOrders             []model.CreatorOrder
+	creatorDeliverables       []model.CreatorDeliverable
+	creatorSettlements        []model.CreatorSettlement
+	creatorComplianceEvidence []model.CreatorComplianceEvidence
+	userSessions              map[string]string
+	browserLogin              xiaohongshu.BrowserLoginService
 }
 
 type loginRequest struct {
@@ -458,6 +466,76 @@ func NewWorkspaceHandlerWithError(db *database.DB, aiConfig *ai.RuntimeConfig) (
 				LastCheckedAt:  now.Add(-3 * time.Hour),
 			},
 		},
+		creators: []model.Creator{
+			{
+				ID:                  "crt_lina",
+				DisplayName:         "Lina 本地生活",
+				LegalName:           "Lin Na",
+				Bio:                 "小红书本地生活探店达人，擅长门店体验和消费决策内容。",
+				AvatarURL:           "https://example.com/creators/lina.png",
+				ContactEmail:        "lina@example.com",
+				Verticals:           []string{"本地生活", "餐饮", "小红书"},
+				AudienceAttributes:  map[string]string{"city": "上海", "primaryAge": "25-34"},
+				BasePriceCents:      120000,
+				Currency:            "CNY",
+				AvailabilityStatus:  model.CreatorAvailabilityAvailable,
+				CollaborationPolicy: "只接受品牌提供素材和审核意见，不提供账号登录权限。",
+				VerificationState:   model.CreatorVerificationVerified,
+				BrandSafetyLevel:    "medium",
+				CreatedAt:           now.AddDate(0, -4, 0),
+				UpdatedAt:           now.Add(-4 * time.Hour),
+			},
+			{
+				ID:                  "crt_mason",
+				DisplayName:         "Mason SaaS 增长",
+				Bio:                 "B2B SaaS 增长内容作者，适合白皮书、案例和深度测评合作。",
+				AvatarURL:           "https://example.com/creators/mason.png",
+				Verticals:           []string{"B2B SaaS", "增长", "内容营销"},
+				AudienceAttributes:  map[string]string{"audience": "创始人/市场负责人", "region": "中国"},
+				BasePriceCents:      180000,
+				Currency:            "CNY",
+				AvailabilityStatus:  model.CreatorAvailabilityLimited,
+				CollaborationPolicy: "达人自行发布，品牌获得约定范围内的内容使用权。",
+				VerificationState:   model.CreatorVerificationVerified,
+				BrandSafetyLevel:    "low",
+				CreatedAt:           now.AddDate(0, -5, 0),
+				UpdatedAt:           now.Add(-8 * time.Hour),
+			},
+		},
+		creatorMediaAccounts: []model.CreatorMediaAccount{
+			{
+				ID:                    "cma_lina_xhs",
+				CreatorID:             "crt_lina",
+				PlatformID:            "plt_xiaohongshu",
+				PlatformName:          "小红书",
+				Handle:                "lina_local",
+				ProfileURL:            "https://www.xiaohongshu.com/user/profile/lina_local",
+				FollowerCount:         86000,
+				AverageEngagementRate: 0.073,
+				Verticals:             []string{"本地生活", "餐饮"},
+				AudienceAttributes:    map[string]string{"city": "上海", "gender": "女性为主"},
+				AccountAccessMode:     "creator_operated",
+				Verified:              true,
+				CreatedAt:             now.AddDate(0, -4, 0),
+				UpdatedAt:             now.Add(-4 * time.Hour),
+			},
+			{
+				ID:                    "cma_mason_xhs",
+				CreatorID:             "crt_mason",
+				PlatformID:            "plt_xiaohongshu",
+				PlatformName:          "小红书",
+				Handle:                "mason_growth",
+				ProfileURL:            "https://www.xiaohongshu.com/user/profile/mason_growth",
+				FollowerCount:         42000,
+				AverageEngagementRate: 0.041,
+				Verticals:             []string{"B2B SaaS", "增长"},
+				AudienceAttributes:    map[string]string{"audience": "市场/增长负责人"},
+				AccountAccessMode:     "creator_operated",
+				Verified:              true,
+				CreatedAt:             now.AddDate(0, -5, 0),
+				UpdatedAt:             now.Add(-8 * time.Hour),
+			},
+		},
 		contents: []model.Content{
 			{
 				ID:              "cnt_1001",
@@ -554,6 +632,20 @@ func (h *WorkspaceHandler) Register(router gin.IRouter, auth gin.HandlerFunc) {
 	protected.POST("/publish/prepare", h.PreparePublish)
 	protected.POST("/publish-jobs/:jobId/run", h.RunPublishJob)
 	protected.POST("/publish-jobs/:jobId/confirm", h.ConfirmPublishJob)
+	protected.GET("/creators", h.ListCreators)
+	protected.GET("/creators/:creatorId", h.GetCreator)
+	protected.GET("/creator-shortlists", h.ListCreatorShortlists)
+	protected.POST("/creator-shortlists", h.CreateCreatorShortlist)
+	protected.GET("/creator-briefs", h.ListCreatorCampaignBriefs)
+	protected.POST("/creator-briefs", h.CreateCreatorCampaignBrief)
+	protected.GET("/creator-orders", h.ListCreatorOrders)
+	protected.POST("/creator-orders", h.CreateCreatorOrder)
+	protected.GET("/creator-deliverables", h.ListCreatorDeliverables)
+	protected.POST("/creator-orders/:orderId/deliverables", h.SubmitCreatorDeliverable)
+	protected.POST("/creator-deliverables/:deliverableId/review", h.ReviewCreatorDeliverable)
+	protected.POST("/creator-deliverables/:deliverableId/publication-proof", h.RecordCreatorPublicationProof)
+	protected.GET("/creator-settlements", h.ListCreatorSettlements)
+	protected.GET("/creator-compliance-evidence", h.ListCreatorComplianceEvidence)
 
 	admin := protected.Group("/admin")
 	admin.Use(h.requirePlatformAdmin())

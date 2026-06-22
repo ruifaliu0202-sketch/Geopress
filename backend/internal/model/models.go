@@ -197,6 +197,232 @@ type MediaAccountLoginSession struct {
 	UpdatedAt   time.Time
 }
 
+type CreatorVerificationState string
+
+const (
+	CreatorVerificationUnverified CreatorVerificationState = "unverified"
+	CreatorVerificationPending    CreatorVerificationState = "pending"
+	CreatorVerificationVerified   CreatorVerificationState = "verified"
+	CreatorVerificationRejected   CreatorVerificationState = "rejected"
+)
+
+type CreatorAvailabilityStatus string
+
+const (
+	CreatorAvailabilityAvailable   CreatorAvailabilityStatus = "available"
+	CreatorAvailabilityLimited     CreatorAvailabilityStatus = "limited"
+	CreatorAvailabilityUnavailable CreatorAvailabilityStatus = "unavailable"
+)
+
+type Creator struct {
+	ID                  string                    `json:"id"`
+	DisplayName         string                    `json:"displayName"`
+	LegalName           string                    `json:"legalName,omitempty"`
+	Bio                 string                    `json:"bio"`
+	AvatarURL           string                    `json:"avatarUrl"`
+	ContactEmail        string                    `json:"contactEmail,omitempty"`
+	Verticals           []string                  `json:"verticals"`
+	AudienceAttributes  map[string]string         `json:"audienceAttributes"`
+	BasePriceCents      int                       `json:"basePriceCents"`
+	Currency            string                    `json:"currency"`
+	AvailabilityStatus  CreatorAvailabilityStatus `json:"availabilityStatus"`
+	CollaborationPolicy string                    `json:"collaborationPolicy"`
+	VerificationState   CreatorVerificationState  `json:"verificationState"`
+	BrandSafetyLevel    string                    `json:"brandSafetyLevel"`
+	CreatedAt           time.Time                 `json:"createdAt"`
+	UpdatedAt           time.Time                 `json:"updatedAt"`
+}
+
+type CreatorMediaAccount struct {
+	ID                    string            `json:"id"`
+	CreatorID             string            `json:"creatorId"`
+	PlatformID            string            `json:"platformId"`
+	PlatformName          string            `json:"platformName"`
+	Handle                string            `json:"handle"`
+	ProfileURL            string            `json:"profileUrl"`
+	FollowerCount         int               `json:"followerCount"`
+	AverageEngagementRate float64           `json:"averageEngagementRate"`
+	Verticals             []string          `json:"verticals"`
+	AudienceAttributes    map[string]string `json:"audienceAttributes"`
+	AccountAccessMode     string            `json:"accountAccessMode"`
+	Verified              bool              `json:"verified"`
+	CreatedAt             time.Time         `json:"createdAt"`
+	UpdatedAt             time.Time         `json:"updatedAt"`
+}
+
+type CreatorShortlist struct {
+	ID                  string    `json:"id"`
+	WorkspaceID         string    `json:"workspaceId"`
+	CreatorID           string    `json:"creatorId"`
+	Name                string    `json:"name"`
+	FitScore            int       `json:"fitScore"`
+	QualificationStatus string    `json:"qualificationStatus"`
+	BrandSafetyLevel    string    `json:"brandSafetyLevel"`
+	BrandSafetyNotes    string    `json:"brandSafetyNotes"`
+	OperatorNotes       string    `json:"operatorNotes"`
+	CreatedByUserID     string    `json:"createdByUserId"`
+	CreatedAt           time.Time `json:"createdAt"`
+	UpdatedAt           time.Time `json:"updatedAt"`
+}
+
+type CreatorCampaignBriefStatus string
+
+const (
+	CreatorCampaignBriefDraft    CreatorCampaignBriefStatus = "draft"
+	CreatorCampaignBriefActive   CreatorCampaignBriefStatus = "active"
+	CreatorCampaignBriefArchived CreatorCampaignBriefStatus = "archived"
+)
+
+type CreatorCampaignBrief struct {
+	ID                      string                     `json:"id"`
+	WorkspaceID             string                     `json:"workspaceId"`
+	Title                   string                     `json:"title"`
+	Objective               string                     `json:"objective"`
+	ProductName             string                     `json:"productName"`
+	TargetAudience          string                     `json:"targetAudience"`
+	PlatformTargets         []string                   `json:"platformTargets"`
+	DeliverableRequirements []string                   `json:"deliverableRequirements"`
+	DisclosureRequirements  []string                   `json:"disclosureRequirements"`
+	ProhibitedClaims        []string                   `json:"prohibitedClaims"`
+	AuthorizationScope      string                     `json:"authorizationScope"`
+	ContentUsageRights      string                     `json:"contentUsageRights"`
+	ReviewWindowHours       int                        `json:"reviewWindowHours"`
+	DeadlineAt              *time.Time                 `json:"deadlineAt,omitempty"`
+	BudgetCents             int                        `json:"budgetCents"`
+	Currency                string                     `json:"currency"`
+	Status                  CreatorCampaignBriefStatus `json:"status"`
+	CreatedByUserID         string                     `json:"createdByUserId"`
+	CreatedAt               time.Time                  `json:"createdAt"`
+	UpdatedAt               time.Time                  `json:"updatedAt"`
+}
+
+type CreatorOrderStatus string
+
+const (
+	CreatorOrderProposed   CreatorOrderStatus = "proposed"
+	CreatorOrderAccepted   CreatorOrderStatus = "accepted"
+	CreatorOrderInProgress CreatorOrderStatus = "in_progress"
+	CreatorOrderSubmitted  CreatorOrderStatus = "submitted"
+	CreatorOrderApproved   CreatorOrderStatus = "approved"
+	CreatorOrderPublished  CreatorOrderStatus = "published"
+	CreatorOrderCompleted  CreatorOrderStatus = "completed"
+	CreatorOrderCanceled   CreatorOrderStatus = "canceled"
+	CreatorOrderDisputed   CreatorOrderStatus = "disputed"
+)
+
+type CreatorOrder struct {
+	ID                      string             `json:"id"`
+	WorkspaceID             string             `json:"workspaceId"`
+	BriefID                 string             `json:"briefId"`
+	CreatorID               string             `json:"creatorId"`
+	Status                  CreatorOrderStatus `json:"status"`
+	PriceCents              int                `json:"priceCents"`
+	DepositCents            int                `json:"depositCents"`
+	ServiceFeeCents         int                `json:"serviceFeeCents"`
+	Currency                string             `json:"currency"`
+	DisclosureRequirements  []string           `json:"disclosureRequirements"`
+	DeliverableRequirements []string           `json:"deliverableRequirements"`
+	AuthorizationScope      string             `json:"authorizationScope"`
+	ContentUsageRights      string             `json:"contentUsageRights"`
+	DueAt                   *time.Time         `json:"dueAt,omitempty"`
+	AcceptedAt              *time.Time         `json:"acceptedAt,omitempty"`
+	CompletedAt             *time.Time         `json:"completedAt,omitempty"`
+	LastMessage             string             `json:"lastMessage"`
+	CreatedByUserID         string             `json:"createdByUserId"`
+	CreatedAt               time.Time          `json:"createdAt"`
+	UpdatedAt               time.Time          `json:"updatedAt"`
+}
+
+type CreatorDeliverableStatus string
+
+const (
+	CreatorDeliverableSubmitted         CreatorDeliverableStatus = "submitted"
+	CreatorDeliverableRevisionRequested CreatorDeliverableStatus = "revision_requested"
+	CreatorDeliverableApproved          CreatorDeliverableStatus = "approved"
+	CreatorDeliverableRejected          CreatorDeliverableStatus = "rejected"
+	CreatorDeliverablePublished         CreatorDeliverableStatus = "published"
+)
+
+type CreatorDeliverable struct {
+	ID                   string                   `json:"id"`
+	WorkspaceID          string                   `json:"workspaceId"`
+	OrderID              string                   `json:"orderId"`
+	CreatorID            string                   `json:"creatorId"`
+	Type                 string                   `json:"type"`
+	Title                string                   `json:"title"`
+	Content              string                   `json:"content"`
+	AssetURLs            []string                 `json:"assetUrls"`
+	Status               CreatorDeliverableStatus `json:"status"`
+	ExternalURL          string                   `json:"externalUrl"`
+	PublicationProofURL  string                   `json:"publicationProofUrl"`
+	PublicationProofNote string                   `json:"publicationProofNote"`
+	ReviewFeedback       string                   `json:"reviewFeedback"`
+	Revision             int                      `json:"revision"`
+	SubmittedAt          time.Time                `json:"submittedAt"`
+	ReviewedAt           *time.Time               `json:"reviewedAt,omitempty"`
+	PublishedAt          *time.Time               `json:"publishedAt,omitempty"`
+	CreatedAt            time.Time                `json:"createdAt"`
+	UpdatedAt            time.Time                `json:"updatedAt"`
+}
+
+type CreatorSettlementStatus string
+
+const (
+	CreatorSettlementPending  CreatorSettlementStatus = "pending"
+	CreatorSettlementInvoiced CreatorSettlementStatus = "invoiced"
+	CreatorSettlementPayable  CreatorSettlementStatus = "payable"
+	CreatorSettlementPaid     CreatorSettlementStatus = "paid"
+	CreatorSettlementRefunded CreatorSettlementStatus = "refunded"
+	CreatorSettlementDisputed CreatorSettlementStatus = "disputed"
+	CreatorSettlementCanceled CreatorSettlementStatus = "canceled"
+)
+
+type CreatorSettlement struct {
+	ID                 string                  `json:"id"`
+	WorkspaceID        string                  `json:"workspaceId"`
+	OrderID            string                  `json:"orderId"`
+	CreatorID          string                  `json:"creatorId"`
+	Status             CreatorSettlementStatus `json:"status"`
+	PriceCents         int                     `json:"priceCents"`
+	DepositCents       int                     `json:"depositCents"`
+	ServiceFeeCents    int                     `json:"serviceFeeCents"`
+	CreatorPayoutCents int                     `json:"creatorPayoutCents"`
+	Currency           string                  `json:"currency"`
+	InvoiceID          string                  `json:"invoiceId"`
+	DueAt              *time.Time              `json:"dueAt,omitempty"`
+	PaidAt             *time.Time              `json:"paidAt,omitempty"`
+	CreatedAt          time.Time               `json:"createdAt"`
+	UpdatedAt          time.Time               `json:"updatedAt"`
+}
+
+type CreatorComplianceEvidenceType string
+
+const (
+	CreatorEvidenceAdDisclosure     CreatorComplianceEvidenceType = "ad_disclosure"
+	CreatorEvidenceAuthorization    CreatorComplianceEvidenceType = "authorization_record"
+	CreatorEvidenceUsageRights      CreatorComplianceEvidenceType = "usage_rights"
+	CreatorEvidenceReviewLog        CreatorComplianceEvidenceType = "review_log"
+	CreatorEvidencePublicationProof CreatorComplianceEvidenceType = "publication_proof"
+	CreatorEvidenceDisputeRecord    CreatorComplianceEvidenceType = "dispute_record"
+)
+
+type CreatorComplianceEvidence struct {
+	ID                 string                        `json:"id"`
+	WorkspaceID        string                        `json:"workspaceId"`
+	OrderID            string                        `json:"orderId"`
+	DeliverableID      string                        `json:"deliverableId"`
+	CreatorID          string                        `json:"creatorId"`
+	EvidenceType       CreatorComplianceEvidenceType `json:"evidenceType"`
+	DisclosureText     string                        `json:"disclosureText"`
+	AuthorizationScope string                        `json:"authorizationScope"`
+	ContentUsageRights string                        `json:"contentUsageRights"`
+	ExternalURL        string                        `json:"externalUrl"`
+	FileURL            string                        `json:"fileUrl"`
+	Notes              string                        `json:"notes"`
+	CreatedByUserID    string                        `json:"createdByUserId"`
+	CreatedAt          time.Time                     `json:"createdAt"`
+}
+
 type ContentStatus string
 
 const (
