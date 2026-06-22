@@ -17,6 +17,7 @@ import (
 
 	"geopress/backend/internal/ai"
 	"geopress/backend/internal/database"
+	"geopress/backend/internal/domain"
 	"geopress/backend/internal/http/middleware"
 	publishing "geopress/backend/internal/integration/publisher"
 	"geopress/backend/internal/integration/xiaohongshu"
@@ -186,13 +187,14 @@ type runPublishJobRequest struct {
 }
 
 type createMediaPlatformRequest struct {
-	Name               string   `json:"name"`
-	Type               string   `json:"type"`
-	Enabled            bool     `json:"enabled"`
-	SupportsArticle    bool     `json:"supportsArticle"`
-	SupportsImage      bool     `json:"supportsImage"`
-	SupportsScheduling bool     `json:"supportsScheduling"`
-	CredentialFields   []string `json:"credentialFields"`
+	Name               string                           `json:"name"`
+	Type               string                           `json:"type"`
+	Enabled            bool                             `json:"enabled"`
+	SupportsArticle    bool                             `json:"supportsArticle"`
+	SupportsImage      bool                             `json:"supportsImage"`
+	SupportsScheduling bool                             `json:"supportsScheduling"`
+	CredentialFields   []string                         `json:"credentialFields"`
+	Capabilities       domain.MediaPlatformCapabilities `json:"capabilities"`
 }
 
 type updateAIConfigRequest struct {
@@ -432,6 +434,7 @@ func NewWorkspaceHandlerWithError(db *database.DB, aiConfig *ai.RuntimeConfig) (
 				SupportsImage:      true,
 				SupportsScheduling: false,
 				CredentialFields:   []string{"qrLogin"},
+				Capabilities:       domain.DefaultXiaohongshuCapabilities(),
 			},
 		},
 		accounts: []model.MediaAccount{
@@ -1215,6 +1218,9 @@ func (h *WorkspaceHandler) ListMediaPlatforms(c *gin.Context) {
 	h.mu.RLock()
 	items := append([]model.MediaPlatform(nil), h.platforms...)
 	h.mu.RUnlock()
+	for index := range items {
+		items[index].EnsureCapabilities()
+	}
 	c.JSON(http.StatusOK, gin.H{"items": items})
 }
 
@@ -2640,6 +2646,7 @@ func (h *WorkspaceHandler) AdminCreateMediaPlatform(c *gin.Context) {
 		SupportsImage:      req.SupportsImage,
 		SupportsScheduling: req.SupportsScheduling,
 		CredentialFields:   cleanKeywords(req.CredentialFields),
+		Capabilities:       req.Capabilities,
 	}
 	if platform.ID != "plt_xiaohongshu" {
 		platform.ID = "plt_xiaohongshu"
@@ -2647,6 +2654,7 @@ func (h *WorkspaceHandler) AdminCreateMediaPlatform(c *gin.Context) {
 	if len(platform.CredentialFields) == 0 {
 		platform.CredentialFields = []string{"qrLogin"}
 	}
+	platform.EnsureCapabilities()
 
 	if err := h.saveMediaPlatform(c.Request.Context(), platform); err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "media platform was not persisted"})
@@ -2712,10 +2720,12 @@ func (h *WorkspaceHandler) AdminUpdateMediaPlatform(c *gin.Context) {
 		SupportsImage:      req.SupportsImage,
 		SupportsScheduling: req.SupportsScheduling,
 		CredentialFields:   cleanKeywords(req.CredentialFields),
+		Capabilities:       req.Capabilities,
 	}
 	if len(updated.CredentialFields) == 0 {
 		updated.CredentialFields = []string{"qrLogin"}
 	}
+	updated.EnsureCapabilities()
 	if err := h.saveMediaPlatform(c.Request.Context(), updated); err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "media platform was not persisted"})
 		return

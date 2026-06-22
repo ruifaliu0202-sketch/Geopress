@@ -1,6 +1,10 @@
 package model
 
-import "time"
+import (
+	"time"
+
+	"geopress/backend/internal/domain"
+)
 
 type SubscriptionTier string
 
@@ -160,14 +164,35 @@ type PlatformKnowledgeItem struct {
 }
 
 type MediaPlatform struct {
-	ID                 string   `json:"id"`
-	Name               string   `json:"name"`
-	Type               string   `json:"type"`
-	Enabled            bool     `json:"enabled"`
-	SupportsArticle    bool     `json:"supportsArticle"`
-	SupportsImage      bool     `json:"supportsImage"`
-	SupportsScheduling bool     `json:"supportsScheduling"`
-	CredentialFields   []string `json:"credentialFields"`
+	ID                 string                           `json:"id"`
+	Name               string                           `json:"name"`
+	Type               string                           `json:"type"`
+	Enabled            bool                             `json:"enabled"`
+	SupportsArticle    bool                             `json:"supportsArticle"`
+	SupportsImage      bool                             `json:"supportsImage"`
+	SupportsScheduling bool                             `json:"supportsScheduling"`
+	CredentialFields   []string                         `json:"credentialFields"`
+	Capabilities       domain.MediaPlatformCapabilities `json:"capabilities"`
+}
+
+func (platform *MediaPlatform) EnsureCapabilities() {
+	if platform == nil {
+		return
+	}
+	if platform.CredentialFields == nil {
+		platform.CredentialFields = []string{}
+	}
+	if platform.Capabilities.IsZero() {
+		if platform.ID == "plt_xiaohongshu" || platform.Type == "xiaohongshu" {
+			// 小红书已有浏览器二维码登录和浏览器发布路径，旧管理端请求缺省时也要保留这个能力契约。
+			platform.Capabilities = domain.DefaultXiaohongshuCapabilities()
+			return
+		}
+		// 外部平台能力是后续矩阵、采集、发布共用的边界；旧布尔字段只作为兼容输入。
+		platform.Capabilities = domain.LegacyCapabilities(platform.SupportsArticle, platform.SupportsImage, platform.SupportsScheduling, platform.CredentialFields)
+		return
+	}
+	platform.Capabilities = platform.Capabilities.WithDefaults()
 }
 
 type MediaAccount struct {

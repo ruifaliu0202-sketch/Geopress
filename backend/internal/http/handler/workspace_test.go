@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"geopress/backend/internal/ai"
+	"geopress/backend/internal/domain"
 	"geopress/backend/internal/http/middleware"
 	publishing "geopress/backend/internal/integration/publisher"
 	"geopress/backend/internal/integration/xiaohongshu"
@@ -238,6 +239,10 @@ func TestAdminUpdateMediaPlatform(t *testing.T) {
 	if len(platform.CredentialFields) != 1 || platform.CredentialFields[0] != "qrLogin" {
 		t.Fatalf("credential fields = %#v, want qrLogin", platform.CredentialFields)
 	}
+	if !platform.Capabilities.HasCapability(domain.ConnectorCapabilityAuthorization) ||
+		!platform.Capabilities.HasCapability(domain.ConnectorCapabilityContentPublish) {
+		t.Fatalf("legacy admin update should retain xiaohongshu capability contract: %#v", platform.Capabilities)
+	}
 
 	listReq := httptest.NewRequest(http.MethodGet, "/api/admin/media-platforms", nil)
 	listReq.Header.Set("Authorization", "Bearer demo-token")
@@ -259,6 +264,10 @@ func TestAdminUpdateMediaPlatform(t *testing.T) {
 	item := response.Items[0]
 	if item.ID != "plt_xiaohongshu" || item.Name != "小红书" || item.Type != "xiaohongshu" {
 		t.Fatalf("updated platform not found in list: %#v", response.Items)
+	}
+	if !item.Capabilities.HasCapability(domain.ConnectorCapabilityAuthorization) ||
+		!item.Capabilities.HasCapability(domain.ConnectorCapabilityContentPublish) {
+		t.Fatalf("list response should include xiaohongshu capability contract: %#v", item.Capabilities)
 	}
 }
 

@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"geopress/backend/internal/model"
+	"geopress/backend/internal/repository"
 )
 
 type Snapshot struct {
@@ -535,27 +536,7 @@ func (db *DB) loadPlatformKnowledgeItems(ctx context.Context) ([]model.PlatformK
 }
 
 func (db *DB) loadMediaPlatforms(ctx context.Context) ([]model.MediaPlatform, error) {
-	rows, err := db.conn.QueryContext(ctx, `
-		SELECT id, name, type, enabled, supports_article, supports_image, supports_scheduling, credential_fields::text
-		FROM media_platforms
-		ORDER BY name ASC, id ASC
-	`)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-
-	items := []model.MediaPlatform{}
-	for rows.Next() {
-		var item model.MediaPlatform
-		var credentialFields string
-		if err := rows.Scan(&item.ID, &item.Name, &item.Type, &item.Enabled, &item.SupportsArticle, &item.SupportsImage, &item.SupportsScheduling, &credentialFields); err != nil {
-			return nil, err
-		}
-		item.CredentialFields = decodeStringSlice(credentialFields)
-		items = append(items, item)
-	}
-	return items, rows.Err()
+	return repository.NewMediaPlatformRepository(db.conn).List(ctx)
 }
 
 func (db *DB) loadMediaAccounts(ctx context.Context) ([]model.MediaAccount, error) {
@@ -1067,26 +1048,7 @@ func (db *DB) SaveMediaPlatform(ctx context.Context, item model.MediaPlatform) e
 	if db == nil || db.conn == nil {
 		return nil
 	}
-	credentialFields, err := json.Marshal(item.CredentialFields)
-	if err != nil {
-		return err
-	}
-	_, err = db.conn.ExecContext(ctx, `
-		INSERT INTO media_platforms (
-			id, name, type, enabled, supports_article, supports_image, supports_scheduling, credential_fields, created_at, updated_at
-		)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8::jsonb, $9, $10)
-		ON CONFLICT (id) DO UPDATE SET
-			name = EXCLUDED.name,
-			type = EXCLUDED.type,
-			enabled = EXCLUDED.enabled,
-			supports_article = EXCLUDED.supports_article,
-			supports_image = EXCLUDED.supports_image,
-			supports_scheduling = EXCLUDED.supports_scheduling,
-			credential_fields = EXCLUDED.credential_fields,
-			updated_at = EXCLUDED.updated_at
-	`, item.ID, item.Name, item.Type, item.Enabled, item.SupportsArticle, item.SupportsImage, item.SupportsScheduling, string(credentialFields), time.Now().UTC(), time.Now().UTC())
-	return err
+	return repository.SaveMediaPlatform(ctx, db.conn, item)
 }
 
 func (db *DB) SaveMediaAccount(ctx context.Context, item model.MediaAccount) error {
