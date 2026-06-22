@@ -39,6 +39,13 @@ import {
   MediaPlatformTable,
   SchedulesTable,
 } from '../../components/dataTables';
+import {
+  BrandComplianceView,
+  CampaignsView,
+  CreatorsView,
+  MediaMatrixView,
+  SkillPackagesView,
+} from './productPages';
 import type { Content, SubscriptionPlan, User, Workspace, WorkspaceData } from '../../types';
 import {
   formatDate,
@@ -478,6 +485,21 @@ export function ActiveView({
   }
   if (view === 'accounts') {
     return <AccountsView data={workspace} openDialog={openDialog} onLoginMediaAccount={onLoginMediaAccount} />;
+  }
+  if (view === 'mediaMatrix') {
+    return <MediaMatrixView token={token} workspaceId={workspaceId} data={workspace} onChanged={onChanged} />;
+  }
+  if (view === 'campaigns') {
+    return <CampaignsView token={token} workspaceId={workspaceId} data={workspace} onChanged={onChanged} />;
+  }
+  if (view === 'creators') {
+    return <CreatorsView token={token} workspaceId={workspaceId} data={workspace} onChanged={onChanged} />;
+  }
+  if (view === 'skillPackages') {
+    return <SkillPackagesView token={token} workspaceId={workspaceId} data={workspace} onChanged={onChanged} />;
+  }
+  if (view === 'brandCompliance') {
+    return <BrandComplianceView token={token} workspaceId={workspaceId} data={workspace} onChanged={onChanged} />;
   }
   if (view === 'generate') {
     return <GenerateView data={workspace} openDialog={openDialog} />;

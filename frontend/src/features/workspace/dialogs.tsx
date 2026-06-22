@@ -34,6 +34,7 @@ import {
   createKnowledgeItem,
   createMediaAccount,
   createPublishSchedule,
+  fetchInstalledSkillPackages,
   formatKnowledgeContent,
   generateContent,
   preparePublish,
@@ -45,6 +46,7 @@ import { DialogBaseProps, FormDialog, InfoRow, SelectField } from '../../compone
 import type {
   Content,
   GenerationTrace,
+  InstalledSkillPackage,
   KnowledgeBase,
   MediaAccount,
   MediaPlatform,
@@ -667,6 +669,9 @@ function GenerateDialog({
   const [keywords, setKeywords] = useState('内容营销, 增长');
   const [contentType, setContentType] = useState('xiaohongshu_long_article');
   const [knowledgeBaseIds, setKnowledgeBaseIds] = useState<string[]>([]);
+  const [installedSkillPackages, setInstalledSkillPackages] = useState<InstalledSkillPackage[]>([]);
+  const [skillPackageVersionId, setSkillPackageVersionId] = useState('');
+  const [loadingSkillPackages, setLoadingSkillPackages] = useState(false);
   const [submitting, setSubmitting] = useState(false);
   const [formatting, setFormatting] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -679,6 +684,39 @@ function GenerateDialog({
       setError(null);
     }
   }, [bases, props.open]);
+
+  useEffect(() => {
+    if (!props.open) {
+      return;
+    }
+    let mounted = true;
+    setLoadingSkillPackages(true);
+    fetchInstalledSkillPackages(props.token, props.workspaceId)
+      .then((items) => {
+        if (!mounted) {
+          return;
+        }
+        setInstalledSkillPackages(items);
+        setSkillPackageVersionId((current) =>
+          current && items.some((item) => item.entitlement.versionId === current) ? current : '',
+        );
+      })
+      .catch(() => {
+        if (!mounted) {
+          return;
+        }
+        setInstalledSkillPackages([]);
+        setSkillPackageVersionId('');
+      })
+      .finally(() => {
+        if (mounted) {
+          setLoadingSkillPackages(false);
+        }
+      });
+    return () => {
+      mounted = false;
+    };
+  }, [props.open, props.token, props.workspaceId]);
 
   const formatKeywords = async () => {
     if (!isFormatAvailable) {
@@ -725,7 +763,14 @@ function GenerateDialog({
     onStartGenerationThinking();
     try {
       const keywordPrompt = isMarkdownPrompt(keywords) ? keywords.trim() : undefined;
-      const response = await generateContent(props.token, props.workspaceId, { keywords: values, keywordPrompt, contentType, knowledgeBaseIds, publishFormatId: contentType });
+      const response = await generateContent(props.token, props.workspaceId, {
+        keywords: values,
+        keywordPrompt,
+        contentType,
+        knowledgeBaseIds,
+        publishFormatId: contentType,
+        skillPackageVersionId: skillPackageVersionId || undefined,
+      });
       onGeneratedTrace(response.trace);
       props.onCreated();
     } catch (err) {
@@ -768,6 +813,18 @@ function GenerateDialog({
             value={contentType}
             onChange={setContentType}
             items={contentTypeOptions}
+          />
+          <SelectField
+            label="创作技能包"
+            value={skillPackageVersionId}
+            onChange={setSkillPackageVersionId}
+            items={[
+              { value: '', label: loadingSkillPackages ? '正在加载技能包' : '不使用技能包' },
+              ...installedSkillPackages.map((item) => ({
+                value: item.entitlement.versionId,
+                label: `${item.package?.name ?? item.entitlement.packageId}${item.version?.version ? ` / ${item.version.version}` : ''}`,
+              })),
+            ]}
           />
           <Stack direction={{ xs: 'column', sm: 'row' }} spacing={1} alignItems={{ xs: 'stretch', sm: 'center' }} justifyContent="space-between">
             <Typography fontWeight={700}>关键词与素材</Typography>

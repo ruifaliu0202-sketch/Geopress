@@ -24,6 +24,11 @@ import HelpOutlineIcon from '@mui/icons-material/HelpOutline';
 import KeyOutlinedIcon from '@mui/icons-material/KeyOutlined';
 import LogoutOutlinedIcon from '@mui/icons-material/LogoutOutlined';
 import ManageAccountsOutlinedIcon from '@mui/icons-material/ManageAccountsOutlined';
+import CampaignOutlinedIcon from '@mui/icons-material/CampaignOutlined';
+import GavelOutlinedIcon from '@mui/icons-material/GavelOutlined';
+import HubOutlinedIcon from '@mui/icons-material/HubOutlined';
+import LocalMallOutlinedIcon from '@mui/icons-material/LocalMallOutlined';
+import GroupsOutlinedIcon from '@mui/icons-material/GroupsOutlined';
 import PsychologyAltOutlinedIcon from '@mui/icons-material/PsychologyAltOutlined';
 import PublishOutlinedIcon from '@mui/icons-material/PublishOutlined';
 import ScheduleOutlinedIcon from '@mui/icons-material/ScheduleOutlined';
@@ -53,6 +58,11 @@ const navItems: NavItem[] = [
   { key: 'overview', label: '概览', icon: <DashboardOutlinedIcon /> },
   { key: 'knowledge', label: '知识库', icon: <PsychologyAltOutlinedIcon /> },
   { key: 'accounts', label: '媒体账号', icon: <KeyOutlinedIcon /> },
+  { key: 'mediaMatrix', label: '媒体矩阵', icon: <HubOutlinedIcon /> },
+  { key: 'campaigns', label: '战役', icon: <CampaignOutlinedIcon /> },
+  { key: 'creators', label: '达人合作', icon: <GroupsOutlinedIcon /> },
+  { key: 'skillPackages', label: '技能包', icon: <LocalMallOutlinedIcon /> },
+  { key: 'brandCompliance', label: '合规报告', icon: <GavelOutlinedIcon /> },
   { key: 'generate', label: 'AI 生成', icon: <ArticleOutlinedIcon /> },
   { key: 'contents', label: '内容', icon: <AccountTreeOutlinedIcon /> },
   { key: 'schedules', label: '计划', icon: <ScheduleOutlinedIcon /> },

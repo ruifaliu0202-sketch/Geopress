@@ -1,6 +1,20 @@
 import type { ReactNode } from 'react';
 
-export type ViewKey = 'overview' | 'knowledge' | 'accounts' | 'generate' | 'contents' | 'schedules' | 'jobs' | 'settings' | 'admin';
+export type ViewKey =
+  | 'overview'
+  | 'knowledge'
+  | 'accounts'
+  | 'mediaMatrix'
+  | 'campaigns'
+  | 'creators'
+  | 'skillPackages'
+  | 'brandCompliance'
+  | 'generate'
+  | 'contents'
+  | 'schedules'
+  | 'jobs'
+  | 'settings'
+  | 'admin';
 
 export type DialogKey =
   | 'knowledgeBase'
