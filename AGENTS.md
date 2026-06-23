@@ -48,7 +48,11 @@ frontend/
   src/api.ts                       Workspace API client
   src/appTypes.ts                  Workspace app navigation/dialog types
   src/components/                  Shared workspace UI, data tables, AI Thinking, and tour components
+  src/components/assistant/        Pluggable floating AI assistant components and action registry
+  src/components/layout/           Workspace shell layout components
   src/features/workspace/          Workspace views and workflow dialogs
+  src/features/workspace/productPages.tsx
+                                      Productized workspace pages for media matrix, campaigns, creators, skill packages, and compliance
   src/types.ts                     Shared frontend types
   src/theme.ts                     MUI theme
   src/utils/formatters.ts          Shared frontend formatting helpers
@@ -105,6 +109,14 @@ deploy/
 - PostgreSQL seed/save/read paths for demo workspace metadata and core business resources.
 - PostgreSQL migrations for users, sessions, subscription plans, AI token usage, system settings/secrets, workspaces, knowledge bases/items, platform knowledge resources, media platforms/accounts, media account login sessions, contents/versions, generation requests, publish schedules/jobs/results, and audit logs.
 - Tenant workspace frontend is split into app shell, workspace views, workflow dialogs, common components, data tables, and utility formatters instead of keeping all workflow code in `App.tsx`.
+- Tenant workspace shell now uses a productized left/center/right layout: a collapsible desktop side menu, mobile drawer menu, center workspace content, right-side context rail, and a top shortcut area for workspace selection, refresh, guide restart, platform-admin entry, user identity, and logout.
+- The workspace console has a cream-white and sage-green MUI product theme with shared surface tokens, subtle dimensional backgrounds, shadows, branded card/paper treatments, and reusable product primitives such as `ProductSurface` and `HighlightedActionButton`.
+- Shared frontend components include a reusable highlighted action button with a looping sweep effect and reduced-motion handling for important/IP calls to action.
+- The previous inline workspace workbench has been replaced by a pluggable floating AI assistant surface. The default persona is a Corgi-themed assistant implemented as a replaceable component asset, with typed action callbacks for generating content, creating knowledge bases/items, binding media accounts, creating schedules, replaying the onboarding guide, and refreshing workspace data.
+- The floating assistant is intentionally contract-based: persona assets, actions, disabled-state fallbacks, and action handlers live behind typed descriptors so future IP avatars or assistant panels can be swapped without rewriting business workflows.
+- Tenant workspace product pages are visible in the left navigation for media matrix, campaigns, creator collaboration, skill package marketplace, and brand compliance/reporting. These pages use the existing workspace API client and include list, create, action, loading, empty, and error states where supported by backend endpoints.
+- Installed creative skill packages can be selected from the content generation dialog through `skillPackageVersionId`, connecting marketplace purchase/install flows to the AI generation request path.
+- Workspace tables and product pages include responsive hardening: horizontal table containers, stable metric cards, wrapping text, empty rows, mobile-friendly section actions, and overflow controls for long titles, IDs, URLs, and generated content.
 - Workspace console has an in-product onboarding tour with overlay, target highlighting, automatic page switching, Back/Next/Enter/ESC controls, and manual restart from the top bar. It teaches the full workflow: choose workspace, create knowledge base package, create guide item, connect Xiaohongshu, generate from keywords, create publish task, and confirm publish result.
 - Native deployment builds the Vite frontend into `backend/internal/web/dist` and embeds those assets in the Go API binary. The same backend process serves `/api/*` and the SPA frontend, with unknown non-API routes falling back to `index.html`.
 - Optional Docker Compose deployment remains available, but native single-binary deployment is the preferred deployment path for this skeleton.
@@ -380,10 +392,15 @@ Implementation notes:
 
 ## Frontend Boundaries
 
-- `frontend/src/App.tsx` is the tenant workspace console shell: authentication state, workspace fetch, active view routing, dialogs, AI Thinking overlay, and workspace tour wiring.
+- `frontend/src/App.tsx` is the tenant workspace console orchestration layer: authentication state, workspace fetch, active view routing, dialogs, AI Thinking overlay, floating assistant action wiring, and workspace tour wiring.
 - Production frontend assets are built by Vite and embedded in the Go backend under `backend/internal/web/dist`; do not add a separate production frontend server unless explicitly changing deployment strategy.
 - Tenant workspace feature code lives under `frontend/src/features/workspace/`.
-- Shared workspace UI lives under `frontend/src/components/`, including `AIThinkingOverlay`, `aiThinkingModel`, `OnboardingTour`, `common`, and `dataTables`.
+- The workspace layout shell lives under `frontend/src/components/layout/`. Keep layout concerns such as side navigation, top shortcut placement, center content, and right context rail there instead of spreading shell structure across feature pages.
+- Shared workspace UI lives under `frontend/src/components/`, including `AIThinkingOverlay`, `aiThinkingModel`, `OnboardingTour`, `common`, `dataTables`, `assistant`, and `layout`.
+- Floating AI assistant code lives under `frontend/src/components/assistant/`. Keep it pluggable: use typed action descriptors, action callback maps, and replaceable persona assets; do not let assistant presentation components call workspace APIs directly.
+- `frontend/src/components/common.tsx` owns shared product primitives such as `ProductSurface`, `HighlightedActionButton`, `MetricCard`, `Section`, `InfoRow`, dialog wrappers, and select helpers. Prefer extending these primitives before adding page-local visual duplicates.
+- `frontend/src/theme.ts` owns product-level MUI theme tokens, including cream-white/sage-green palette decisions, dimensional shadows, component overrides, and shared surface colors.
+- `frontend/src/features/workspace/productPages.tsx` owns productized tenant workspace pages for media account matrix, campaigns, creator collaboration, skill package marketplace, and brand compliance/reporting. Keep tenant operator workflows here unless a feature clearly belongs to the platform admin.
 - `frontend/src/admin/AdminConsole.tsx` is the platform management backend.
 - The registration page is a simple login/register card; successful registration routes to the onboarding workflow when `user.onboardingCompleted` is false.
 - The onboarding workflow is three steps: industry, writing tone, subscription plan. The subscription step can be skipped.
@@ -391,6 +408,9 @@ Implementation notes:
 - Keep tenant workflows out of the platform admin unless they are system/operator views.
 - Keep global platform configuration, users, workspace/member inspection, channel definitions, and audit resources in the platform admin.
 - Use MUI components and existing theme conventions.
+- Build new product UI as reusable, typed, replaceable components. Prefer slots, typed registries, small adapters, and explicit callbacks for extension points; avoid one-off duplicated card/button/surface styling.
+- Keep data loading and mutations in feature containers or existing API clients. Presentational components should receive view models, state, and callbacks rather than importing workspace API functions directly.
+- Use generated raster assets only when the task truly needs bitmap visuals. For future assistant/IP assets, place final project-bound images under `frontend/src/assets/` and reference them from the persona contract; do not leave referenced assets in temporary image-generation directories.
 - Use `react-admin` resources and `frontend/src/admin/dataProvider.ts` for admin CRUD/list behavior.
 
 ## Backend Boundaries
