@@ -1,9 +1,12 @@
 import type { ReactNode } from 'react';
 import {
   Button,
-  Checkbox,
   Chip,
+  Checkbox,
+  IconButton,
+  LinearProgress,
   Link,
+  Box,
   Stack,
   Table,
   TableBody,
@@ -11,15 +14,21 @@ import {
   TableContainer,
   TableHead,
   TableRow,
+  Tooltip,
   Typography,
 } from '@mui/material';
+import DeleteOutlineIcon from '@mui/icons-material/DeleteOutline';
+import FormatListBulletedOutlinedIcon from '@mui/icons-material/FormatListBulletedOutlined';
 import LoginOutlinedIcon from '@mui/icons-material/LoginOutlined';
 import PublishOutlinedIcon from '@mui/icons-material/PublishOutlined';
+import RemoveCircleOutlineOutlinedIcon from '@mui/icons-material/RemoveCircleOutlineOutlined';
+import ReplayOutlinedIcon from '@mui/icons-material/ReplayOutlined';
+import { VIPFeatureButton } from './common';
 import type {
   Content,
   ContentStatus,
   KnowledgeBase,
-  KnowledgeItem,
+  KnowledgeAsset,
   MediaAccount,
   MediaPlatform,
   PublishJobStatus,
@@ -35,8 +44,8 @@ import {
   loginMethodLabel,
   mediaAccountStatusColor,
   mediaAccountStatusLabel,
+  supportsInteractiveLogin,
   supportsBrowserLogin,
-  uniqueValues,
 } from '../utils/formatters';
 
 const contentStatusMap: Record<ContentStatus, { label: string; color: 'default' | 'info' | 'warning' | 'success' | 'error' }> = {
@@ -58,6 +67,22 @@ const jobStatusMap: Record<PublishJobStatus, { label: string; color: 'default' |
   failed: { label: '失败', color: 'error' },
 };
 
+const assetStatusMap: Record<string, { label: string; color: 'default' | 'info' | 'error' | 'success' | 'warning' }> = {
+  processing: { label: '处理中', color: 'info' },
+  ready: { label: '可用', color: 'success' },
+  failed: { label: '失败', color: 'error' },
+  pending: { label: '待处理', color: 'warning' },
+};
+
+const aiEnhancementStatusMap: Record<string, { label: string; color: 'default' | 'info' | 'error' | 'success' | 'warning' }> = {
+  disabled: { label: '未启用', color: 'default' },
+  pending: { label: '待增强', color: 'warning' },
+  processing: { label: '增强中', color: 'info' },
+  succeeded: { label: '已增强', color: 'success' },
+  ready: { label: '已增强', color: 'success' },
+  failed: { label: '增强失败', color: 'error' },
+};
+
 const frequencyLabel: Record<PublishScheduleFrequency, string> = {
   once: '一次性',
   daily: '每天',
@@ -76,6 +101,14 @@ const secondaryTextSx = {
   WebkitBoxOrient: 'vertical',
   WebkitLineClamp: 2,
   overflow: 'hidden',
+} as const;
+
+const stickyActionCellSx = {
+  position: 'sticky',
+  right: 0,
+  zIndex: 2,
+  bgcolor: 'background.paper',
+  boxShadow: '-8px 0 12px rgba(15, 23, 42, 0.06)',
 } as const;
 
 function DataTableFrame({
@@ -118,84 +151,226 @@ function EmptyTableRow({ colSpan, label }: { colSpan: number; label: string }) {
   );
 }
 
-export function KnowledgeItemsTable({
-  items,
+function normalizeProgress(value: number) {
+  if (!Number.isFinite(value)) {
+    return 0;
+  }
+  return Math.max(0, Math.min(100, value));
+}
+
+function assetStatusLabel(status: string) {
+  return assetStatusMap[status] ?? { label: status || '未知', color: 'default' as const };
+}
+
+function aiEnhancementLabel(status: string, enabled: boolean) {
+  if (!enabled) {
+    return aiEnhancementStatusMap.disabled;
+  }
+  return aiEnhancementStatusMap[status] ?? { label: status || '待增强', color: 'default' as const };
+}
+
+function assetTypeLabel(asset: KnowledgeAsset) {
+  const type = asset.assetType || asset.mimeType || 'text';
+  const filename = asset.originalFilename?.trim();
+  if (filename && filename !== asset.title) {
+    return `${type} / ${filename}`;
+  }
+  return type;
+}
+
+function errorSummary(message: string) {
+  if (!message) {
+    return '无';
+  }
+  return message.length > 72 ? `${message.slice(0, 72)}...` : message;
+}
+
+type KnowledgeAssetActionTarget = 'detail' | 'tips' | 'chunks';
+
+export function KnowledgeAssetsTable({
+  assets,
   bases,
+  onOpenAsset,
   selectedIds = [],
   onSelectedIdsChange,
+  onRemoveFromBase,
+  onRetryAsset,
+  onEnhanceAsset,
+  onTrashAsset,
 }: {
-  items: KnowledgeItem[];
+  assets: KnowledgeAsset[];
   bases: KnowledgeBase[];
+  onOpenAsset?: (asset: KnowledgeAsset, target?: KnowledgeAssetActionTarget) => void;
   selectedIds?: string[];
   onSelectedIdsChange?: (ids: string[]) => void;
+  onRemoveFromBase?: (asset: KnowledgeAsset) => void;
+  onRetryAsset?: (asset: KnowledgeAsset) => void;
+  onEnhanceAsset?: (asset: KnowledgeAsset) => void;
+  onTrashAsset?: (asset: KnowledgeAsset) => void;
 }) {
   const selectable = Boolean(onSelectedIdsChange);
-  const allSelected = selectable && items.length > 0 && items.every((item) => selectedIds.includes(item.id));
-  const toggleAll = (checked: boolean) => {
-    if (!onSelectedIdsChange) {
-      return;
-    }
-    if (checked) {
-      onSelectedIdsChange(uniqueValues([...selectedIds, ...items.map((item) => item.id)]));
-    } else {
-      onSelectedIdsChange(selectedIds.filter((id) => !items.some((item) => item.id === id)));
-    }
-  };
-  const toggleItem = (itemId: string, checked: boolean) => {
-    if (!onSelectedIdsChange) {
-      return;
-    }
-    onSelectedIdsChange(checked ? uniqueValues([...selectedIds, itemId]) : selectedIds.filter((id) => id !== itemId));
-  };
+  const hasActions = Boolean(onOpenAsset || onRemoveFromBase || onRetryAsset || onEnhanceAsset || onTrashAsset);
+  const selectedSet = new Set(selectedIds);
+  const allSelected = selectable && assets.length > 0 && assets.every((asset) => selectedSet.has(asset.id));
+  const someSelected = selectable && assets.some((asset) => selectedSet.has(asset.id)) && !allSelected;
+  const columnCount = 8 + (selectable ? 1 : 0) + (hasActions ? 1 : 0);
 
   return (
-    <DataTableFrame minWidth={selectable ? 820 : 760}>
+    <DataTableFrame minWidth={selectable || hasActions ? 1120 : 960}>
       <TableHead>
         <TableRow>
           {selectable && (
             <TableCell padding="checkbox">
               <Checkbox
+                size="small"
                 checked={allSelected}
-                indeterminate={selectedIds.length > 0 && !allSelected}
-                onChange={(event) => toggleAll(event.target.checked)}
+                indeterminate={someSelected}
+                onChange={(event) => {
+                  const currentVisibleIds = new Set(assets.map((asset) => asset.id));
+                  if (event.target.checked) {
+                    onSelectedIdsChange?.([...new Set([...selectedIds, ...assets.map((asset) => asset.id)])]);
+                    return;
+                  }
+                  onSelectedIdsChange?.(selectedIds.filter((id) => !currentVisibleIds.has(id)));
+                }}
+                inputProps={{ 'aria-label': '选择全部知识资产' }}
               />
             </TableCell>
           )}
           <TableCell>标题</TableCell>
-          <TableCell>知识库包</TableCell>
-          <TableCell>类型</TableCell>
+          <TableCell>所属知识库</TableCell>
+          <TableCell>类型/文件名</TableCell>
           <TableCell>状态</TableCell>
+          <TableCell>进度</TableCell>
+          <TableCell>AI 增强</TableCell>
           <TableCell>更新时间</TableCell>
+          <TableCell>错误信息</TableCell>
+          {hasActions && <TableCell align="center" sx={{ ...stickyActionCellSx, zIndex: 3, minWidth: 172, width: 172 }}>操作</TableCell>}
         </TableRow>
       </TableHead>
       <TableBody>
-        {items.length === 0 && <EmptyTableRow colSpan={selectable ? 6 : 5} label="暂无知识条目" />}
-        {items.map((item) => (
-          <TableRow key={item.id} hover>
-            {selectable && (
-              <TableCell padding="checkbox">
-                <Checkbox
-                  checked={selectedIds.includes(item.id)}
-                  onChange={(event) => toggleItem(item.id, event.target.checked)}
-                />
+        {assets.length === 0 && <EmptyTableRow colSpan={columnCount} label="暂无知识资产" />}
+        {assets.map((asset) => {
+          const status = assetStatusLabel(asset.status);
+          const enhancement = aiEnhancementLabel(asset.aiEnhancementStatus, asset.aiEnhancementEnabled);
+          const progress = normalizeProgress(asset.progress);
+          const canRetry = asset.status === 'failed';
+          const aiStatus = asset.aiEnhancementStatus || (asset.aiEnhancementEnabled ? 'pending' : 'disabled');
+          const aiEnhancementRunning = asset.aiEnhancementEnabled && (aiStatus === 'pending' || aiStatus === 'processing');
+          const canEnhance =
+            asset.status === 'ready' &&
+            onEnhanceAsset &&
+            !aiEnhancementRunning &&
+            (!asset.aiEnhancementEnabled || aiStatus === 'disabled' || aiStatus === 'failed' || aiStatus === 'skipped');
+          return (
+            <TableRow
+              key={asset.id}
+              hover={Boolean(onOpenAsset)}
+              onClick={onOpenAsset ? () => onOpenAsset(asset) : undefined}
+              sx={{ cursor: onOpenAsset ? 'pointer' : 'default' }}
+            >
+              {selectable && (
+                <TableCell padding="checkbox" onClick={(event) => event.stopPropagation()}>
+                  <Checkbox
+                    size="small"
+                    checked={selectedSet.has(asset.id)}
+                    onChange={(event) => {
+                      if (event.target.checked) {
+                        onSelectedIdsChange?.([...selectedIds, asset.id]);
+                        return;
+                      }
+                      onSelectedIdsChange?.(selectedIds.filter((id) => id !== asset.id));
+                    }}
+                    inputProps={{ 'aria-label': `选择 ${asset.title}` }}
+                  />
+                </TableCell>
+              )}
+              <TableCell sx={{ minWidth: 150, maxWidth: 190 }}>
+                <Typography fontWeight={700} sx={{ ...wrappingTextSx, maxWidth: 180 }}>
+                  {asset.title}
+                </Typography>
+                <Typography variant="body2" color="text.secondary" sx={{ ...secondaryTextSx, maxWidth: 180 }}>
+                  {asset.id}
+                </Typography>
               </TableCell>
-            )}
-            <TableCell>
-              <Typography fontWeight={700} sx={wrappingTextSx}>
-                {item.title}
-              </Typography>
-              <Typography variant="body2" color="text.secondary" sx={{ ...secondaryTextSx, maxWidth: 520 }}>
-                {item.content}
-              </Typography>
-            </TableCell>
-            <TableCell sx={{ minWidth: 140 }}>{knowledgeBaseNames(bases, item.knowledgeBaseIds)}</TableCell>
-            <TableCell sx={{ minWidth: 96 }}>{item.type}</TableCell>
-            <TableCell>
-              <Chip size="small" label={item.enabled ? '启用' : '停用'} color={item.enabled ? 'success' : 'default'} />
-            </TableCell>
-            <TableCell>{formatDate(item.updatedAt)}</TableCell>
-          </TableRow>
-        ))}
+              <TableCell sx={{ minWidth: 124, maxWidth: 150 }}>
+                <Box sx={{ ...secondaryTextSx, maxWidth: 150 }}>{knowledgeBaseNames(bases, asset.knowledgeBaseIds, '未分类')}</Box>
+              </TableCell>
+              <TableCell sx={{ minWidth: 132, maxWidth: 160 }}>
+                <Box sx={{ ...secondaryTextSx, maxWidth: 160 }}>{assetTypeLabel(asset)}</Box>
+              </TableCell>
+              <TableCell>
+                <Chip size="small" label={status.label} color={status.color} />
+              </TableCell>
+              <TableCell sx={{ minWidth: 110 }}>
+                <Stack spacing={0.75}>
+                  <LinearProgress variant="determinate" value={progress} color={asset.status === 'failed' ? 'error' : 'primary'} />
+                  <Typography variant="body2" color="text.secondary">
+                    {progress}%
+                  </Typography>
+                </Stack>
+              </TableCell>
+              <TableCell>
+                <Chip size="small" label={enhancement.label} color={enhancement.color} />
+              </TableCell>
+              <TableCell sx={{ minWidth: 116 }}>{formatDate(asset.updatedAt)}</TableCell>
+              <TableCell sx={{ minWidth: 150, maxWidth: 180 }}>
+                <Box sx={{ ...secondaryTextSx, maxWidth: 180 }}>{errorSummary(asset.errorMessage)}</Box>
+              </TableCell>
+              {hasActions && (
+                <TableCell onClick={(event) => event.stopPropagation()} align="center" sx={{ ...stickyActionCellSx, minWidth: 172, width: 172 }}>
+                  <Stack direction="row" spacing={0.25} justifyContent="center" flexWrap="nowrap">
+                    {onOpenAsset && (
+                      <Tooltip title="查看知识片段">
+                        <IconButton size="small" color="info" aria-label={`查看 ${asset.title} 知识片段`} onClick={() => onOpenAsset(asset, 'chunks')}>
+                          <FormatListBulletedOutlinedIcon fontSize="small" />
+                        </IconButton>
+                      </Tooltip>
+                    )}
+                    {onRetryAsset && canRetry && (
+                      <Tooltip title="重试">
+                        <IconButton size="small" aria-label={`重试 ${asset.title}`} onClick={() => onRetryAsset(asset)}>
+                          <ReplayOutlinedIcon fontSize="small" />
+                        </IconButton>
+                      </Tooltip>
+                    )}
+                    {onEnhanceAsset && (
+                      <Tooltip title={aiEnhancementRunning ? 'AI 增强处理中' : canEnhance ? '应用 AI 增强' : '当前状态不可 AI 增强'}>
+                        <span>
+                          <VIPFeatureButton
+                            animateHighlight={canEnhance}
+                            selected={canEnhance}
+                            size="small"
+                            disabled={!canEnhance}
+                            aria-label={`AI 增强 ${asset.title}`}
+                            onClick={() => onEnhanceAsset(asset)}
+                            sx={{ minHeight: 30, px: 1.05, fontSize: 12, whiteSpace: 'nowrap' }}
+                          >
+                            AI增强
+                          </VIPFeatureButton>
+                        </span>
+                      </Tooltip>
+                    )}
+                    {onRemoveFromBase && (
+                      <Tooltip title="移出当前知识库包">
+                        <IconButton size="small" color="warning" aria-label={`移出 ${asset.title}`} onClick={() => onRemoveFromBase(asset)}>
+                          <RemoveCircleOutlineOutlinedIcon fontSize="small" />
+                        </IconButton>
+                      </Tooltip>
+                    )}
+                    {onTrashAsset && (
+                      <Tooltip title="移入垃圾箱">
+                        <IconButton size="small" color="error" aria-label={`删除 ${asset.title}`} onClick={() => onTrashAsset(asset)}>
+                          <DeleteOutlineIcon fontSize="small" />
+                        </IconButton>
+                      </Tooltip>
+                    )}
+                  </Stack>
+                </TableCell>
+              )}
+            </TableRow>
+          );
+        })}
       </TableBody>
     </DataTableFrame>
   );
@@ -264,7 +439,10 @@ export function MediaAccountsTable({
         {accounts.length === 0 && <EmptyTableRow colSpan={onLogin ? 8 : 7} label="暂无绑定媒体账号" />}
         {accounts.map((account) => {
           const platform = platforms.find((item) => item.id === account.platformId);
-          const canLogin = supportsBrowserLogin(platform?.type) && account.loginMethod === 'qr' && account.status !== 'connected';
+          const canLogin =
+            ((supportsBrowserLogin(platform?.type) && account.loginMethod === 'qr') ||
+              (supportsInteractiveLogin(platform) && account.loginMethod === 'phone')) &&
+            account.status !== 'connected';
           return (
             <TableRow key={account.id} hover>
               <TableCell sx={{ minWidth: 140 }}>{account.name}</TableCell>

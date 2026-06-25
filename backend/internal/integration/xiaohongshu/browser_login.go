@@ -72,6 +72,7 @@ type PlaywrightBrowserLoginService struct {
 	ChromePath          string
 	LoginURL            string
 	QRSelector          string
+	PlatformName        string
 	ActionTimeout       time.Duration
 	InitialStateTimeout time.Duration
 }
@@ -83,6 +84,7 @@ func NewPlaywrightBrowserLoginService() PlaywrightBrowserLoginService {
 		ChromePath:          defaultChromePath(),
 		LoginURL:            DefaultLoginURL,
 		QRSelector:          DefaultLoginSelector,
+		PlatformName:        "xiaohongshu",
 		ActionTimeout:       defaultDurationSeconds("GEOPRESS_XHS_BROWSER_LOGIN_ACTION_TIMEOUT_SECONDS", 60*time.Second),
 		InitialStateTimeout: defaultDurationSeconds("GEOPRESS_XHS_BROWSER_LOGIN_INITIAL_TIMEOUT_SECONDS", 90*time.Second),
 	}
@@ -149,7 +151,7 @@ func (s PlaywrightBrowserLoginService) Complete(ctx context.Context, req Browser
 			result.CompletedAt = time.Now().UTC()
 		}
 		if !result.LoggedIn {
-			return BrowserLoginCompleteResult{}, errors.New("xiaohongshu login is not confirmed yet")
+			return BrowserLoginCompleteResult{}, fmt.Errorf("%s login is not confirmed yet", s.platformName())
 		}
 		return result, nil
 	}
@@ -177,7 +179,7 @@ func (s PlaywrightBrowserLoginService) Complete(ctx context.Context, req Browser
 		result.CompletedAt = time.Now().UTC()
 	}
 	if !result.LoggedIn {
-		return BrowserLoginCompleteResult{}, errors.New("xiaohongshu login is not confirmed yet")
+		return BrowserLoginCompleteResult{}, fmt.Errorf("%s login is not confirmed yet", s.platformName())
 	}
 	return result, nil
 }
@@ -351,6 +353,13 @@ func (s PlaywrightBrowserLoginService) scriptPath() string {
 		return s.ScriptPath
 	}
 	return defaultBrowserLoginScriptPath()
+}
+
+func (s PlaywrightBrowserLoginService) platformName() string {
+	if strings.TrimSpace(s.PlatformName) != "" {
+		return strings.TrimSpace(s.PlatformName)
+	}
+	return "browser platform"
 }
 
 func defaultNodeBin() string {

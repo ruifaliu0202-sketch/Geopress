@@ -3,6 +3,7 @@ package ai
 import (
 	"bytes"
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -196,6 +197,64 @@ func (p *OpenAIProvider) FormatKnowledgeContent(ctx context.Context, req FormatK
 	}, nil
 }
 
+func (p *OpenAIProvider) ExtractDocumentText(ctx context.Context, req OCRRequest) (OCRResponse, error) {
+	if p.apiKey == "" {
+		return OCRResponse{}, errors.New("OPENAI_API_KEY is required when AI_PROVIDER=openai")
+	}
+
+	system := "你是 Geopress 知识库 OCR 服务。只提取图片或 PDF 中真实可见的文字，不要编造看不清的内容。保持原始语言，尽量保留标题、列表、表格和段落结构。返回严格 JSON。"
+	userText := strings.TrimSpace(fmt.Sprintf(`请从这张图片中提取可用于知识库检索的文字。
+
+文件名：%s
+MIME：%s
+
+要求：
+- 如果文件里没有可读文字，content 返回空字符串，warnings 说明原因。
+- 如果有表格、截图界面或多页 PDF，使用 Markdown 标题、表格或项目符号表达。
+- 不要添加图片中不存在的事实。`, req.Filename, req.MimeType))
+	prompt := PromptTranscript{
+		System: system,
+		User:   userText,
+		Schema: map[string]any{
+			"type":                 "object",
+			"additionalProperties": false,
+			"properties": map[string]any{
+				"content": map[string]any{"type": "string"},
+				"warnings": map[string]any{
+					"type":  "array",
+					"items": map[string]any{"type": "string"},
+				},
+			},
+			"required": []string{"content", "warnings"},
+		},
+	}
+
+	content, response, err := p.callDocumentJSONSchema(ctx, prompt, req, "geopress_ocr_result", 4<<20)
+	if err != nil {
+		return OCRResponse{}, err
+	}
+
+	var parsed struct {
+		Content  string   `json:"content"`
+		Warnings []string `json:"warnings"`
+	}
+	if err := json.Unmarshal([]byte(content), &parsed); err != nil {
+		return OCRResponse{}, fmt.Errorf("openai OCR response is not valid JSON: %w", err)
+	}
+	parsed.Content = strings.TrimSpace(parsed.Content)
+	if parsed.Content == "" {
+		return OCRResponse{}, errors.New("AI vision OCR returned empty content")
+	}
+
+	return OCRResponse{
+		Text:       parsed.Content,
+		RawOutput:  json.RawMessage(content),
+		Provider:   p.Name(),
+		Model:      response.Model,
+		TokenUsage: response.Usage.toTokenUsage(),
+	}, nil
+}
+
 func (p *OpenAIProvider) callJSONSchema(ctx context.Context, prompt PromptTranscript, schemaName string, limit int64) (string, responsesAPIResponse, error) {
 	payload := map[string]any{
 		"model":        p.model,
@@ -249,6 +308,96 @@ func (p *OpenAIProvider) callJSONSchema(ctx context.Context, prompt PromptTransc
 	content := strings.TrimSpace(response.outputText())
 	if content == "" {
 		return "", responsesAPIResponse{}, errors.New("openai response content is empty")
+	}
+	return content, response, nil
+}
+
+func (p *OpenAIProvider) callDocumentJSONSchema(ctx context.Context, prompt PromptTranscript, req OCRRequest, schemaName string, limit int64) (string, responsesAPIResponse, error) {
+	normalizedMIME := strings.ToLower(strings.TrimSpace(req.MimeType))
+	var fileContent map[string]any
+	switch {
+	case strings.HasPrefix(normalizedMIME, "image/"):
+		fileContent = map[string]any{
+			"type":      "input_image",
+			"image_url": fmt.Sprintf("data:%s;base64,%s", emptyAs(normalizedMIME, "image/png"), base64.StdEncoding.EncodeToString(req.Data)),
+		}
+	case normalizedMIME == "application/pdf" || strings.EqualFold(strings.TrimSpace(req.FileKind), "pdf"):
+		filename := strings.TrimSpace(req.Filename)
+		if filename == "" {
+			filename = "document.pdf"
+		}
+		fileContent = map[string]any{
+			"type":      "input_file",
+			"filename":  filename,
+			"file_data": fmt.Sprintf("data:application/pdf;base64,%s", base64.StdEncoding.EncodeToString(req.Data)),
+		}
+	default:
+		return "", responsesAPIResponse{}, fmt.Errorf("AI vision OCR does not support MIME type %q", req.MimeType)
+	}
+
+	payload := map[string]any{
+		"model":        p.model,
+		"instructions": prompt.System,
+		"input": []map[string]any{
+			{
+				"role": "user",
+				"content": []map[string]any{
+					{
+						"type": "input_text",
+						"text": prompt.User,
+					},
+					fileContent,
+				},
+			},
+		},
+		"store": false,
+		"text": map[string]any{
+			"format": map[string]any{
+				"type":   "json_schema",
+				"name":   schemaName,
+				"schema": prompt.Schema,
+				"strict": true,
+			},
+		},
+	}
+
+	body, err := json.Marshal(payload)
+	if err != nil {
+		return "", responsesAPIResponse{}, err
+	}
+
+	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, p.baseURL+"/responses", bytes.NewReader(body))
+	if err != nil {
+		return "", responsesAPIResponse{}, err
+	}
+	httpReq.Header.Set("Authorization", "Bearer "+p.apiKey)
+	httpReq.Header.Set("Content-Type", "application/json")
+
+	resp, err := p.client.Do(httpReq)
+	if err != nil {
+		return "", responsesAPIResponse{}, err
+	}
+	defer resp.Body.Close()
+
+	if limit <= 0 {
+		limit = 2 << 20
+	}
+	respBody, err := io.ReadAll(io.LimitReader(resp.Body, limit))
+	if err != nil {
+		return "", responsesAPIResponse{}, err
+	}
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return "", responsesAPIResponse{}, fmt.Errorf("openai OCR request failed: status %d: %s", resp.StatusCode, strings.TrimSpace(string(respBody)))
+	}
+
+	var response responsesAPIResponse
+	if err := json.Unmarshal(respBody, &response); err != nil {
+		return "", responsesAPIResponse{}, err
+	}
+
+	content := strings.TrimSpace(response.outputText())
+	if content == "" {
+		return "", responsesAPIResponse{}, errors.New("openai OCR response content is empty")
 	}
 	return content, response, nil
 }

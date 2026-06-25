@@ -5,7 +5,7 @@ import type { User, Workspace } from '../../types';
 export type WorkspaceAssistantActionId =
   | 'generateContent'
   | 'createKnowledgeBase'
-  | 'createKnowledgeItem'
+  | 'createKnowledgeAsset'
   | 'bindMediaAccount'
   | 'createSchedule'
   | 'openOnboardingGuide'

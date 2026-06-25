@@ -62,6 +62,12 @@ type Provider interface {
 	FormatKnowledgeContent(ctx context.Context, req FormatKnowledgeContentRequest) (FormatKnowledgeContentResponse, error)
 }
 
+type OCRProvider interface {
+	Name() string
+	Model() string
+	ExtractDocumentText(ctx context.Context, req OCRRequest) (OCRResponse, error)
+}
+
 type GenerationPipelineSettings struct {
 	Free GenerationPipelinePlan `json:"free"`
 	VIP  GenerationPipelinePlan `json:"vip"`
@@ -193,6 +199,23 @@ type FormatKnowledgeContentResponse struct {
 	TokenUsage TokenUsage       `json:"tokenUsage"`
 }
 
+type OCRRequest struct {
+	WorkspaceID string
+	UserID      string
+	Filename    string
+	MimeType    string
+	Data        []byte
+	FileKind    string
+}
+
+type OCRResponse struct {
+	Text       string          `json:"text"`
+	RawOutput  json.RawMessage `json:"rawOutput"`
+	Provider   string          `json:"provider"`
+	Model      string          `json:"model"`
+	TokenUsage TokenUsage      `json:"tokenUsage"`
+}
+
 type PromptTranscript struct {
 	System string `json:"system"`
 	User   string `json:"user"`
@@ -257,6 +280,13 @@ func NewProvider(cfg Config) Provider {
 		return NewOpenAIProvider(cfg)
 	}
 	return NewMockProvider()
+}
+
+func NewOCRProvider(cfg Config) OCRProvider {
+	if strings.EqualFold(strings.TrimSpace(cfg.Provider), ProviderOpenAI) {
+		return NewOpenAIProvider(cfg)
+	}
+	return nil
 }
 
 func NewRuntimeConfig(cfg Config) *RuntimeConfig {

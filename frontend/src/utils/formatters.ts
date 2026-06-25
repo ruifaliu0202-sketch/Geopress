@@ -27,9 +27,9 @@ export function knowledgeBaseName(items: KnowledgeBase[], id: string) {
   return items.find((item) => item.id === id)?.name ?? id;
 }
 
-export function knowledgeBaseNames(items: KnowledgeBase[], ids: string[]) {
+export function knowledgeBaseNames(items: KnowledgeBase[], ids: string[], emptyLabel = '-') {
   if (ids.length === 0) {
-    return '-';
+    return emptyLabel;
   }
   return ids.map((id) => knowledgeBaseName(items, id)).join(', ');
 }
@@ -47,7 +47,15 @@ export function platformType(items: MediaPlatform[], id: string) {
 }
 
 export function supportsBrowserLogin(platformTypeValue?: string) {
-  return platformTypeValue === 'xiaohongshu';
+  return platformTypeValue === 'xiaohongshu' || platformTypeValue === 'netease' || platformTypeValue === 'toutiao' || platformTypeValue === 'sohu';
+}
+
+export function supportsInteractiveLogin(platform?: MediaPlatform | null) {
+  return Boolean(platform?.credentialFields.includes('phoneNumber') || platform?.capabilities?.authorizationMethods?.includes('phone_sms'));
+}
+
+export function supportsMediaAccountLogin(platform?: MediaPlatform | null) {
+  return supportsBrowserLogin(platform?.type) || supportsInteractiveLogin(platform);
 }
 
 export function loginMethodLabel(value?: string) {
@@ -73,6 +81,9 @@ export function mediaAccountStatusLabel(value: string) {
   if (value === 'qr_waiting') {
     return '等待扫码';
   }
+  if (value === 'login_waiting') {
+    return '登录中';
+  }
   return '需处理';
 }
 
@@ -80,7 +91,7 @@ export function mediaAccountStatusColor(value: string): 'default' | 'success' | 
   if (value === 'connected') {
     return 'success';
   }
-  if (value === 'pending_login' || value === 'qr_waiting') {
+  if (value === 'pending_login' || value === 'qr_waiting' || value === 'login_waiting') {
     return 'warning';
   }
   return 'default';

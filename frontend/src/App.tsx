@@ -1,11 +1,18 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import {
   Alert,
+  Box,
+  Button,
   CircularProgress,
+  Dialog,
+  DialogActions,
+  DialogContent,
+  DialogTitle,
   FormControl,
   IconButton,
   InputLabel,
   MenuItem,
+  Radio,
   Select,
   Stack,
   Tooltip,
@@ -28,12 +35,24 @@ import PsychologyAltOutlinedIcon from '@mui/icons-material/PsychologyAltOutlined
 import PublishOutlinedIcon from '@mui/icons-material/PublishOutlined';
 import ScheduleOutlinedIcon from '@mui/icons-material/ScheduleOutlined';
 import SettingsOutlinedIcon from '@mui/icons-material/SettingsOutlined';
-import { ApiRequestError, fetchWorkspace, login } from './api';
+import DeleteOutlineIcon from '@mui/icons-material/DeleteOutline';
+import RestoreFromTrashOutlinedIcon from '@mui/icons-material/RestoreFromTrashOutlined';
+import TuneOutlinedIcon from '@mui/icons-material/TuneOutlined';
+import {
+  ApiRequestError,
+  deleteKnowledgeAssetForever,
+  deleteKnowledgeBaseForever,
+  fetchKnowledgeTrash,
+  fetchWorkspace,
+  login,
+  purgeExpiredKnowledgeTrash,
+  restoreKnowledgeAsset,
+  restoreKnowledgeBase,
+} from './api';
 import { AdminConsole } from './admin/AdminConsole';
 import type { DialogKey, NavItem, ViewKey } from './appTypes';
 import { AIThinkingOverlay } from './components/AIThinkingOverlay';
 import {
-  createFormattingThinkingRunner,
   failThinkingStep,
   generationThinkingSteps,
   initialThinkingState,
@@ -50,6 +69,10 @@ import {
   OnboardingView,
 } from './features/workspace/views';
 import type { GenerationTrace, User, WorkspaceData } from './types';
+import {
+  themePresets,
+  type ThemePreference,
+} from './theme';
 
 const navItems: NavItem[] = [
   { key: 'overview', label: '概览', icon: <DashboardOutlinedIcon /> },
@@ -90,7 +113,7 @@ const workspaceTourSteps: OnboardingTourStep[] = [
     targetId: 'nav-knowledge',
     fallbackTargetId: 'mobile-nav-menu',
     placement: 'bottom',
-    content: '进入知识库，先创建知识库包，再创建品牌、产品、语气、禁忌等引导条目。AI 生成时会从这些条目里检索上下文。',
+    content: '进入知识库，先创建知识库包，再上传文件或创建文本资产。AI 生成时会从知识资产片段里检索上下文。',
   },
   {
     id: 'knowledge-base',
@@ -100,12 +123,12 @@ const workspaceTourSteps: OnboardingTourStep[] = [
     content: '知识库包相当于一组可复用技能包。后续生成内容时可以选择多个包组合使用。',
   },
   {
-    id: 'knowledge-item',
-    title: 'Step 4：创建引导条目',
-    targetId: 'knowledge-create-item',
-    fallbackTargetId: 'overview-create-knowledge-item',
+    id: 'knowledge-asset',
+    title: 'Step 4：创建知识资产',
+    targetId: 'knowledge-create-asset',
+    fallbackTargetId: 'overview-create-knowledge-asset',
     placement: 'bottom',
-    content: '引导条目是最小知识资产，适合记录产品卖点、用户画像、表达风格、素材事实和输出限制。',
+    content: '知识资产可以是上传文件或文本资产，适合记录产品卖点、用户画像、表达风格、素材事实和输出限制。',
   },
   {
     id: 'accounts',
@@ -202,7 +225,310 @@ function clearStoredAuth() {
   }
 }
 
-function App() {
+function PersonalSettingsDialog({
+  open,
+  user,
+  themePreference,
+  onThemePreferenceChange,
+  onClose,
+}: {
+  open: boolean;
+  user: User | null;
+  themePreference: ThemePreference;
+  onThemePreferenceChange: (value: ThemePreference) => void;
+  onClose: () => void;
+}) {
+  return (
+    <Dialog open={open} onClose={onClose} fullWidth maxWidth="sm">
+      <DialogTitle>个人设置</DialogTitle>
+      <DialogContent>
+        <Stack spacing={2.5} sx={{ pt: 1 }}>
+          <Stack spacing={0.5}>
+            <Typography fontWeight={700}>{user?.name ?? '用户'}</Typography>
+            <Typography color="text.secondary">{user?.email ?? ''}</Typography>
+          </Stack>
+          <Stack spacing={1}>
+            <Typography fontWeight={700}>颜色主题</Typography>
+            <Stack spacing={1}>
+              {(Object.keys(themePresets) as ThemePreference[]).map((key) => {
+                const preset = themePresets[key];
+                const selected = themePreference === key;
+                return (
+                  <Box
+                    key={key}
+                    role="button"
+                    tabIndex={0}
+                    onClick={() => onThemePreferenceChange(key)}
+                    onKeyDown={(event) => {
+                      if (event.key === 'Enter' || event.key === ' ') {
+                        event.preventDefault();
+                        onThemePreferenceChange(key);
+                      }
+                    }}
+                    sx={{
+                      display: 'grid',
+                      gridTemplateColumns: 'auto 1fr auto',
+                      alignItems: 'center',
+                      gap: 1.25,
+                      p: 1.25,
+                      border: '1px solid',
+                      borderColor: selected ? 'primary.main' : 'divider',
+                      borderRadius: 1,
+                      cursor: 'pointer',
+                      bgcolor: selected ? 'action.selected' : 'background.paper',
+                    }}
+                  >
+                    <Radio checked={selected} size="small" />
+                    <Stack spacing={0.25} sx={{ minWidth: 0 }}>
+                      <Typography fontWeight={700}>{preset.label}</Typography>
+                      <Typography variant="body2" color="text.secondary">
+                        偏好会保存在本机浏览器。
+                      </Typography>
+                    </Stack>
+                    <Stack direction="row" spacing={0.5}>
+                      {[preset.primary, preset.secondary, preset.background].map((color) => (
+                        <Box
+                          key={color}
+                          sx={{
+                            width: 22,
+                            height: 22,
+                            borderRadius: 0.75,
+                            bgcolor: color,
+                            border: '1px solid',
+                            borderColor: 'divider',
+                          }}
+                        />
+                      ))}
+                    </Stack>
+                  </Box>
+                );
+              })}
+            </Stack>
+          </Stack>
+        </Stack>
+      </DialogContent>
+      <DialogActions>
+        <Button onClick={onClose}>关闭</Button>
+      </DialogActions>
+    </Dialog>
+  );
+}
+
+function TrashDialog({
+  open,
+  token,
+  workspaceId,
+  onClose,
+  onChanged,
+}: {
+  open: boolean;
+  token: string;
+  workspaceId: string;
+  onClose: () => void;
+  onChanged: () => void;
+}) {
+  const [trash, setTrash] = useState<{ knowledgeBases: WorkspaceData['knowledgeBases']; knowledgeAssets: WorkspaceData['knowledgeAssets'] }>({
+    knowledgeBases: [],
+    knowledgeAssets: [],
+  });
+  const [loading, setLoading] = useState(false);
+  const [busyId, setBusyId] = useState('');
+  const [error, setError] = useState<string | null>(null);
+  const [confirmDelete, setConfirmDelete] = useState<{ type: 'base' | 'asset'; id: string; title: string } | null>(null);
+
+  const loadTrash = useCallback(async () => {
+    if (!open || !token || !workspaceId) {
+      return;
+    }
+    setLoading(true);
+    setError(null);
+    try {
+      const result = await fetchKnowledgeTrash(token, workspaceId);
+      setTrash(result);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : '垃圾箱加载失败');
+    } finally {
+      setLoading(false);
+    }
+  }, [open, token, workspaceId]);
+
+  useEffect(() => {
+    void loadTrash();
+  }, [loadTrash]);
+
+  const runAction = async (id: string, action: () => Promise<unknown>) => {
+    setBusyId(id);
+    setError(null);
+    try {
+      await action();
+      await loadTrash();
+      onChanged();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : '操作失败');
+    } finally {
+      setBusyId('');
+    }
+  };
+
+  const empty = trash.knowledgeBases.length === 0 && trash.knowledgeAssets.length === 0;
+
+  return (
+    <>
+      <Dialog open={open} onClose={loading || busyId ? undefined : onClose} fullWidth maxWidth="md">
+        <DialogTitle>垃圾箱</DialogTitle>
+        <DialogContent>
+          <Stack spacing={2} sx={{ pt: 1 }}>
+            <Alert severity="info">移入垃圾箱的知识库包和知识资产会保留 30 天，期间可以恢复；到期后会自动清理。</Alert>
+            {error && <Alert severity="error">{error}</Alert>}
+            {loading ? (
+              <Stack direction="row" spacing={1.5} alignItems="center">
+                <CircularProgress size={20} />
+                <Typography color="text.secondary">正在读取垃圾箱</Typography>
+              </Stack>
+            ) : empty ? (
+              <Typography color="text.secondary">垃圾箱为空。</Typography>
+            ) : (
+              <Stack spacing={2}>
+                <TrashSection
+                  title="知识库包"
+                  items={trash.knowledgeBases.map((item) => ({
+                    id: item.id,
+                    title: item.name,
+                    subtitle: `${item.itemCount} 个资产 / ${item.deleteExpiresAt ? `到期 ${new Date(item.deleteExpiresAt).toLocaleDateString()}` : '30 天后清理'}`,
+                  }))}
+                  busyId={busyId}
+                  onRestore={(id) => runAction(id, () => restoreKnowledgeBase(token, workspaceId, id))}
+                  onDelete={(item) => setConfirmDelete({ type: 'base', id: item.id, title: item.title })}
+                />
+                <TrashSection
+                  title="知识资产"
+                  items={trash.knowledgeAssets.map((item) => ({
+                    id: item.id,
+                    title: item.title,
+                    subtitle: `${item.assetType || item.mimeType || 'asset'} / ${item.deleteExpiresAt ? `到期 ${new Date(item.deleteExpiresAt).toLocaleDateString()}` : '30 天后清理'}`,
+                  }))}
+                  busyId={busyId}
+                  onRestore={(id) => runAction(id, () => restoreKnowledgeAsset(token, workspaceId, id))}
+                  onDelete={(item) => setConfirmDelete({ type: 'asset', id: item.id, title: item.title })}
+                />
+              </Stack>
+            )}
+          </Stack>
+        </DialogContent>
+        <DialogActions>
+          <Button
+            startIcon={<RestoreFromTrashOutlinedIcon />}
+            onClick={() => runAction('purge-expired', () => purgeExpiredKnowledgeTrash(token, workspaceId))}
+            disabled={loading || Boolean(busyId)}
+          >
+            清理过期
+          </Button>
+          <Button onClick={onClose} disabled={loading || Boolean(busyId)}>
+            关闭
+          </Button>
+        </DialogActions>
+      </Dialog>
+
+      <Dialog open={Boolean(confirmDelete)} onClose={() => setConfirmDelete(null)} maxWidth="xs" fullWidth>
+        <DialogTitle>彻底删除</DialogTitle>
+        <DialogContent>
+          <Typography>
+            确认彻底删除「{confirmDelete?.title}」？删除后不能从垃圾箱恢复。
+          </Typography>
+        </DialogContent>
+        <DialogActions>
+          <Button onClick={() => setConfirmDelete(null)}>取消</Button>
+          <Button
+            color="error"
+            variant="contained"
+            onClick={() => {
+              const target = confirmDelete;
+              if (!target) {
+                return;
+              }
+              setConfirmDelete(null);
+              void runAction(
+                target.id,
+                target.type === 'base'
+                  ? () => deleteKnowledgeBaseForever(token, workspaceId, target.id)
+                  : () => deleteKnowledgeAssetForever(token, workspaceId, target.id),
+              );
+            }}
+          >
+            彻底删除
+          </Button>
+        </DialogActions>
+      </Dialog>
+    </>
+  );
+}
+
+function TrashSection({
+  title,
+  items,
+  busyId,
+  onRestore,
+  onDelete,
+}: {
+  title: string;
+  items: { id: string; title: string; subtitle: string }[];
+  busyId: string;
+  onRestore: (id: string) => void;
+  onDelete: (item: { id: string; title: string; subtitle: string }) => void;
+}) {
+  return (
+    <Stack spacing={1}>
+      <Typography fontWeight={700}>{title}</Typography>
+      {items.length === 0 ? (
+        <Typography color="text.secondary">暂无{title}</Typography>
+      ) : (
+        <Stack spacing={1}>
+          {items.map((item) => (
+            <Box
+              key={item.id}
+              sx={{
+                display: 'grid',
+                gridTemplateColumns: { xs: '1fr', sm: '1fr auto' },
+                gap: 1,
+                alignItems: 'center',
+                p: 1.25,
+                border: '1px solid',
+                borderColor: 'divider',
+                borderRadius: 1,
+                bgcolor: 'background.paper',
+              }}
+            >
+              <Stack spacing={0.25} sx={{ minWidth: 0 }}>
+                <Typography fontWeight={700} sx={{ overflowWrap: 'anywhere' }}>
+                  {item.title}
+                </Typography>
+                <Typography variant="body2" color="text.secondary" sx={{ overflowWrap: 'anywhere' }}>
+                  {item.subtitle}
+                </Typography>
+              </Stack>
+              <Stack direction="row" spacing={1} justifyContent="flex-end">
+                <Button size="small" onClick={() => onRestore(item.id)} disabled={Boolean(busyId)}>
+                  恢复
+                </Button>
+                <Button size="small" color="error" onClick={() => onDelete(item)} disabled={Boolean(busyId)}>
+                  彻底删除
+                </Button>
+              </Stack>
+            </Box>
+          ))}
+        </Stack>
+      )}
+    </Stack>
+  );
+}
+
+function App({
+  themePreference,
+  onThemePreferenceChange,
+}: {
+  themePreference: ThemePreference;
+  onThemePreferenceChange: (value: ThemePreference) => void;
+}) {
   const [initialAuth] = useState<StoredAuth | null>(() => readStoredAuth());
   const [token, setToken] = useState(initialAuth?.token ?? '');
   const [user, setUser] = useState<User | null>(initialAuth?.user ?? null);
@@ -219,6 +545,8 @@ function App() {
   const [tourOpen, setTourOpen] = useState(false);
   const [tourStepIndex, setTourStepIndex] = useState(0);
   const [tourAutoStarted, setTourAutoStarted] = useState(false);
+  const [trashOpen, setTrashOpen] = useState(false);
+  const [settingsOpen, setSettingsOpen] = useState(false);
 
   useEffect(() => {
     if (!token || !workspaceId) {
@@ -275,7 +603,6 @@ function App() {
 
   const refresh = () => setReloadKey((value) => value + 1);
   const visibleNavItems = user?.isPlatformAdmin ? [...navItems, adminNavItem] : navItems;
-  const runFormattingThinking = useMemo(() => createFormattingThinkingRunner(setThinking), []);
   const setTourStep = useCallback((nextStepIndex: number) => {
     const clampedStepIndex = Math.min(Math.max(nextStepIndex, 0), workspaceTourSteps.length - 1);
     const stepView = workspaceTourStepViews[workspaceTourSteps[clampedStepIndex]?.id];
@@ -446,6 +773,16 @@ function App() {
               <HelpOutlineIcon />
             </IconButton>
           </Tooltip>
+          <Tooltip title="垃圾箱">
+            <IconButton onClick={() => setTrashOpen(true)} aria-label="垃圾箱">
+              <DeleteOutlineIcon />
+            </IconButton>
+          </Tooltip>
+          <Tooltip title="个人设置">
+            <IconButton onClick={() => setSettingsOpen(true)} aria-label="个人设置">
+              <TuneOutlinedIcon />
+            </IconButton>
+          </Tooltip>
           {user?.isPlatformAdmin && (
             <Tooltip title="平台后台">
               <IconButton onClick={() => setActiveView('admin')} aria-label="平台后台">
@@ -541,10 +878,23 @@ function App() {
           }}
           onStartGenerationThinking={startGenerationThinking}
           onGeneratedTrace={showGenerationTrace}
-          runFormattingThinking={runFormattingThinking}
           onThinkingFailed={failThinking}
         />
       )}
+      <TrashDialog
+        open={trashOpen}
+        token={token}
+        workspaceId={workspaceId}
+        onClose={() => setTrashOpen(false)}
+        onChanged={refresh}
+      />
+      <PersonalSettingsDialog
+        open={settingsOpen}
+        user={user}
+        themePreference={themePreference}
+        onThemePreferenceChange={onThemePreferenceChange}
+        onClose={() => setSettingsOpen(false)}
+      />
       <AIThinkingOverlay state={thinking} onClose={closeThinking} />
       {workspace && (
         <FloatingWorkspaceAssistant
@@ -554,7 +904,7 @@ function App() {
           actionCallbacks={{
             generateContent: () => setDialog('generate'),
             createKnowledgeBase: () => setDialog('knowledgeBase'),
-            createKnowledgeItem: () => setDialog('knowledgeItem'),
+            createKnowledgeAsset: () => setDialog('knowledgeAsset'),
             bindMediaAccount: () => setDialog('mediaAccount'),
             createSchedule: () => setDialog('schedule'),
             openOnboardingGuide: () => startWorkspaceTour(),

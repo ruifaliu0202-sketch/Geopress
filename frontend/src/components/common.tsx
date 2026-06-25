@@ -21,6 +21,7 @@ import type { ButtonProps, PaperProps } from '@mui/material';
 import { alpha } from '@mui/material/styles';
 import type { SxProps, Theme } from '@mui/material/styles';
 import { productThemeTokens } from '../theme';
+import vipGoldImage from '../assets/vip-gold.png';
 
 export type DialogBaseProps = {
   open: boolean;
@@ -41,6 +42,11 @@ export type ProductSurfaceProps = Omit<PaperProps, 'variant'> & {
 };
 
 export type HighlightedActionButtonProps = ButtonProps & {
+  animateHighlight?: boolean;
+};
+
+export type VIPFeatureButtonProps = Omit<ButtonProps, 'variant' | 'color'> & {
+  selected?: boolean;
   animateHighlight?: boolean;
 };
 
@@ -182,6 +188,91 @@ function highlightedActionButtonSx(animateHighlight: boolean): SxProps<Theme> {
   });
 }
 
+function vipFeatureButtonSx(selected: boolean, animateHighlight: boolean): SxProps<Theme> {
+  return (theme) => ({
+    '@keyframes geopressVipSweep': {
+      '0%': {
+        transform: 'translateX(-160%) skewX(-18deg)',
+        opacity: 0,
+      },
+      '18%': {
+        opacity: 0.88,
+      },
+      '50%, 100%': {
+        transform: 'translateX(170%) skewX(-18deg)',
+        opacity: 0,
+      },
+    },
+    position: 'relative',
+    isolation: 'isolate',
+    overflow: 'hidden',
+    minHeight: 42,
+    px: 2.15,
+    border: '1px solid',
+    borderColor: selected ? '#B78517' : '#D7A332',
+    color: selected ? '#4B3411' : theme.palette.primary.main,
+    backgroundColor: selected ? '#FFF2B8' : theme.palette.background.paper,
+    backgroundImage: `linear-gradient(90deg, rgba(255,255,255,0.86), rgba(255,255,255,0.38)), url(${vipGoldImage})`,
+    backgroundRepeat: 'no-repeat',
+    backgroundSize: 'auto 112%, 78px 78px',
+    backgroundPosition: 'right -8px center, right -16px center',
+    boxShadow: selected
+      ? 'inset 0 3px 7px rgba(80, 53, 7, 0.22), 0 10px 22px rgba(183, 133, 23, 0.2)'
+      : '0 8px 18px rgba(183, 133, 23, 0.14)',
+    transform: selected ? 'translateY(1px)' : 'none',
+    '&:hover': {
+      borderColor: '#B78517',
+      backgroundColor: selected ? '#FFECA2' : '#FFF9E6',
+      boxShadow: selected
+        ? 'inset 0 3px 8px rgba(80, 53, 7, 0.25), 0 10px 24px rgba(183, 133, 23, 0.22)'
+        : '0 12px 26px rgba(183, 133, 23, 0.22)',
+    },
+    '&.Mui-focusVisible': {
+      outline: `3px solid ${alpha('#D7A332', 0.38)}`,
+      outlineOffset: 2,
+    },
+    '&.Mui-disabled': {
+      borderColor: alpha('#B78517', 0.24),
+      color: theme.palette.text.disabled,
+      backgroundColor: alpha('#FFF2B8', 0.42),
+      backgroundImage: `linear-gradient(90deg, rgba(255,255,255,0.82), rgba(255,255,255,0.58)), url(${vipGoldImage})`,
+      boxShadow: 'none',
+      opacity: 0.72,
+      '&::after': {
+        display: 'none',
+      },
+    },
+    '&::after': animateHighlight
+      ? {
+          content: '""',
+          position: 'absolute',
+          zIndex: 0,
+          top: '-35%',
+          bottom: '-35%',
+          left: 0,
+          width: '44%',
+          background: 'linear-gradient(90deg, transparent 0%, rgba(255,255,255,0.72) 48%, transparent 100%)',
+          animation: 'geopressVipSweep 2.9s ease-in-out infinite',
+          pointerEvents: 'none',
+        }
+      : undefined,
+    '& > *': {
+      position: 'relative',
+      zIndex: 1,
+    },
+    '@media (prefers-reduced-motion: reduce)': {
+      transform: 'none',
+      '&::after': {
+        animation: 'none',
+        opacity: 0,
+      },
+    },
+    [theme.breakpoints.down('sm')]: {
+      width: '100%',
+    },
+  });
+}
+
 export function ProductSurface({
   tone = 'default',
   dimension = 'subtle',
@@ -218,6 +309,27 @@ export function HighlightedActionButton({
       disableElevation={disableElevation}
       {...buttonProps}
       sx={[highlightedActionButtonSx(animateHighlight), ...sxArray(sx)]}
+    >
+      {children}
+    </Button>
+  );
+}
+
+export function VIPFeatureButton({
+  selected = false,
+  animateHighlight = true,
+  disableElevation = true,
+  sx,
+  children,
+  ...buttonProps
+}: VIPFeatureButtonProps) {
+  return (
+    <Button
+      variant="outlined"
+      color="primary"
+      disableElevation={disableElevation}
+      {...buttonProps}
+      sx={[vipFeatureButtonSx(selected, animateHighlight), ...sxArray(sx)]}
     >
       {children}
     </Button>

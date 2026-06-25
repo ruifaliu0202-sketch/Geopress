@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"errors"
+	"strings"
 	"time"
 
 	"geopress/backend/internal/model"
@@ -192,6 +193,9 @@ func (db *DB) SeedWorkspaceData(
 			return err
 		}
 		if err = replaceKnowledgeItemBases(ctx, tx, item.ID, item.WorkspaceID, item.KnowledgeBaseIDs); err != nil {
+			return err
+		}
+		if err = seedLegacyKnowledgeItemAsset(ctx, tx, item, updatedAt); err != nil {
 			return err
 		}
 	}
@@ -419,6 +423,82 @@ func defaultSubscriptionStatus(value model.SubscriptionStatus) string {
 		return string(model.SubscriptionStatusActive)
 	}
 	return string(value)
+}
+
+func seedLegacyKnowledgeItemAsset(ctx context.Context, tx *sql.Tx, item model.KnowledgeItem, updatedAt time.Time) error {
+	assetID := legacyKnowledgeAssetID(item.ID)
+	chunkID := legacyKnowledgeChunkID(item.ID)
+	metadata, err := jsonText(map[string]any{
+		"legacyKnowledgeItemId": item.ID,
+		"legacyType":            item.Type,
+		"migratedFrom":          "knowledge_items",
+	})
+	if err != nil {
+		return err
+	}
+	chunkMetadata, err := jsonText(map[string]any{
+		"legacyKnowledgeItemId": item.ID,
+		"legacyType":            item.Type,
+		"migratedFrom":          "knowledge_items",
+		"type":                  item.Type,
+	})
+	if err != nil {
+		return err
+	}
+	if _, err := tx.ExecContext(ctx, `
+		INSERT INTO knowledge_assets (
+			id, workspace_id, title, asset_type, mime_type, original_filename, storage_key,
+			status, progress, extracted_text, ai_enhancement_enabled, ai_enhancement_status,
+			metadata, created_at, updated_at
+		)
+		VALUES ($1, $2, $3, $4, 'text/markdown', $5, $6, 'ready', 100, $7, FALSE, 'disabled', $8::jsonb, $9, $10)
+		ON CONFLICT (id) DO UPDATE SET
+			workspace_id = EXCLUDED.workspace_id,
+			title = EXCLUDED.title,
+			asset_type = EXCLUDED.asset_type,
+			mime_type = EXCLUDED.mime_type,
+			original_filename = EXCLUDED.original_filename,
+			storage_key = EXCLUDED.storage_key,
+			status = EXCLUDED.status,
+			progress = EXCLUDED.progress,
+			extracted_text = EXCLUDED.extracted_text,
+			metadata = EXCLUDED.metadata,
+			updated_at = EXCLUDED.updated_at
+	`, assetID, item.WorkspaceID, item.Title, defaultString(item.Type, "legacy_item"), item.Title+".md", "legacy:"+item.ID, item.Content, metadata, updatedAt, updatedAt); err != nil {
+		return err
+	}
+	if err := replaceKnowledgeAssetBases(ctx, tx, assetID, item.WorkspaceID, item.KnowledgeBaseIDs); err != nil {
+		return err
+	}
+	if _, err := tx.ExecContext(ctx, `
+		INSERT INTO knowledge_chunks (
+			id, asset_id, workspace_id, chunk_index, title, content, search_text, metadata,
+			enabled, embedding_status, created_at, updated_at
+		)
+		VALUES ($1, $2, $3, 0, $4, $5, $6, $7::jsonb, $8, 'skipped', $9, $10)
+		ON CONFLICT (id) DO UPDATE SET
+			asset_id = EXCLUDED.asset_id,
+			workspace_id = EXCLUDED.workspace_id,
+			chunk_index = EXCLUDED.chunk_index,
+			title = EXCLUDED.title,
+			content = EXCLUDED.content,
+			search_text = EXCLUDED.search_text,
+			metadata = EXCLUDED.metadata,
+			enabled = EXCLUDED.enabled,
+			embedding_status = EXCLUDED.embedding_status,
+			updated_at = EXCLUDED.updated_at
+	`, chunkID, assetID, item.WorkspaceID, item.Title, item.Content, strings.TrimSpace(item.Title+"\n"+item.Content), chunkMetadata, item.Enabled, updatedAt, updatedAt); err != nil {
+		return err
+	}
+	return replaceKnowledgeChunkBases(ctx, tx, chunkID, item.WorkspaceID, item.KnowledgeBaseIDs)
+}
+
+func legacyKnowledgeAssetID(itemID string) string {
+	return "kba_legacy_" + itemID
+}
+
+func legacyKnowledgeChunkID(itemID string) string {
+	return "kbc_legacy_" + itemID + "_0000"
 }
 
 func (db *DB) UpdateUserSubscription(ctx context.Context, user model.User) error {

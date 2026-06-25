@@ -1,16 +1,19 @@
 import type { Dispatch, SetStateAction } from 'react';
 import type { GenerationTrace } from '../types';
+import {
+  activateWorkflowStep,
+  completeWorkflowSteps,
+  createWorkflowSteps,
+  currentWorkflowStep,
+  failCurrentWorkflowStep,
+  workflowStepStatusColor,
+  workflowStepStatusLabel,
+  type WorkflowStep,
+  type WorkflowStepStatus,
+} from './workflowModel';
 
-export type AIThinkingStepStatus = 'pending' | 'running' | 'succeeded' | 'failed' | 'skipped';
-
-export type AIThinkingStep = {
-  id: string;
-  label: string;
-  status: AIThinkingStepStatus;
-  summary: string;
-  details: string[];
-  warnings: string[];
-};
+export type AIThinkingStepStatus = WorkflowStepStatus;
+export type AIThinkingStep = WorkflowStep;
 
 export type AIThinkingState = {
   open: boolean;
@@ -48,7 +51,7 @@ export const initialThinkingState: AIThinkingState = {
 };
 
 export function generationThinkingSteps(): AIThinkingStep[] {
-  return createThinkingSteps([
+  return createWorkflowSteps([
     { id: 'input_analysis', label: '分析关键词', summary: '正在识别主题、受众和输入边界。' },
     { id: 'knowledge_retrieval', label: '检索知识库', summary: '正在查找可用于生成的知识片段。' },
     { id: 'content_plan', label: '规划内容结构', summary: '正在组织文章结构和发布格式。' },
@@ -74,7 +77,7 @@ export function createFormattingThinkingRunner(setThinking: Dispatch<SetStateAct
       blocking: true,
       title,
       subtitle,
-      steps: activateThinkingStep(steps, 0),
+      steps: activateWorkflowStep(steps, 0),
       trace: null,
     });
 
@@ -90,7 +93,7 @@ export function createFormattingThinkingRunner(setThinking: Dispatch<SetStateAct
         blocking: true,
         title,
         subtitle,
-        steps: activateThinkingStep(steps, index),
+        steps: activateWorkflowStep(steps, index),
         trace: null,
       }));
       await wait(stepDurations[index] ?? 0);
@@ -105,7 +108,7 @@ export function createFormattingThinkingRunner(setThinking: Dispatch<SetStateAct
         blocking: false,
         title,
         subtitle,
-        steps: completeThinkingSteps(formattingThinkingSteps(result.response.fallback), warning),
+        steps: completeWorkflowSteps(formattingThinkingSteps(result.response.fallback), warning),
         trace: null,
       }));
       onSuccess(result.response);
@@ -119,7 +122,7 @@ export function createFormattingThinkingRunner(setThinking: Dispatch<SetStateAct
       blocking: false,
       title,
       subtitle,
-      steps: failCurrentThinkingStep(current.steps.length > 0 ? current.steps : steps, message),
+      steps: failCurrentWorkflowStep(current.steps.length > 0 ? current.steps : steps, message),
       trace: null,
     }));
     onFailure?.(message);
@@ -148,46 +151,19 @@ export function traceStepsToThinkingSteps(steps: GenerationTrace['steps']): AITh
 }
 
 export function currentRunningStep(steps: AIThinkingStep[]) {
-  return steps.find((step) => step.status === 'running') ?? steps.find((step) => step.status === 'pending') ?? null;
+  return currentWorkflowStep(steps);
 }
 
 export function traceStepStatusLabel(status: string) {
-  if (status === 'running') {
-    return '执行中';
-  }
-  if (status === 'pending') {
-    return '等待中';
-  }
-  if (status === 'succeeded') {
-    return '完成';
-  }
-  if (status === 'failed') {
-    return '失败';
-  }
-  if (status === 'skipped') {
-    return '跳过';
-  }
-  return status;
+  return workflowStepStatusLabel(status);
 }
 
 export function traceStepStatusColor(status: string): 'default' | 'success' | 'error' | 'warning' | 'info' {
-  if (status === 'running') {
-    return 'info';
-  }
-  if (status === 'succeeded') {
-    return 'success';
-  }
-  if (status === 'failed') {
-    return 'error';
-  }
-  if (status === 'skipped') {
-    return 'warning';
-  }
-  return 'default';
+  return workflowStepStatusColor(status);
 }
 
 function formattingThinkingSteps(fallback?: boolean): AIThinkingStep[] {
-  return createThinkingSteps([
+  return createWorkflowSteps([
     { id: 'read_input', label: '读取输入', summary: '正在读取用户提供的关键词和素材。' },
     { id: 'extract_theme', label: '识别核心主题', summary: '正在提取可复用的主题词和素材点。' },
     { id: 'organize_goal', label: '整理生成目标', summary: '正在把零散输入整理成清晰目标。' },
@@ -197,25 +173,6 @@ function formattingThinkingSteps(fallback?: boolean): AIThinkingStep[] {
   ]);
 }
 
-function createThinkingSteps(items: Array<{ id: string; label: string; summary: string; details?: string[] }>): AIThinkingStep[] {
-  return items.map((item, index) => ({
-    id: item.id,
-    label: item.label,
-    status: index === 0 ? 'running' : 'pending',
-    summary: item.summary,
-    details: item.details ?? [],
-    warnings: [],
-  }));
-}
-
-function completeThinkingSteps(steps: AIThinkingStep[], warning?: string): AIThinkingStep[] {
-  return steps.map((step, index) => ({
-    ...step,
-    status: 'succeeded',
-    warnings: warning && index === steps.length - 1 ? [warning] : step.warnings,
-  }));
-}
-
 function thinkingStepDurations(stepCount: number, totalDurationMs = defaultThinkingTraceDurationMs): number[] {
   if (stepCount <= 0) {
     return [];
@@ -223,27 +180,6 @@ function thinkingStepDurations(stepCount: number, totalDurationMs = defaultThink
   const baseDuration = Math.floor(totalDurationMs / stepCount);
   const remainder = totalDurationMs - baseDuration * stepCount;
   return Array.from({ length: stepCount }, (_, index) => baseDuration + (index < remainder ? 1 : 0));
-}
-
-function activateThinkingStep(steps: AIThinkingStep[], activeIndex: number): AIThinkingStep[] {
-  return steps.map((step, index) => ({
-    ...step,
-    status: index < activeIndex ? 'succeeded' : index === activeIndex ? 'running' : 'pending',
-    warnings: [],
-  }));
-}
-
-function failCurrentThinkingStep(steps: AIThinkingStep[], message: string): AIThinkingStep[] {
-  if (steps.length === 0) {
-    return steps;
-  }
-  const runningIndex = steps.findIndex((step) => step.status === 'running');
-  const failedIndex = runningIndex >= 0 ? runningIndex : steps.length - 1;
-  return steps.map((step, index) => ({
-    ...step,
-    status: index === failedIndex ? 'failed' : step.status,
-    warnings: index === failedIndex ? [message] : step.warnings,
-  }));
 }
 
 function wait(ms: number) {

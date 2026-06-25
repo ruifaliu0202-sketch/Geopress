@@ -18,7 +18,7 @@ export type ViewKey =
 
 export type DialogKey =
   | 'knowledgeBase'
-  | 'knowledgeItem'
+  | 'knowledgeAsset'
   | 'mediaAccount'
   | 'mediaAccountLogin'
   | 'content'

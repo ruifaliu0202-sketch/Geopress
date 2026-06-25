@@ -14,34 +14,37 @@ import (
 )
 
 type Snapshot struct {
-	Users                   []model.User
-	SubscriptionPlans       []model.SubscriptionPlan
-	Workspaces              []model.Workspace
-	Members                 []model.WorkspaceMember
-	KnowledgeBases          []model.KnowledgeBase
-	KnowledgeItems          []model.KnowledgeItem
-	PlatformKnowledgeBases  []model.PlatformKnowledgeBase
-	PlatformKnowledgeItems  []model.PlatformKnowledgeItem
-	Platforms               []model.MediaPlatform
-	Accounts                []model.MediaAccount
-	Contents                []model.Content
-	Schedules               []model.PublishSchedule
-	Jobs                    []model.PublishJob
-	Generations             []model.GenerationRequest
-	TokenUsageEvents        []model.AITokenUsageEvent
-	Campaigns               []model.Campaign
-	CampaignTopics          []model.CampaignTopic
-	CampaignCalendarItems   []model.CampaignCalendarItem
-	CampaignMetrics         []model.CampaignMetric
-	CampaignRollups         []model.CampaignRollup
-	BrandAssets             []model.BrandAsset
-	BrandGuardrails         []model.BrandGuardrail
-	ApprovalWorkflows       []model.ApprovalWorkflow
-	ApprovalTasks           []model.ApprovalTask
-	ComplianceChecks        []model.ComplianceCheck
-	AgencyClientRelations   []model.AgencyClientRelation
-	ReportPackages          []model.ReportPackage
-	StrategyRecommendations []model.StrategyRecommendation
+	Users                    []model.User
+	SubscriptionPlans        []model.SubscriptionPlan
+	Workspaces               []model.Workspace
+	Members                  []model.WorkspaceMember
+	KnowledgeBases           []model.KnowledgeBase
+	KnowledgeItems           []model.KnowledgeItem
+	KnowledgeAssets          []model.KnowledgeAsset
+	KnowledgeChunks          []model.KnowledgeChunk
+	KnowledgeProcessingTasks []model.KnowledgeProcessingTask
+	PlatformKnowledgeBases   []model.PlatformKnowledgeBase
+	PlatformKnowledgeItems   []model.PlatformKnowledgeItem
+	Platforms                []model.MediaPlatform
+	Accounts                 []model.MediaAccount
+	Contents                 []model.Content
+	Schedules                []model.PublishSchedule
+	Jobs                     []model.PublishJob
+	Generations              []model.GenerationRequest
+	TokenUsageEvents         []model.AITokenUsageEvent
+	Campaigns                []model.Campaign
+	CampaignTopics           []model.CampaignTopic
+	CampaignCalendarItems    []model.CampaignCalendarItem
+	CampaignMetrics          []model.CampaignMetric
+	CampaignRollups          []model.CampaignRollup
+	BrandAssets              []model.BrandAsset
+	BrandGuardrails          []model.BrandGuardrail
+	ApprovalWorkflows        []model.ApprovalWorkflow
+	ApprovalTasks            []model.ApprovalTask
+	ComplianceChecks         []model.ComplianceCheck
+	AgencyClientRelations    []model.AgencyClientRelation
+	ReportPackages           []model.ReportPackage
+	StrategyRecommendations  []model.StrategyRecommendation
 }
 
 type CreatorSnapshot struct {
@@ -83,6 +86,15 @@ func (db *DB) LoadSnapshot(ctx context.Context) (Snapshot, error) {
 		return Snapshot{}, err
 	}
 	if snapshot.KnowledgeItems, err = db.loadKnowledgeItems(ctx); err != nil {
+		return Snapshot{}, err
+	}
+	if snapshot.KnowledgeAssets, err = db.loadKnowledgeAssets(ctx); err != nil {
+		return Snapshot{}, err
+	}
+	if snapshot.KnowledgeChunks, err = db.loadKnowledgeChunks(ctx); err != nil {
+		return Snapshot{}, err
+	}
+	if snapshot.KnowledgeProcessingTasks, err = db.loadKnowledgeProcessingTasks(ctx); err != nil {
 		return Snapshot{}, err
 	}
 	if snapshot.PlatformKnowledgeBases, err = db.loadPlatformKnowledgeBases(ctx); err != nil {
@@ -475,11 +487,14 @@ func (db *DB) loadKnowledgeBases(ctx context.Context) ([]model.KnowledgeBase, er
 			kb.workspace_id,
 			kb.name,
 			kb.description,
-			COUNT(kib.knowledge_item_id)::int AS item_count,
+			COALESCE(kb.status, 'active') AS status,
+			COUNT(kab.asset_id)::int AS item_count,
+			kb.deleted_at,
+			kb.delete_expires_at,
 			kb.updated_at
 		FROM knowledge_bases kb
-		LEFT JOIN knowledge_item_bases kib ON kib.knowledge_base_id = kb.id
-		GROUP BY kb.id, kb.workspace_id, kb.name, kb.description, kb.updated_at
+		LEFT JOIN knowledge_asset_bases kab ON kab.knowledge_base_id = kb.id
+		GROUP BY kb.id, kb.workspace_id, kb.name, kb.description, kb.status, kb.deleted_at, kb.delete_expires_at, kb.updated_at
 		ORDER BY kb.updated_at DESC, kb.id ASC
 	`)
 	if err != nil {
@@ -490,8 +505,29 @@ func (db *DB) loadKnowledgeBases(ctx context.Context) ([]model.KnowledgeBase, er
 	items := []model.KnowledgeBase{}
 	for rows.Next() {
 		var item model.KnowledgeBase
-		if err := rows.Scan(&item.ID, &item.WorkspaceID, &item.Name, &item.Description, &item.ItemCount, &item.UpdatedAt); err != nil {
+		var deletedAt sql.NullTime
+		var deleteExpiresAt sql.NullTime
+		if err := rows.Scan(
+			&item.ID,
+			&item.WorkspaceID,
+			&item.Name,
+			&item.Description,
+			&item.Status,
+			&item.ItemCount,
+			&deletedAt,
+			&deleteExpiresAt,
+			&item.UpdatedAt,
+		); err != nil {
 			return nil, err
+		}
+		if item.Status == "" {
+			item.Status = "active"
+		}
+		if deletedAt.Valid {
+			item.DeletedAt = &deletedAt.Time
+		}
+		if deleteExpiresAt.Valid {
+			item.DeleteExpiresAt = &deleteExpiresAt.Time
 		}
 		items = append(items, item)
 	}
@@ -527,6 +563,228 @@ func (db *DB) loadKnowledgeItems(ctx context.Context) ([]model.KnowledgeItem, er
 			return nil, err
 		}
 		item.KnowledgeBaseIDs = decodeStringSlice(baseIDs)
+		items = append(items, item)
+	}
+	return items, rows.Err()
+}
+
+func (db *DB) loadKnowledgeAssets(ctx context.Context) ([]model.KnowledgeAsset, error) {
+	return db.listKnowledgeAssets(ctx, "", "")
+}
+
+func (db *DB) loadKnowledgeChunks(ctx context.Context) ([]model.KnowledgeChunk, error) {
+	return db.listKnowledgeChunks(ctx, "", "", "")
+}
+
+func (db *DB) loadKnowledgeProcessingTasks(ctx context.Context) ([]model.KnowledgeProcessingTask, error) {
+	return db.listKnowledgeProcessingTasks(ctx, "", "")
+}
+
+func (db *DB) listKnowledgeAssets(ctx context.Context, workspaceID string, knowledgeBaseID string) ([]model.KnowledgeAsset, error) {
+	rows, err := db.conn.QueryContext(ctx, `
+		SELECT
+			ka.id,
+			ka.workspace_id,
+			ka.title,
+			ka.asset_type,
+			ka.mime_type,
+			ka.original_filename,
+			ka.storage_key,
+			ka.checksum,
+			ka.source_data,
+			ka.status,
+			ka.error_message,
+			ka.progress,
+			ka.extracted_text,
+			ka.ai_enhancement_enabled,
+			ka.ai_enhancement_status,
+			ka.metadata::text,
+			ka.deleted_at,
+			ka.delete_expires_at,
+			ka.created_at,
+			ka.updated_at,
+			COALESCE(jsonb_agg(kab.knowledge_base_id ORDER BY kab.knowledge_base_id) FILTER (WHERE kab.knowledge_base_id IS NOT NULL), '[]'::jsonb)::text AS knowledge_base_ids
+		FROM knowledge_assets ka
+		LEFT JOIN knowledge_asset_bases kab ON kab.asset_id = ka.id
+		WHERE ($1 = '' OR ka.workspace_id = $1)
+		  AND ($2 = '' OR EXISTS (
+			SELECT 1
+			FROM knowledge_asset_bases filter_kab
+			WHERE filter_kab.asset_id = ka.id
+			  AND filter_kab.knowledge_base_id = $2
+		  ))
+		GROUP BY ka.id
+		ORDER BY ka.updated_at DESC, ka.id ASC
+	`, workspaceID, knowledgeBaseID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	items := []model.KnowledgeAsset{}
+	for rows.Next() {
+		var item model.KnowledgeAsset
+		var metadata string
+		var baseIDs string
+		var deletedAt sql.NullTime
+		var deleteExpiresAt sql.NullTime
+		if err := rows.Scan(
+			&item.ID,
+			&item.WorkspaceID,
+			&item.Title,
+			&item.AssetType,
+			&item.MimeType,
+			&item.OriginalFilename,
+			&item.StorageKey,
+			&item.Checksum,
+			&item.SourceData,
+			&item.Status,
+			&item.ErrorMessage,
+			&item.Progress,
+			&item.ExtractedText,
+			&item.AIEnhancementEnabled,
+			&item.AIEnhancementStatus,
+			&metadata,
+			&deletedAt,
+			&deleteExpiresAt,
+			&item.CreatedAt,
+			&item.UpdatedAt,
+			&baseIDs,
+		); err != nil {
+			return nil, err
+		}
+		item.KnowledgeBaseIDs = decodeStringSlice(baseIDs)
+		item.Metadata = decodeAnyMap(metadata)
+		if deletedAt.Valid {
+			item.DeletedAt = &deletedAt.Time
+		}
+		if deleteExpiresAt.Valid {
+			item.DeleteExpiresAt = &deleteExpiresAt.Time
+		}
+		items = append(items, item)
+	}
+	return items, rows.Err()
+}
+
+func (db *DB) listKnowledgeChunks(ctx context.Context, workspaceID string, assetID string, knowledgeBaseID string) ([]model.KnowledgeChunk, error) {
+	rows, err := db.conn.QueryContext(ctx, `
+		SELECT
+			kc.id,
+			kc.asset_id,
+			kc.workspace_id,
+			kc.chunk_index,
+			kc.title,
+			kc.content,
+			kc.search_text,
+			kc.summary,
+			to_json(kc.tags)::text,
+			kc.metadata::text,
+			kc.enabled,
+			kc.embedding_status,
+			kc.embedding_error,
+			kc.updated_at,
+			COALESCE(jsonb_agg(kcb.knowledge_base_id ORDER BY kcb.knowledge_base_id) FILTER (WHERE kcb.knowledge_base_id IS NOT NULL), '[]'::jsonb)::text AS knowledge_base_ids
+		FROM knowledge_chunks kc
+		LEFT JOIN knowledge_chunk_bases kcb ON kcb.chunk_id = kc.id
+		WHERE ($1 = '' OR kc.workspace_id = $1)
+		  AND ($2 = '' OR kc.asset_id = $2)
+		  AND ($3 = '' OR EXISTS (
+			SELECT 1
+			FROM knowledge_chunk_bases filter_kcb
+			WHERE filter_kcb.chunk_id = kc.id
+			  AND filter_kcb.knowledge_base_id = $3
+		  ))
+		GROUP BY kc.id
+		ORDER BY kc.updated_at DESC, kc.asset_id ASC, kc.chunk_index ASC, kc.id ASC
+	`, workspaceID, assetID, knowledgeBaseID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	items := []model.KnowledgeChunk{}
+	for rows.Next() {
+		var item model.KnowledgeChunk
+		var tags string
+		var metadata string
+		var baseIDs string
+		if err := rows.Scan(
+			&item.ID,
+			&item.AssetID,
+			&item.WorkspaceID,
+			&item.ChunkIndex,
+			&item.Title,
+			&item.Content,
+			&item.SearchText,
+			&item.Summary,
+			&tags,
+			&metadata,
+			&item.Enabled,
+			&item.EmbeddingStatus,
+			&item.EmbeddingError,
+			&item.UpdatedAt,
+			&baseIDs,
+		); err != nil {
+			return nil, err
+		}
+		item.KnowledgeBaseIDs = decodeStringSlice(baseIDs)
+		item.Tags = decodeStringSlice(tags)
+		item.Metadata = decodeAnyMap(metadata)
+		items = append(items, item)
+	}
+	return items, rows.Err()
+}
+
+func (db *DB) listKnowledgeProcessingTasks(ctx context.Context, workspaceID string, assetID string) ([]model.KnowledgeProcessingTask, error) {
+	rows, err := db.conn.QueryContext(ctx, `
+		SELECT
+			id,
+			asset_id,
+			workspace_id,
+			task_type,
+			status,
+			progress,
+			error_message,
+			created_at,
+			started_at,
+			finished_at,
+			updated_at
+		FROM knowledge_processing_tasks
+		WHERE ($1 = '' OR workspace_id = $1)
+		  AND ($2 = '' OR asset_id = $2)
+		ORDER BY created_at DESC, id ASC
+	`, workspaceID, assetID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	items := []model.KnowledgeProcessingTask{}
+	for rows.Next() {
+		var item model.KnowledgeProcessingTask
+		var startedAt sql.NullTime
+		var finishedAt sql.NullTime
+		if err := rows.Scan(
+			&item.ID,
+			&item.AssetID,
+			&item.WorkspaceID,
+			&item.TaskType,
+			&item.Status,
+			&item.Progress,
+			&item.ErrorMessage,
+			&item.CreatedAt,
+			&startedAt,
+			&finishedAt,
+			&item.UpdatedAt,
+		); err != nil {
+			return nil, err
+		}
+		if startedAt.Valid {
+			item.StartedAt = &startedAt.Time
+		}
+		if finishedAt.Valid {
+			item.FinishedAt = &finishedAt.Time
+		}
 		items = append(items, item)
 	}
 	return items, rows.Err()
@@ -1046,14 +1304,36 @@ func (db *DB) SaveKnowledgeBase(ctx context.Context, item model.KnowledgeBase) e
 	}
 	updatedAt := defaultTime(item.UpdatedAt)
 	_, err := db.conn.ExecContext(ctx, `
-		INSERT INTO knowledge_bases (id, workspace_id, name, description, created_at, updated_at)
-		VALUES ($1, $2, $3, $4, $5, $6)
+		INSERT INTO knowledge_bases (
+			id,
+			workspace_id,
+			name,
+			description,
+			status,
+			deleted_at,
+			delete_expires_at,
+			created_at,
+			updated_at
+		)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
 		ON CONFLICT (id) DO UPDATE SET
 			workspace_id = EXCLUDED.workspace_id,
 			name = EXCLUDED.name,
 			description = EXCLUDED.description,
+			status = EXCLUDED.status,
+			deleted_at = EXCLUDED.deleted_at,
+			delete_expires_at = EXCLUDED.delete_expires_at,
 			updated_at = EXCLUDED.updated_at
-	`, item.ID, item.WorkspaceID, item.Name, item.Description, updatedAt, updatedAt)
+	`, item.ID,
+		item.WorkspaceID,
+		item.Name,
+		item.Description,
+		defaultKnowledgeBaseStatus(item.Status),
+		item.DeletedAt,
+		item.DeleteExpiresAt,
+		updatedAt,
+		updatedAt,
+	)
 	return err
 }
 
@@ -1123,6 +1403,530 @@ func (db *DB) AssignKnowledgeItemsToBases(ctx context.Context, workspaceID strin
 		}
 	}
 	return tx.Commit()
+}
+
+func (db *DB) ListKnowledgeAssets(ctx context.Context, workspaceID string, knowledgeBaseID string) ([]model.KnowledgeAsset, error) {
+	if db == nil || db.conn == nil {
+		return []model.KnowledgeAsset{}, nil
+	}
+	return db.listKnowledgeAssets(ctx, workspaceID, knowledgeBaseID)
+}
+
+func (db *DB) ListKnowledgeChunks(ctx context.Context, workspaceID string, assetID string, knowledgeBaseID string) ([]model.KnowledgeChunk, error) {
+	if db == nil || db.conn == nil {
+		return []model.KnowledgeChunk{}, nil
+	}
+	return db.listKnowledgeChunks(ctx, workspaceID, assetID, knowledgeBaseID)
+}
+
+func (db *DB) ListKnowledgeProcessingTasks(ctx context.Context, workspaceID string, assetID string) ([]model.KnowledgeProcessingTask, error) {
+	if db == nil || db.conn == nil {
+		return []model.KnowledgeProcessingTask{}, nil
+	}
+	return db.listKnowledgeProcessingTasks(ctx, workspaceID, assetID)
+}
+
+func (db *DB) SaveKnowledgeAsset(ctx context.Context, item model.KnowledgeAsset) error {
+	if db == nil || db.conn == nil {
+		return nil
+	}
+	tx, err := db.conn.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer func() {
+		_ = tx.Rollback()
+	}()
+
+	now := time.Now().UTC()
+	createdAt := item.CreatedAt
+	if createdAt.IsZero() {
+		createdAt = now
+	}
+	updatedAt := defaultTime(item.UpdatedAt)
+	metadata, err := jsonText(item.Metadata)
+	if err != nil {
+		return err
+	}
+	_, err = tx.ExecContext(ctx, `
+		INSERT INTO knowledge_assets (
+			id,
+			workspace_id,
+			title,
+			asset_type,
+			mime_type,
+			original_filename,
+			storage_key,
+			checksum,
+			source_data,
+			status,
+			error_message,
+			progress,
+			extracted_text,
+			ai_enhancement_enabled,
+			ai_enhancement_status,
+			metadata,
+			deleted_at,
+			delete_expires_at,
+			created_at,
+			updated_at
+		)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16::jsonb, $17, $18, $19, $20)
+		ON CONFLICT (id) DO UPDATE SET
+			workspace_id = EXCLUDED.workspace_id,
+			title = EXCLUDED.title,
+			asset_type = EXCLUDED.asset_type,
+			mime_type = EXCLUDED.mime_type,
+			original_filename = EXCLUDED.original_filename,
+			storage_key = EXCLUDED.storage_key,
+			checksum = EXCLUDED.checksum,
+			source_data = EXCLUDED.source_data,
+			status = EXCLUDED.status,
+			error_message = EXCLUDED.error_message,
+			progress = EXCLUDED.progress,
+			extracted_text = EXCLUDED.extracted_text,
+			ai_enhancement_enabled = EXCLUDED.ai_enhancement_enabled,
+			ai_enhancement_status = EXCLUDED.ai_enhancement_status,
+			metadata = EXCLUDED.metadata,
+			deleted_at = EXCLUDED.deleted_at,
+			delete_expires_at = EXCLUDED.delete_expires_at,
+			updated_at = EXCLUDED.updated_at
+	`, item.ID,
+		item.WorkspaceID,
+		item.Title,
+		item.AssetType,
+		item.MimeType,
+		item.OriginalFilename,
+		item.StorageKey,
+		item.Checksum,
+		item.SourceData,
+		defaultKnowledgeAssetStatus(item.Status),
+		item.ErrorMessage,
+		item.Progress,
+		item.ExtractedText,
+		item.AIEnhancementEnabled,
+		defaultKnowledgeAIEnhancementStatus(item.AIEnhancementStatus, item.AIEnhancementEnabled),
+		metadata,
+		item.DeletedAt,
+		item.DeleteExpiresAt,
+		createdAt,
+		updatedAt,
+	)
+	if err != nil {
+		return err
+	}
+	if err = replaceKnowledgeAssetBases(ctx, tx, item.ID, item.WorkspaceID, item.KnowledgeBaseIDs); err != nil {
+		return err
+	}
+	return tx.Commit()
+}
+
+func (db *DB) SaveKnowledgeChunk(ctx context.Context, item model.KnowledgeChunk) error {
+	if db == nil || db.conn == nil {
+		return nil
+	}
+	tx, err := db.conn.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer func() {
+		_ = tx.Rollback()
+	}()
+
+	updatedAt := defaultTime(item.UpdatedAt)
+	metadata, err := jsonText(item.Metadata)
+	if err != nil {
+		return err
+	}
+	_, err = tx.ExecContext(ctx, `
+		INSERT INTO knowledge_chunks (
+			id,
+			asset_id,
+			workspace_id,
+			chunk_index,
+			title,
+			content,
+			search_text,
+			summary,
+			tags,
+			metadata,
+			enabled,
+			embedding_status,
+			embedding_error,
+			created_at,
+			updated_at
+		)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9::text[], $10::jsonb, $11, $12, $13, $14, $15)
+		ON CONFLICT (id) DO UPDATE SET
+			asset_id = EXCLUDED.asset_id,
+			workspace_id = EXCLUDED.workspace_id,
+			chunk_index = EXCLUDED.chunk_index,
+			title = EXCLUDED.title,
+			content = EXCLUDED.content,
+			search_text = EXCLUDED.search_text,
+			summary = EXCLUDED.summary,
+			tags = EXCLUDED.tags,
+			metadata = EXCLUDED.metadata,
+			enabled = EXCLUDED.enabled,
+			embedding_status = EXCLUDED.embedding_status,
+			embedding_error = EXCLUDED.embedding_error,
+			updated_at = EXCLUDED.updated_at
+	`, item.ID,
+		item.AssetID,
+		item.WorkspaceID,
+		item.ChunkIndex,
+		item.Title,
+		item.Content,
+		item.SearchText,
+		item.Summary,
+		pgTextArray(item.Tags),
+		metadata,
+		item.Enabled,
+		defaultKnowledgeEmbeddingStatus(item.EmbeddingStatus),
+		item.EmbeddingError,
+		updatedAt,
+		updatedAt,
+	)
+	if err != nil {
+		return err
+	}
+	if err = replaceKnowledgeChunkBases(ctx, tx, item.ID, item.WorkspaceID, item.KnowledgeBaseIDs); err != nil {
+		return err
+	}
+	return tx.Commit()
+}
+
+func (db *DB) ReplaceKnowledgeChunksForAsset(ctx context.Context, assetID string, workspaceID string, items []model.KnowledgeChunk) error {
+	if db == nil || db.conn == nil {
+		return nil
+	}
+	tx, err := db.conn.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer func() {
+		_ = tx.Rollback()
+	}()
+
+	if _, err := tx.ExecContext(ctx, `DELETE FROM knowledge_chunks WHERE asset_id = $1 AND workspace_id = $2`, assetID, workspaceID); err != nil {
+		return err
+	}
+	for _, item := range items {
+		updatedAt := defaultTime(item.UpdatedAt)
+		metadata, err := jsonText(item.Metadata)
+		if err != nil {
+			return err
+		}
+		if _, err := tx.ExecContext(ctx, `
+			INSERT INTO knowledge_chunks (
+				id,
+				asset_id,
+				workspace_id,
+				chunk_index,
+				title,
+				content,
+				search_text,
+				summary,
+				tags,
+				metadata,
+				enabled,
+				embedding_status,
+				embedding_error,
+				created_at,
+				updated_at
+			)
+			VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9::text[], $10::jsonb, $11, $12, $13, $14, $15)
+		`, item.ID,
+			item.AssetID,
+			item.WorkspaceID,
+			item.ChunkIndex,
+			item.Title,
+			item.Content,
+			item.SearchText,
+			item.Summary,
+			pgTextArray(item.Tags),
+			metadata,
+			item.Enabled,
+			defaultKnowledgeEmbeddingStatus(item.EmbeddingStatus),
+			item.EmbeddingError,
+			updatedAt,
+			updatedAt,
+		); err != nil {
+			return err
+		}
+		if err := replaceKnowledgeChunkBases(ctx, tx, item.ID, item.WorkspaceID, item.KnowledgeBaseIDs); err != nil {
+			return err
+		}
+	}
+	return tx.Commit()
+}
+
+func (db *DB) AssignKnowledgeAssetToBases(ctx context.Context, workspaceID string, assetID string, knowledgeBaseIDs []string, updatedAt time.Time) error {
+	if db == nil || db.conn == nil {
+		return nil
+	}
+	tx, err := db.conn.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer func() {
+		_ = tx.Rollback()
+	}()
+
+	if updatedAt.IsZero() {
+		updatedAt = time.Now().UTC()
+	}
+	var exists bool
+	if err := tx.QueryRowContext(ctx, `
+		SELECT EXISTS (
+			SELECT 1
+			FROM knowledge_assets
+			WHERE id = $1 AND workspace_id = $2
+		)
+	`, assetID, workspaceID).Scan(&exists); err != nil {
+		return err
+	}
+	if !exists {
+		return sql.ErrNoRows
+	}
+
+	if err := replaceKnowledgeAssetBases(ctx, tx, assetID, workspaceID, knowledgeBaseIDs); err != nil {
+		return err
+	}
+	if _, err := tx.ExecContext(ctx, `
+		DELETE FROM knowledge_chunk_bases
+		WHERE workspace_id = $1
+		  AND chunk_id IN (
+			SELECT id
+			FROM knowledge_chunks
+			WHERE asset_id = $2 AND workspace_id = $1
+		  )
+	`, workspaceID, assetID); err != nil {
+		return err
+	}
+	for _, baseID := range knowledgeBaseIDs {
+		if _, err := tx.ExecContext(ctx, `
+			INSERT INTO knowledge_chunk_bases (chunk_id, knowledge_base_id, workspace_id)
+			SELECT id, $3, $1
+			FROM knowledge_chunks
+			WHERE asset_id = $2 AND workspace_id = $1
+			ON CONFLICT DO NOTHING
+		`, workspaceID, assetID, baseID); err != nil {
+			return err
+		}
+	}
+	if _, err := tx.ExecContext(ctx, `
+		UPDATE knowledge_assets
+		SET updated_at = $3
+		WHERE id = $1 AND workspace_id = $2
+	`, assetID, workspaceID, updatedAt); err != nil {
+		return err
+	}
+	if _, err := tx.ExecContext(ctx, `
+		UPDATE knowledge_chunks
+		SET updated_at = $3
+		WHERE asset_id = $1 AND workspace_id = $2
+	`, assetID, workspaceID, updatedAt); err != nil {
+		return err
+	}
+	return tx.Commit()
+}
+
+func (db *DB) TrashKnowledgeBase(ctx context.Context, workspaceID string, baseID string, deletedAt time.Time, deleteExpiresAt time.Time) error {
+	if db == nil || db.conn == nil {
+		return nil
+	}
+	result, err := db.conn.ExecContext(ctx, `
+		UPDATE knowledge_bases
+		SET status = 'trashed',
+			deleted_at = $3,
+			delete_expires_at = $4,
+			updated_at = $3
+		WHERE id = $1
+		  AND workspace_id = $2
+	`, baseID, workspaceID, deletedAt, deleteExpiresAt)
+	if err != nil {
+		return err
+	}
+	return requireRowsAffected(result)
+}
+
+func (db *DB) RestoreKnowledgeBase(ctx context.Context, workspaceID string, baseID string, updatedAt time.Time) error {
+	if db == nil || db.conn == nil {
+		return nil
+	}
+	result, err := db.conn.ExecContext(ctx, `
+		UPDATE knowledge_bases
+		SET status = 'active',
+			deleted_at = NULL,
+			delete_expires_at = NULL,
+			updated_at = $3
+		WHERE id = $1
+		  AND workspace_id = $2
+	`, baseID, workspaceID, updatedAt)
+	if err != nil {
+		return err
+	}
+	return requireRowsAffected(result)
+}
+
+func (db *DB) DeleteKnowledgeBase(ctx context.Context, workspaceID string, baseID string) error {
+	if db == nil || db.conn == nil {
+		return nil
+	}
+	result, err := db.conn.ExecContext(ctx, `
+		DELETE FROM knowledge_bases
+		WHERE id = $1
+		  AND workspace_id = $2
+	`, baseID, workspaceID)
+	if err != nil {
+		return err
+	}
+	return requireRowsAffected(result)
+}
+
+func (db *DB) TrashKnowledgeAsset(ctx context.Context, workspaceID string, assetID string, previousStatus string, deletedAt time.Time, deleteExpiresAt time.Time) error {
+	if db == nil || db.conn == nil {
+		return nil
+	}
+	result, err := db.conn.ExecContext(ctx, `
+		UPDATE knowledge_assets
+		SET status = 'archived',
+			metadata = jsonb_set(COALESCE(metadata, '{}'::jsonb), '{previousStatus}', to_jsonb($3::text), true),
+			deleted_at = $4,
+			delete_expires_at = $5,
+			updated_at = $4
+		WHERE id = $1
+		  AND workspace_id = $2
+		  AND deleted_at IS NULL
+	`, assetID, workspaceID, previousStatus, deletedAt, deleteExpiresAt)
+	if err != nil {
+		return err
+	}
+	return requireRowsAffected(result)
+}
+
+func (db *DB) RestoreKnowledgeAsset(ctx context.Context, workspaceID string, assetID string, status string, updatedAt time.Time) error {
+	if db == nil || db.conn == nil {
+		return nil
+	}
+	result, err := db.conn.ExecContext(ctx, `
+		UPDATE knowledge_assets
+		SET status = $3,
+			metadata = COALESCE(metadata, '{}'::jsonb) - 'previousStatus',
+			deleted_at = NULL,
+			delete_expires_at = NULL,
+			updated_at = $4
+		WHERE id = $1
+		  AND workspace_id = $2
+	`, assetID, workspaceID, defaultKnowledgeAssetStatus(status), updatedAt)
+	if err != nil {
+		return err
+	}
+	return requireRowsAffected(result)
+}
+
+func (db *DB) DeleteKnowledgeAsset(ctx context.Context, workspaceID string, assetID string) error {
+	if db == nil || db.conn == nil {
+		return nil
+	}
+	result, err := db.conn.ExecContext(ctx, `
+		DELETE FROM knowledge_assets
+		WHERE id = $1
+		  AND workspace_id = $2
+	`, assetID, workspaceID)
+	if err != nil {
+		return err
+	}
+	return requireRowsAffected(result)
+}
+
+func (db *DB) PurgeExpiredKnowledgeTrash(ctx context.Context, now time.Time) (int, int, error) {
+	if db == nil || db.conn == nil {
+		return 0, 0, nil
+	}
+	tx, err := db.conn.BeginTx(ctx, nil)
+	if err != nil {
+		return 0, 0, err
+	}
+	defer func() {
+		_ = tx.Rollback()
+	}()
+
+	assetResult, err := tx.ExecContext(ctx, `
+		DELETE FROM knowledge_assets
+		WHERE deleted_at IS NOT NULL
+		  AND delete_expires_at IS NOT NULL
+		  AND delete_expires_at <= $1
+	`, now)
+	if err != nil {
+		return 0, 0, err
+	}
+	baseResult, err := tx.ExecContext(ctx, `
+		DELETE FROM knowledge_bases
+		WHERE deleted_at IS NOT NULL
+		  AND delete_expires_at IS NOT NULL
+		  AND delete_expires_at <= $1
+	`, now)
+	if err != nil {
+		return 0, 0, err
+	}
+	if err := tx.Commit(); err != nil {
+		return 0, 0, err
+	}
+	assetCount, _ := assetResult.RowsAffected()
+	baseCount, _ := baseResult.RowsAffected()
+	return int(baseCount), int(assetCount), nil
+}
+
+func (db *DB) SaveKnowledgeProcessingTask(ctx context.Context, item model.KnowledgeProcessingTask) error {
+	if db == nil || db.conn == nil {
+		return nil
+	}
+	now := time.Now().UTC()
+	createdAt := item.CreatedAt
+	if createdAt.IsZero() {
+		createdAt = now
+	}
+	updatedAt := defaultTime(item.UpdatedAt)
+	_, err := db.conn.ExecContext(ctx, `
+		INSERT INTO knowledge_processing_tasks (
+			id,
+			asset_id,
+			workspace_id,
+			task_type,
+			status,
+			progress,
+			error_message,
+			created_at,
+			started_at,
+			finished_at,
+			updated_at
+		)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+		ON CONFLICT (id) DO UPDATE SET
+			asset_id = EXCLUDED.asset_id,
+			workspace_id = EXCLUDED.workspace_id,
+			task_type = EXCLUDED.task_type,
+			status = EXCLUDED.status,
+			progress = EXCLUDED.progress,
+			error_message = EXCLUDED.error_message,
+			started_at = EXCLUDED.started_at,
+			finished_at = EXCLUDED.finished_at,
+			updated_at = EXCLUDED.updated_at
+	`, item.ID,
+		item.AssetID,
+		item.WorkspaceID,
+		defaultKnowledgeProcessingTaskType(item.TaskType),
+		defaultKnowledgeProcessingTaskStatus(item.Status),
+		item.Progress,
+		item.ErrorMessage,
+		createdAt,
+		item.StartedAt,
+		item.FinishedAt,
+		updatedAt,
+	)
+	return err
 }
 
 func (db *DB) SavePlatformKnowledgeBase(ctx context.Context, item model.PlatformKnowledgeBase) error {
@@ -1446,6 +2250,38 @@ func replaceKnowledgeItemBases(ctx context.Context, tx *sql.Tx, itemID string, w
 	return nil
 }
 
+func replaceKnowledgeAssetBases(ctx context.Context, tx *sql.Tx, assetID string, workspaceID string, baseIDs []string) error {
+	if _, err := tx.ExecContext(ctx, `DELETE FROM knowledge_asset_bases WHERE asset_id = $1`, assetID); err != nil {
+		return err
+	}
+	for _, baseID := range baseIDs {
+		if _, err := tx.ExecContext(ctx, `
+			INSERT INTO knowledge_asset_bases (asset_id, knowledge_base_id, workspace_id)
+			VALUES ($1, $2, $3)
+			ON CONFLICT DO NOTHING
+		`, assetID, baseID, workspaceID); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func replaceKnowledgeChunkBases(ctx context.Context, tx *sql.Tx, chunkID string, workspaceID string, baseIDs []string) error {
+	if _, err := tx.ExecContext(ctx, `DELETE FROM knowledge_chunk_bases WHERE chunk_id = $1`, chunkID); err != nil {
+		return err
+	}
+	for _, baseID := range baseIDs {
+		if _, err := tx.ExecContext(ctx, `
+			INSERT INTO knowledge_chunk_bases (chunk_id, knowledge_base_id, workspace_id)
+			VALUES ($1, $2, $3)
+			ON CONFLICT DO NOTHING
+		`, chunkID, baseID, workspaceID); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 func replacePlatformKnowledgeItemBases(ctx context.Context, tx *sql.Tx, itemID string, baseIDs []string) error {
 	if _, err := tx.ExecContext(ctx, `DELETE FROM platform_knowledge_item_bases WHERE platform_knowledge_item_id = $1`, itemID); err != nil {
 		return err
@@ -1584,6 +2420,68 @@ func defaultBillingPeriod(value string, now time.Time) string {
 		return value
 	}
 	return now.Format("2006-01")
+}
+
+func defaultKnowledgeBaseStatus(value string) string {
+	value = strings.TrimSpace(value)
+	if value != "" {
+		return value
+	}
+	return "active"
+}
+
+func defaultKnowledgeAssetStatus(value string) string {
+	value = strings.TrimSpace(value)
+	if value != "" {
+		return value
+	}
+	return "pending"
+}
+
+func defaultKnowledgeAIEnhancementStatus(value string, enabled bool) string {
+	value = strings.TrimSpace(value)
+	if value != "" {
+		return value
+	}
+	if enabled {
+		return "pending"
+	}
+	return "disabled"
+}
+
+func defaultKnowledgeEmbeddingStatus(value string) string {
+	value = strings.TrimSpace(value)
+	if value != "" {
+		return value
+	}
+	return "pending"
+}
+
+func defaultKnowledgeProcessingTaskType(value string) string {
+	value = strings.TrimSpace(value)
+	if value != "" {
+		return value
+	}
+	return "extract"
+}
+
+func defaultKnowledgeProcessingTaskStatus(value string) string {
+	value = strings.TrimSpace(value)
+	if value != "" {
+		return value
+	}
+	return "pending"
+}
+
+func requireRowsAffected(result sql.Result) error {
+	rowsAffected, err := result.RowsAffected()
+	if err != nil {
+		return err
+	}
+	if rowsAffected == 0 {
+		return sql.ErrNoRows
+	}
+	return nil
 }
 
 func pgTextArray(values []string) string {

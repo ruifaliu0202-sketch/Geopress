@@ -5,14 +5,17 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"mime/multipart"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
 	"geopress/backend/internal/ai"
 	"geopress/backend/internal/domain"
 	"geopress/backend/internal/http/middleware"
+	"geopress/backend/internal/integration/browserplatform"
 	publishing "geopress/backend/internal/integration/publisher"
 	"geopress/backend/internal/integration/xiaohongshu"
 	"geopress/backend/internal/model"
@@ -733,6 +736,117 @@ func TestCreateXiaohongshuMediaAccountRejectsPhoneLogin(t *testing.T) {
 	}
 }
 
+func TestDefaultManualMediaPlatformsSupportAccountBindingAndPrepare(t *testing.T) {
+	router := testWorkspaceRouter()
+
+	listReq := httptest.NewRequest(http.MethodGet, "/api/media-platforms", nil)
+	listReq.Header.Set("Authorization", "Bearer demo-token")
+	listReq.Header.Set("X-Workspace-ID", "wks_personal")
+	listRec := httptest.NewRecorder()
+	router.ServeHTTP(listRec, listReq)
+	if listRec.Code != http.StatusOK {
+		t.Fatalf("platform list status = %d, want %d, body = %s", listRec.Code, http.StatusOK, listRec.Body.String())
+	}
+
+	var listResponse struct {
+		Items []model.MediaPlatform `json:"items"`
+	}
+	if err := json.Unmarshal(listRec.Body.Bytes(), &listResponse); err != nil {
+		t.Fatalf("unmarshal list response: %v", err)
+	}
+	for _, expected := range []struct {
+		id              string
+		name            string
+		typ             string
+		credentialField string
+		authMethod      domain.AuthorizationMethod
+	}{
+		{id: "plt_netease", name: "网易号", typ: platformTypeNetease, credentialField: "qrLogin", authMethod: domain.AuthorizationMethodQRLogin},
+		{id: "plt_toutiao", name: "头条号", typ: platformTypeToutiao, credentialField: "qrLogin", authMethod: domain.AuthorizationMethodQRLogin},
+		{id: "plt_sohu", name: "搜狐号", typ: platformTypeSohu, credentialField: "phoneNumber", authMethod: domain.AuthorizationMethodPhoneSMS},
+	} {
+		platform, ok := findMediaPlatformForTest(listResponse.Items, expected.id)
+		if !ok {
+			t.Fatalf("platform %s not found in %#v", expected.id, listResponse.Items)
+		}
+		if platform.Name != expected.name || platform.Type != expected.typ || !platform.Enabled || !platform.SupportsArticle || !platform.SupportsImage || platform.SupportsScheduling {
+			t.Fatalf("unexpected platform metadata for %s: %#v", expected.id, platform)
+		}
+		if len(platform.CredentialFields) != 1 || platform.CredentialFields[0] != expected.credentialField {
+			t.Fatalf("browser platform should require %s: %#v", expected.credentialField, platform)
+		}
+		if len(platform.Capabilities.AuthorizationMethods) != 1 || platform.Capabilities.AuthorizationMethods[0] != expected.authMethod {
+			t.Fatalf("browser platform auth methods = %#v, want %s", platform.Capabilities.AuthorizationMethods, expected.authMethod)
+		}
+		if !platform.Capabilities.HasCapability(domain.ConnectorCapabilityAuthorization) ||
+			!platform.Capabilities.HasCapability(domain.ConnectorCapabilityContentPublish) {
+			t.Fatalf("browser platform should expose authorization and publish capabilities: %#v", platform.Capabilities)
+		}
+	}
+
+	accountBody := bytes.NewBufferString(`{
+		"platformId": "plt_toutiao",
+		"name": "头条号账号",
+		"externalId": "toutiao-demo",
+		"loginMethod": "qr"
+	}`)
+	accountReq := httptest.NewRequest(http.MethodPost, "/api/media-accounts", accountBody)
+	accountReq.Header.Set("Authorization", "Bearer demo-token")
+	accountReq.Header.Set("X-Workspace-ID", "wks_personal")
+	accountReq.Header.Set("Content-Type", "application/json")
+	accountRec := httptest.NewRecorder()
+	router.ServeHTTP(accountRec, accountReq)
+	if accountRec.Code != http.StatusCreated {
+		t.Fatalf("account create status = %d, want %d, body = %s", accountRec.Code, http.StatusCreated, accountRec.Body.String())
+	}
+	var account model.MediaAccount
+	if err := json.Unmarshal(accountRec.Body.Bytes(), &account); err != nil {
+		t.Fatalf("unmarshal account response: %v", err)
+	}
+	if account.PlatformID != "plt_toutiao" || account.Status != "pending_login" || account.LoginMethod != "qr" {
+		t.Fatalf("unexpected browser login account: %#v", account)
+	}
+	_, handler := testWorkspaceRouterWithHandler()
+	handler.accounts = append([]model.MediaAccount{{
+		ID:             account.ID,
+		WorkspaceID:    "wks_personal",
+		PlatformID:     "plt_toutiao",
+		Name:           account.Name,
+		ExternalID:     account.ExternalID,
+		LoginMethod:    "qr",
+		CredentialMeta: map[string]string{"browserProfile": "/tmp/geopress-test-profile"},
+		Status:         "connected",
+	}}, handler.accounts...)
+	router = testRouterForHandler(handler)
+
+	prepareBody := bytes.NewBufferString(fmt.Sprintf(`{
+		"contentId": "cnt_2001",
+		"mediaAccountId": %q
+	}`, account.ID))
+	prepareReq := httptest.NewRequest(http.MethodPost, "/api/publish/prepare", prepareBody)
+	prepareReq.Header.Set("Authorization", "Bearer demo-token")
+	prepareReq.Header.Set("X-Workspace-ID", "wks_personal")
+	prepareReq.Header.Set("Content-Type", "application/json")
+	prepareRec := httptest.NewRecorder()
+	router.ServeHTTP(prepareRec, prepareReq)
+	if prepareRec.Code != http.StatusCreated {
+		t.Fatalf("prepare status = %d, want %d, body = %s", prepareRec.Code, http.StatusCreated, prepareRec.Body.String())
+	}
+	var prepareResponse struct {
+		Job          model.PublishJob        `json:"job"`
+		PreparedPost publishing.PreparedPost `json:"preparedPost"`
+	}
+	if err := json.Unmarshal(prepareRec.Body.Bytes(), &prepareResponse); err != nil {
+		t.Fatalf("unmarshal prepare response: %v", err)
+	}
+	if prepareResponse.PreparedPost.PlatformType != platformTypeToutiao || prepareResponse.PreparedPost.PublishMode != "article" || prepareResponse.PreparedPost.Mode != publishing.ModeBrowserAutomation {
+		t.Fatalf("unexpected prepared post: %#v", prepareResponse.PreparedPost)
+	}
+	if prepareResponse.Job.Status != model.PublishJobManual || prepareResponse.Job.MediaAccountID != account.ID {
+		t.Fatalf("unexpected publish job: %#v", prepareResponse.Job)
+	}
+}
+
 func TestAdminUpdateMediaPlatform(t *testing.T) {
 	router := testWorkspaceRouter()
 	body := bytes.NewBufferString(`{
@@ -787,10 +901,10 @@ func TestAdminUpdateMediaPlatform(t *testing.T) {
 	if err := json.Unmarshal(listRec.Body.Bytes(), &response); err != nil {
 		t.Fatalf("unmarshal list response: %v", err)
 	}
-	if len(response.Items) != 1 {
-		t.Fatalf("media platform count = %d, want 1: %#v", len(response.Items), response.Items)
+	item, ok := findMediaPlatformForTest(response.Items, "plt_xiaohongshu")
+	if !ok {
+		t.Fatalf("updated platform not found in list: %#v", response.Items)
 	}
-	item := response.Items[0]
 	if item.ID != "plt_xiaohongshu" || item.Name != "小红书" || item.Type != "xiaohongshu" {
 		t.Fatalf("updated platform not found in list: %#v", response.Items)
 	}
@@ -798,6 +912,15 @@ func TestAdminUpdateMediaPlatform(t *testing.T) {
 		!item.Capabilities.HasCapability(domain.ConnectorCapabilityContentPublish) {
 		t.Fatalf("list response should include xiaohongshu capability contract: %#v", item.Capabilities)
 	}
+}
+
+func findMediaPlatformForTest(items []model.MediaPlatform, id string) (model.MediaPlatform, bool) {
+	for _, item := range items {
+		if item.ID == id {
+			return item, true
+		}
+	}
+	return model.MediaPlatform{}, false
 }
 
 func TestAdminManagePlatformKnowledgeMarketplace(t *testing.T) {
@@ -880,17 +1003,18 @@ func TestAdminManagePlatformKnowledgeMarketplace(t *testing.T) {
 	t.Fatalf("created base not found in list: %#v", listResponse.Items)
 }
 
-func TestKnowledgeItemsCanBelongToMultipleBases(t *testing.T) {
+func TestKnowledgeAssetBasesCanBeReassigned(t *testing.T) {
 	router := testWorkspaceRouter()
 	base := createWorkspaceKnowledgeBase(t, router, "选题素材包")
 
 	body := bytes.NewBufferString(fmt.Sprintf(`{
-		"knowledgeBaseIds": ["kb_brand", %q],
-		"type": "case",
+		"knowledgeBaseIds": ["kb_brand"],
 		"title": "客户增长案例",
-		"content": "客户通过内容矩阵提升线索质量。"
-	}`, base.ID))
-	req := httptest.NewRequest(http.MethodPost, "/api/knowledge-items", body)
+		"text": "客户通过内容矩阵提升线索质量。",
+		"mimeType": "text/markdown",
+		"originalFilename": "case.md"
+	}`))
+	req := httptest.NewRequest(http.MethodPost, "/api/knowledge-assets", body)
 	req.Header.Set("Authorization", "Bearer demo-token")
 	req.Header.Set("X-Workspace-ID", "wks_acme")
 	req.Header.Set("Content-Type", "application/json")
@@ -898,22 +1022,27 @@ func TestKnowledgeItemsCanBelongToMultipleBases(t *testing.T) {
 	rec := httptest.NewRecorder()
 	router.ServeHTTP(rec, req)
 	if rec.Code != http.StatusCreated {
-		t.Fatalf("create item status = %d, want %d, body = %s", rec.Code, http.StatusCreated, rec.Body.String())
+		t.Fatalf("create asset status = %d, want %d, body = %s", rec.Code, http.StatusCreated, rec.Body.String())
 	}
 
-	var item model.KnowledgeItem
-	if err := json.Unmarshal(rec.Body.Bytes(), &item); err != nil {
-		t.Fatalf("unmarshal item response: %v", err)
+	var created struct {
+		Asset  model.KnowledgeAsset   `json:"asset"`
+		Chunks []model.KnowledgeChunk `json:"chunks"`
 	}
-	if !sameStringSet(item.KnowledgeBaseIDs, []string{"kb_brand", base.ID}) {
-		t.Fatalf("knowledgeBaseIds = %#v, want kb_brand and %s", item.KnowledgeBaseIDs, base.ID)
+	if err := json.Unmarshal(rec.Body.Bytes(), &created); err != nil {
+		t.Fatalf("unmarshal asset response: %v", err)
+	}
+	if !sameStringSet(created.Asset.KnowledgeBaseIDs, []string{"kb_brand"}) {
+		t.Fatalf("created asset knowledgeBaseIds = %#v, want kb_brand", created.Asset.KnowledgeBaseIDs)
+	}
+	if len(created.Chunks) == 0 {
+		t.Fatal("created asset chunks should not be empty")
 	}
 
 	assignBody := bytes.NewBufferString(fmt.Sprintf(`{
-		"knowledgeItemIds": ["kbi_1001"],
 		"knowledgeBaseIds": [%q]
 	}`, base.ID))
-	assignReq := httptest.NewRequest(http.MethodPost, "/api/knowledge-items/assign-bases", assignBody)
+	assignReq := httptest.NewRequest(http.MethodPut, "/api/knowledge-assets/"+created.Asset.ID+"/bases", assignBody)
 	assignReq.Header.Set("Authorization", "Bearer demo-token")
 	assignReq.Header.Set("X-Workspace-ID", "wks_acme")
 	assignReq.Header.Set("Content-Type", "application/json")
@@ -924,7 +1053,21 @@ func TestKnowledgeItemsCanBelongToMultipleBases(t *testing.T) {
 		t.Fatalf("assign status = %d, want %d, body = %s", assignRec.Code, http.StatusOK, assignRec.Body.String())
 	}
 
-	listReq := httptest.NewRequest(http.MethodGet, "/api/knowledge-items", nil)
+	var reassigned struct {
+		Asset  model.KnowledgeAsset   `json:"asset"`
+		Chunks []model.KnowledgeChunk `json:"chunks"`
+	}
+	if err := json.Unmarshal(assignRec.Body.Bytes(), &reassigned); err != nil {
+		t.Fatalf("unmarshal reassigned response: %v", err)
+	}
+	if !sameStringSet(reassigned.Asset.KnowledgeBaseIDs, []string{base.ID}) {
+		t.Fatalf("reassigned asset knowledgeBaseIds = %#v, want %s", reassigned.Asset.KnowledgeBaseIDs, base.ID)
+	}
+	if len(reassigned.Chunks) == 0 || !sameStringSet(reassigned.Chunks[0].KnowledgeBaseIDs, []string{base.ID}) {
+		t.Fatalf("reassigned chunk knowledgeBaseIds = %#v, want %s", reassigned.Chunks, base.ID)
+	}
+
+	listReq := httptest.NewRequest(http.MethodGet, "/api/knowledge-assets?knowledgeBaseId="+base.ID, nil)
 	listReq.Header.Set("Authorization", "Bearer demo-token")
 	listReq.Header.Set("X-Workspace-ID", "wks_acme")
 	listRec := httptest.NewRecorder()
@@ -934,117 +1077,678 @@ func TestKnowledgeItemsCanBelongToMultipleBases(t *testing.T) {
 	}
 
 	var listResponse struct {
-		Items []model.KnowledgeItem `json:"items"`
+		Items []model.KnowledgeAsset `json:"items"`
 	}
 	if err := json.Unmarshal(listRec.Body.Bytes(), &listResponse); err != nil {
 		t.Fatalf("unmarshal list response: %v", err)
 	}
 
-	for _, listedItem := range listResponse.Items {
-		if listedItem.ID == "kbi_1001" && sameStringSet(listedItem.KnowledgeBaseIDs, []string{"kb_brand", base.ID}) {
+	for _, listedAsset := range listResponse.Items {
+		if listedAsset.ID == created.Asset.ID && sameStringSet(listedAsset.KnowledgeBaseIDs, []string{base.ID}) {
 			return
 		}
 	}
-	t.Fatalf("assigned item with both bases not found in list: %#v", listResponse.Items)
+	t.Fatalf("reassigned asset not found in base-filtered list: %#v", listResponse.Items)
 }
 
-func TestFormatKnowledgeItemRequiresVIP(t *testing.T) {
+func TestCreateKnowledgeAssetFromJSONProcessesText(t *testing.T) {
 	router := testWorkspaceRouter()
+
 	body := bytes.NewBufferString(`{
-		"type": "brand",
-		"title": "品牌提示词",
-		"content": "面向增长团队，语气专业。"
+		"knowledgeBaseIds": ["kb_brand"],
+		"title": "增长素材",
+		"text": "# 增长素材\n\n客户通过内容矩阵提升线索质量，并建立稳定复盘机制。",
+		"mimeType": "text/markdown",
+		"originalFilename": "growth.md",
+		"tags": ["增长", "复盘"]
 	}`)
-	req := httptest.NewRequest(http.MethodPost, "/api/knowledge-items/format", body)
+	req := httptest.NewRequest(http.MethodPost, "/api/knowledge-assets", body)
+	req.Header.Set("Authorization", "Bearer demo-token")
+	req.Header.Set("X-Workspace-ID", "wks_acme")
+	req.Header.Set("Content-Type", "application/json")
+
+	rec := httptest.NewRecorder()
+	router.ServeHTTP(rec, req)
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("create asset status = %d, want %d, body = %s", rec.Code, http.StatusCreated, rec.Body.String())
+	}
+
+	var response struct {
+		Asset  model.KnowledgeAsset          `json:"asset"`
+		Task   model.KnowledgeProcessingTask `json:"task"`
+		Chunks []model.KnowledgeChunk        `json:"chunks"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &response); err != nil {
+		t.Fatalf("unmarshal asset response: %v", err)
+	}
+	if response.Asset.Status != "ready" || response.Asset.Progress != 100 {
+		t.Fatalf("asset status/progress = %s/%d, want ready/100", response.Asset.Status, response.Asset.Progress)
+	}
+	if response.Task.Status != "succeeded" {
+		t.Fatalf("task status = %s, want succeeded", response.Task.Status)
+	}
+	if len(response.Chunks) == 0 {
+		t.Fatalf("chunks is empty")
+	}
+	if !sameStringSet(response.Chunks[0].KnowledgeBaseIDs, []string{"kb_brand"}) {
+		t.Fatalf("chunk knowledgeBaseIds = %#v, want kb_brand", response.Chunks[0].KnowledgeBaseIDs)
+	}
+	if !bytes.Contains([]byte(response.Chunks[0].SearchText), []byte("品牌与产品资料")) {
+		t.Fatalf("searchText does not include knowledge base name: %s", response.Chunks[0].SearchText)
+	}
+
+	chunkReq := httptest.NewRequest(http.MethodGet, "/api/knowledge-assets/"+response.Asset.ID+"/chunks", nil)
+	chunkReq.Header.Set("Authorization", "Bearer demo-token")
+	chunkReq.Header.Set("X-Workspace-ID", "wks_acme")
+	chunkRec := httptest.NewRecorder()
+	router.ServeHTTP(chunkRec, chunkReq)
+	if chunkRec.Code != http.StatusOK {
+		t.Fatalf("list chunks status = %d, want %d, body = %s", chunkRec.Code, http.StatusOK, chunkRec.Body.String())
+	}
+}
+
+func TestCreateKnowledgeAssetAllowsUnclassifiedAsset(t *testing.T) {
+	router := testWorkspaceRouter()
+
+	body := bytes.NewBufferString(`{
+		"title": "未分类产品定位",
+		"text": "产品定位：面向内容团队的自动发布平台。",
+		"mimeType": "text/markdown",
+		"originalFilename": "positioning.md"
+	}`)
+	req := httptest.NewRequest(http.MethodPost, "/api/knowledge-assets", body)
+	req.Header.Set("Authorization", "Bearer demo-token")
+	req.Header.Set("X-Workspace-ID", "wks_acme")
+	req.Header.Set("Content-Type", "application/json")
+
+	rec := httptest.NewRecorder()
+	router.ServeHTTP(rec, req)
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("create unclassified asset status = %d, want %d, body = %s", rec.Code, http.StatusCreated, rec.Body.String())
+	}
+
+	var response struct {
+		Asset  model.KnowledgeAsset   `json:"asset"`
+		Chunks []model.KnowledgeChunk `json:"chunks"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &response); err != nil {
+		t.Fatalf("unmarshal unclassified asset response: %v", err)
+	}
+	if len(response.Asset.KnowledgeBaseIDs) != 0 {
+		t.Fatalf("asset knowledgeBaseIds = %#v, want unclassified empty list", response.Asset.KnowledgeBaseIDs)
+	}
+	if len(response.Chunks) == 0 {
+		t.Fatal("unclassified asset should still produce chunks")
+	}
+	if len(response.Chunks[0].KnowledgeBaseIDs) != 0 {
+		t.Fatalf("chunk knowledgeBaseIds = %#v, want empty list", response.Chunks[0].KnowledgeBaseIDs)
+	}
+	if !bytes.Contains([]byte(response.Chunks[0].SearchText), []byte("未分类产品定位")) {
+		t.Fatalf("searchText should include asset title: %s", response.Chunks[0].SearchText)
+	}
+}
+
+func TestKnowledgeAssetBasesCanBeCleared(t *testing.T) {
+	router := testWorkspaceRouter()
+
+	body := bytes.NewBufferString(`{
+		"knowledgeBaseIds": ["kb_brand"],
+		"title": "可解绑素材",
+		"text": "这个资产可以从知识库中移出，成为未分类资产。",
+		"mimeType": "text/markdown",
+		"originalFilename": "unbind.md"
+	}`)
+	req := httptest.NewRequest(http.MethodPost, "/api/knowledge-assets", body)
+	req.Header.Set("Authorization", "Bearer demo-token")
+	req.Header.Set("X-Workspace-ID", "wks_acme")
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+	router.ServeHTTP(rec, req)
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("create asset status = %d, want %d, body = %s", rec.Code, http.StatusCreated, rec.Body.String())
+	}
+
+	var created struct {
+		Asset model.KnowledgeAsset `json:"asset"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &created); err != nil {
+		t.Fatalf("unmarshal asset response: %v", err)
+	}
+
+	clearReq := httptest.NewRequest(http.MethodPut, "/api/knowledge-assets/"+created.Asset.ID+"/bases", bytes.NewBufferString(`{"knowledgeBaseIds":[]}`))
+	clearReq.Header.Set("Authorization", "Bearer demo-token")
+	clearReq.Header.Set("X-Workspace-ID", "wks_acme")
+	clearReq.Header.Set("Content-Type", "application/json")
+	clearRec := httptest.NewRecorder()
+	router.ServeHTTP(clearRec, clearReq)
+	if clearRec.Code != http.StatusOK {
+		t.Fatalf("clear bases status = %d, want %d, body = %s", clearRec.Code, http.StatusOK, clearRec.Body.String())
+	}
+
+	var cleared struct {
+		Asset  model.KnowledgeAsset   `json:"asset"`
+		Chunks []model.KnowledgeChunk `json:"chunks"`
+	}
+	if err := json.Unmarshal(clearRec.Body.Bytes(), &cleared); err != nil {
+		t.Fatalf("unmarshal cleared response: %v", err)
+	}
+	if len(cleared.Asset.KnowledgeBaseIDs) != 0 {
+		t.Fatalf("asset knowledgeBaseIds = %#v, want empty", cleared.Asset.KnowledgeBaseIDs)
+	}
+	if len(cleared.Chunks) == 0 || len(cleared.Chunks[0].KnowledgeBaseIDs) != 0 {
+		t.Fatalf("chunk knowledgeBaseIds = %#v, want empty", cleared.Chunks)
+	}
+
+	listReq := httptest.NewRequest(http.MethodGet, "/api/knowledge-assets?knowledgeBaseId=kb_brand", nil)
+	listReq.Header.Set("Authorization", "Bearer demo-token")
+	listReq.Header.Set("X-Workspace-ID", "wks_acme")
+	listRec := httptest.NewRecorder()
+	router.ServeHTTP(listRec, listReq)
+	if listRec.Code != http.StatusOK {
+		t.Fatalf("list assets status = %d, want %d, body = %s", listRec.Code, http.StatusOK, listRec.Body.String())
+	}
+	var listResponse struct {
+		Items []model.KnowledgeAsset `json:"items"`
+	}
+	if err := json.Unmarshal(listRec.Body.Bytes(), &listResponse); err != nil {
+		t.Fatalf("unmarshal list response: %v", err)
+	}
+	for _, item := range listResponse.Items {
+		if item.ID == created.Asset.ID {
+			t.Fatalf("cleared asset should not be listed under kb_brand: %#v", listResponse.Items)
+		}
+	}
+}
+
+func TestKnowledgeAssetCanMoveToTrashAndRestore(t *testing.T) {
+	router := testWorkspaceRouter()
+
+	createBody := bytes.NewBufferString(`{
+		"knowledgeBaseIds": ["kb_brand"],
+		"title": "可删除素材",
+		"text": "这个资产可以进入垃圾箱，再恢复。",
+		"mimeType": "text/markdown",
+		"originalFilename": "trash.md"
+	}`)
+	createReq := httptest.NewRequest(http.MethodPost, "/api/knowledge-assets", createBody)
+	createReq.Header.Set("Authorization", "Bearer demo-token")
+	createReq.Header.Set("X-Workspace-ID", "wks_acme")
+	createReq.Header.Set("Content-Type", "application/json")
+	createRec := httptest.NewRecorder()
+	router.ServeHTTP(createRec, createReq)
+	if createRec.Code != http.StatusCreated {
+		t.Fatalf("create asset status = %d, want %d, body = %s", createRec.Code, http.StatusCreated, createRec.Body.String())
+	}
+	var created struct {
+		Asset model.KnowledgeAsset `json:"asset"`
+	}
+	if err := json.Unmarshal(createRec.Body.Bytes(), &created); err != nil {
+		t.Fatalf("unmarshal created asset: %v", err)
+	}
+
+	trashReq := httptest.NewRequest(http.MethodPost, "/api/knowledge-assets/"+created.Asset.ID+"/trash", nil)
+	trashReq.Header.Set("Authorization", "Bearer demo-token")
+	trashReq.Header.Set("X-Workspace-ID", "wks_acme")
+	trashRec := httptest.NewRecorder()
+	router.ServeHTTP(trashRec, trashReq)
+	if trashRec.Code != http.StatusOK {
+		t.Fatalf("trash asset status = %d, want %d, body = %s", trashRec.Code, http.StatusOK, trashRec.Body.String())
+	}
+
+	listReq := httptest.NewRequest(http.MethodGet, "/api/knowledge-assets", nil)
+	listReq.Header.Set("Authorization", "Bearer demo-token")
+	listReq.Header.Set("X-Workspace-ID", "wks_acme")
+	listRec := httptest.NewRecorder()
+	router.ServeHTTP(listRec, listReq)
+	if listRec.Code != http.StatusOK {
+		t.Fatalf("list status = %d, want %d, body = %s", listRec.Code, http.StatusOK, listRec.Body.String())
+	}
+	var listResponse struct {
+		Items []model.KnowledgeAsset `json:"items"`
+	}
+	if err := json.Unmarshal(listRec.Body.Bytes(), &listResponse); err != nil {
+		t.Fatalf("unmarshal list response: %v", err)
+	}
+	for _, item := range listResponse.Items {
+		if item.ID == created.Asset.ID {
+			t.Fatalf("trashed asset should not be listed: %#v", listResponse.Items)
+		}
+	}
+
+	trashListReq := httptest.NewRequest(http.MethodGet, "/api/knowledge-trash", nil)
+	trashListReq.Header.Set("Authorization", "Bearer demo-token")
+	trashListReq.Header.Set("X-Workspace-ID", "wks_acme")
+	trashListRec := httptest.NewRecorder()
+	router.ServeHTTP(trashListRec, trashListReq)
+	if trashListRec.Code != http.StatusOK {
+		t.Fatalf("trash list status = %d, want %d, body = %s", trashListRec.Code, http.StatusOK, trashListRec.Body.String())
+	}
+	var trashListResponse struct {
+		KnowledgeAssets []model.KnowledgeAsset `json:"knowledgeAssets"`
+	}
+	if err := json.Unmarshal(trashListRec.Body.Bytes(), &trashListResponse); err != nil {
+		t.Fatalf("unmarshal trash list response: %v", err)
+	}
+	if len(trashListResponse.KnowledgeAssets) == 0 {
+		t.Fatal("trash list should include deleted asset")
+	}
+
+	restoreReq := httptest.NewRequest(http.MethodPost, "/api/knowledge-assets/"+created.Asset.ID+"/restore", nil)
+	restoreReq.Header.Set("Authorization", "Bearer demo-token")
+	restoreReq.Header.Set("X-Workspace-ID", "wks_acme")
+	restoreRec := httptest.NewRecorder()
+	router.ServeHTTP(restoreRec, restoreReq)
+	if restoreRec.Code != http.StatusOK {
+		t.Fatalf("restore status = %d, want %d, body = %s", restoreRec.Code, http.StatusOK, restoreRec.Body.String())
+	}
+	restored := getKnowledgeAssetForTest(t, router, created.Asset.ID)
+	if restored.Status != "ready" || restored.DeletedAt != nil {
+		t.Fatalf("restored asset status/deletedAt = %s/%v, want ready/nil", restored.Status, restored.DeletedAt)
+	}
+}
+
+func TestKnowledgeAssetProcessingCanBeRetried(t *testing.T) {
+	router := testWorkspaceRouter()
+
+	body := bytes.NewBufferString(`{
+		"knowledgeBaseIds": ["kb_brand"],
+		"title": "可重试素材",
+		"text": "第一次拆分后，可以重新解析并生成新的 chunk。",
+		"mimeType": "text/markdown",
+		"originalFilename": "retry.md"
+	}`)
+	req := httptest.NewRequest(http.MethodPost, "/api/knowledge-assets", body)
+	req.Header.Set("Authorization", "Bearer demo-token")
+	req.Header.Set("X-Workspace-ID", "wks_acme")
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+	router.ServeHTTP(rec, req)
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("create asset status = %d, want %d, body = %s", rec.Code, http.StatusCreated, rec.Body.String())
+	}
+	var created struct {
+		Asset  model.KnowledgeAsset   `json:"asset"`
+		Chunks []model.KnowledgeChunk `json:"chunks"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &created); err != nil {
+		t.Fatalf("unmarshal created response: %v", err)
+	}
+	if len(created.Chunks) == 0 {
+		t.Fatal("created chunks should not be empty")
+	}
+
+	retryReq := httptest.NewRequest(http.MethodPost, "/api/knowledge-assets/"+created.Asset.ID+"/retry", nil)
+	retryReq.Header.Set("Authorization", "Bearer demo-token")
+	retryReq.Header.Set("X-Workspace-ID", "wks_acme")
+	retryRec := httptest.NewRecorder()
+	router.ServeHTTP(retryRec, retryReq)
+	if retryRec.Code != http.StatusOK {
+		t.Fatalf("retry status = %d, want %d, body = %s", retryRec.Code, http.StatusOK, retryRec.Body.String())
+	}
+	var retried struct {
+		Asset  model.KnowledgeAsset          `json:"asset"`
+		Task   model.KnowledgeProcessingTask `json:"task"`
+		Chunks []model.KnowledgeChunk        `json:"chunks"`
+	}
+	if err := json.Unmarshal(retryRec.Body.Bytes(), &retried); err != nil {
+		t.Fatalf("unmarshal retry response: %v", err)
+	}
+	if retried.Asset.Status != "ready" || retried.Task.Status != "succeeded" || len(retried.Chunks) == 0 {
+		t.Fatalf("retry result asset/task/chunks = %s/%s/%d, want ready/succeeded/non-empty", retried.Asset.Status, retried.Task.Status, len(retried.Chunks))
+	}
+	if !strings.HasPrefix(retried.Task.ID, "kbpt_retry_") {
+		t.Fatalf("retry task id = %q, want retry task", retried.Task.ID)
+	}
+}
+
+func TestReadyKnowledgeAssetCanBeAIEnhancedLater(t *testing.T) {
+	router := testWorkspaceRouter()
+
+	body := bytes.NewBufferString(`{
+		"knowledgeBaseIds": ["kb_brand"],
+		"title": "后置增强素材",
+		"text": "先用基础拆分上线，之后再使用 AI 增强。",
+		"mimeType": "text/markdown",
+		"originalFilename": "later-enhance.md",
+		"tags": ["后置增强"]
+	}`)
+	req := httptest.NewRequest(http.MethodPost, "/api/knowledge-assets", body)
+	req.Header.Set("Authorization", "Bearer demo-token")
+	req.Header.Set("X-Workspace-ID", "wks_acme")
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+	router.ServeHTTP(rec, req)
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("create asset status = %d, want %d, body = %s", rec.Code, http.StatusCreated, rec.Body.String())
+	}
+	var created struct {
+		Asset  model.KnowledgeAsset   `json:"asset"`
+		Chunks []model.KnowledgeChunk `json:"chunks"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &created); err != nil {
+		t.Fatalf("unmarshal created response: %v", err)
+	}
+	if created.Asset.Status != "ready" || created.Asset.AIEnhancementEnabled || created.Asset.AIEnhancementStatus != "disabled" {
+		t.Fatalf("created asset status/ai enabled/ai status = %s/%v/%s, want ready/false/disabled", created.Asset.Status, created.Asset.AIEnhancementEnabled, created.Asset.AIEnhancementStatus)
+	}
+	if len(created.Chunks) == 0 {
+		t.Fatal("created chunks should not be empty")
+	}
+
+	enhanceReq := httptest.NewRequest(http.MethodPost, "/api/knowledge-assets/"+created.Asset.ID+"/ai-enhancement", nil)
+	enhanceReq.Header.Set("Authorization", "Bearer demo-token")
+	enhanceReq.Header.Set("X-Workspace-ID", "wks_acme")
+	enhanceRec := httptest.NewRecorder()
+	router.ServeHTTP(enhanceRec, enhanceReq)
+	if enhanceRec.Code != http.StatusOK {
+		t.Fatalf("enhance status = %d, want %d, body = %s", enhanceRec.Code, http.StatusOK, enhanceRec.Body.String())
+	}
+	var queued struct {
+		Asset  model.KnowledgeAsset          `json:"asset"`
+		Task   model.KnowledgeProcessingTask `json:"task"`
+		Chunks []model.KnowledgeChunk        `json:"chunks"`
+	}
+	if err := json.Unmarshal(enhanceRec.Body.Bytes(), &queued); err != nil {
+		t.Fatalf("unmarshal enhance response: %v", err)
+	}
+	if !queued.Asset.AIEnhancementEnabled || queued.Asset.AIEnhancementStatus != "pending" {
+		t.Fatalf("queued asset ai enabled/status = %v/%s, want true/pending", queued.Asset.AIEnhancementEnabled, queued.Asset.AIEnhancementStatus)
+	}
+	if queued.Task.TaskType != "ai_enhance" || queued.Task.Status != "queued" {
+		t.Fatalf("queued task = %#v, want queued ai_enhance", queued.Task)
+	}
+	if len(queued.Chunks) == 0 {
+		t.Fatal("enhance response should keep existing chunks")
+	}
+
+	finalTasks := waitForKnowledgeTaskStatus(t, router, created.Asset.ID, "ai_enhance", "succeeded")
+	if !hasKnowledgeTask(finalTasks, "ai_enhance", "succeeded") {
+		t.Fatalf("ai_enhance succeeded task not found: %#v", finalTasks)
+	}
+	finalAsset := getKnowledgeAssetForTest(t, router, created.Asset.ID)
+	if finalAsset.Status != "ready" || finalAsset.AIEnhancementStatus != "succeeded" {
+		t.Fatalf("final asset status/ai status = %s/%s, want ready/succeeded", finalAsset.Status, finalAsset.AIEnhancementStatus)
+	}
+}
+
+func TestReadyKnowledgeAssetAIEnhancementRequiresVIP(t *testing.T) {
+	router := testWorkspaceRouter()
+
+	body := bytes.NewBufferString(`{
+		"knowledgeBaseIds": ["kb_brand"],
+		"title": "非 VIP 后置增强素材",
+		"text": "普通用户可以基础拆分，但不能后续 AI 增强。",
+		"mimeType": "text/markdown",
+		"originalFilename": "free-later-enhance.md"
+	}`)
+	req := httptest.NewRequest(http.MethodPost, "/api/knowledge-assets", body)
+	req.Header.Set("Authorization", "Bearer growth-token")
+	req.Header.Set("X-Workspace-ID", "wks_acme")
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+	router.ServeHTTP(rec, req)
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("create asset status = %d, want %d, body = %s", rec.Code, http.StatusCreated, rec.Body.String())
+	}
+	var created struct {
+		Asset model.KnowledgeAsset `json:"asset"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &created); err != nil {
+		t.Fatalf("unmarshal created response: %v", err)
+	}
+
+	enhanceReq := httptest.NewRequest(http.MethodPost, "/api/knowledge-assets/"+created.Asset.ID+"/ai-enhancement", nil)
+	enhanceReq.Header.Set("Authorization", "Bearer growth-token")
+	enhanceReq.Header.Set("X-Workspace-ID", "wks_acme")
+	enhanceRec := httptest.NewRecorder()
+	router.ServeHTTP(enhanceRec, enhanceReq)
+	if enhanceRec.Code != http.StatusForbidden {
+		t.Fatalf("enhance status = %d, want %d, body = %s", enhanceRec.Code, http.StatusForbidden, enhanceRec.Body.String())
+	}
+}
+
+func TestCreateKnowledgeAssetPDFStoresFailedProcessingTask(t *testing.T) {
+	router := testWorkspaceRouter()
+	body := &bytes.Buffer{}
+	writer := multipart.NewWriter(body)
+	if err := writer.WriteField("knowledgeBaseIds", "kb_brand"); err != nil {
+		t.Fatalf("write knowledgeBaseIds: %v", err)
+	}
+	if err := writer.WriteField("title", "产品白皮书"); err != nil {
+		t.Fatalf("write title: %v", err)
+	}
+	part, err := writer.CreateFormFile("file", "whitepaper.pdf")
+	if err != nil {
+		t.Fatalf("create form file: %v", err)
+	}
+	if _, err := part.Write([]byte("%PDF-1.4\nunsupported pdf body")); err != nil {
+		t.Fatalf("write form file: %v", err)
+	}
+	if err := writer.Close(); err != nil {
+		t.Fatalf("close multipart writer: %v", err)
+	}
+
+	req := httptest.NewRequest(http.MethodPost, "/api/knowledge-assets", body)
+	req.Header.Set("Authorization", "Bearer demo-token")
+	req.Header.Set("X-Workspace-ID", "wks_acme")
+	req.Header.Set("Content-Type", writer.FormDataContentType())
+
+	rec := httptest.NewRecorder()
+	router.ServeHTTP(rec, req)
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("create pdf asset status = %d, want %d, body = %s", rec.Code, http.StatusCreated, rec.Body.String())
+	}
+
+	var response struct {
+		Asset model.KnowledgeAsset          `json:"asset"`
+		Task  model.KnowledgeProcessingTask `json:"task"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &response); err != nil {
+		t.Fatalf("unmarshal pdf response: %v", err)
+	}
+	if response.Asset.Status != "failed" || response.Task.Status != "failed" {
+		t.Fatalf("asset/task status = %s/%s, want failed/failed", response.Asset.Status, response.Task.Status)
+	}
+	if response.Asset.ErrorMessage == "" || response.Task.ErrorMessage == "" {
+		t.Fatalf("expected extraction error messages, got asset=%q task=%q", response.Asset.ErrorMessage, response.Task.ErrorMessage)
+	}
+
+	taskReq := httptest.NewRequest(http.MethodGet, "/api/knowledge-assets/"+response.Asset.ID+"/tasks", nil)
+	taskReq.Header.Set("Authorization", "Bearer demo-token")
+	taskReq.Header.Set("X-Workspace-ID", "wks_acme")
+	taskRec := httptest.NewRecorder()
+	router.ServeHTTP(taskRec, taskReq)
+	if taskRec.Code != http.StatusOK {
+		t.Fatalf("list tasks status = %d, want %d, body = %s", taskRec.Code, http.StatusOK, taskRec.Body.String())
+	}
+
+	enhanceReq := httptest.NewRequest(http.MethodPost, "/api/knowledge-assets/"+response.Asset.ID+"/ai-enhancement", nil)
+	enhanceReq.Header.Set("Authorization", "Bearer demo-token")
+	enhanceReq.Header.Set("X-Workspace-ID", "wks_acme")
+	enhanceRec := httptest.NewRecorder()
+	router.ServeHTTP(enhanceRec, enhanceReq)
+	if enhanceRec.Code != http.StatusConflict {
+		t.Fatalf("enhance failed asset status = %d, want %d, body = %s", enhanceRec.Code, http.StatusConflict, enhanceRec.Body.String())
+	}
+}
+
+func TestCreateKnowledgeAssetAIEnhancementRequiresVIP(t *testing.T) {
+	router := testWorkspaceRouter()
+
+	body := bytes.NewBufferString(`{
+		"knowledgeBaseIds": ["kb_brand"],
+		"title": "增长素材",
+		"text": "客户通过内容矩阵提升线索质量。",
+		"aiEnhancementEnabled": true
+	}`)
+	req := httptest.NewRequest(http.MethodPost, "/api/knowledge-assets", body)
 	req.Header.Set("Authorization", "Bearer growth-token")
 	req.Header.Set("X-Workspace-ID", "wks_acme")
 	req.Header.Set("Content-Type", "application/json")
 
 	rec := httptest.NewRecorder()
 	router.ServeHTTP(rec, req)
-
 	if rec.Code != http.StatusForbidden {
 		t.Fatalf("status = %d, want %d, body = %s", rec.Code, http.StatusForbidden, rec.Body.String())
 	}
 }
 
-func TestFormatKnowledgeItemForVIP(t *testing.T) {
+func TestCreateKnowledgeAssetAIEnhancementForVIP(t *testing.T) {
 	router := testWorkspaceRouter()
+
 	body := bytes.NewBufferString(`{
-		"type": "brand",
-		"title": "品牌提示词",
-		"content": "面向增长团队，语气专业。不要承诺效果。"
+		"knowledgeBaseIds": ["kb_brand"],
+		"title": "增长素材",
+		"text": "客户通过内容矩阵提升线索质量，并建立稳定复盘机制。",
+		"mimeType": "text/markdown",
+		"originalFilename": "growth.md",
+		"tags": ["增长", "复盘"],
+		"aiEnhancementEnabled": true
 	}`)
-	req := httptest.NewRequest(http.MethodPost, "/api/knowledge-items/format", body)
+	req := httptest.NewRequest(http.MethodPost, "/api/knowledge-assets", body)
 	req.Header.Set("Authorization", "Bearer demo-token")
 	req.Header.Set("X-Workspace-ID", "wks_acme")
 	req.Header.Set("Content-Type", "application/json")
 
 	rec := httptest.NewRecorder()
 	router.ServeHTTP(rec, req)
-
-	if rec.Code != http.StatusOK {
-		t.Fatalf("status = %d, want %d, body = %s", rec.Code, http.StatusOK, rec.Body.String())
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("create asset status = %d, want %d, body = %s", rec.Code, http.StatusCreated, rec.Body.String())
 	}
 
 	var response struct {
-		Content  string `json:"content"`
-		Provider string `json:"provider"`
+		Asset  model.KnowledgeAsset          `json:"asset"`
+		Task   model.KnowledgeProcessingTask `json:"task"`
+		Chunks []model.KnowledgeChunk        `json:"chunks"`
 	}
 	if err := json.Unmarshal(rec.Body.Bytes(), &response); err != nil {
-		t.Fatalf("unmarshal response: %v", err)
+		t.Fatalf("unmarshal asset response: %v", err)
 	}
-	if response.Provider != ai.ProviderMock {
-		t.Fatalf("provider = %q, want %q", response.Provider, ai.ProviderMock)
+	if response.Asset.Status != "ready" || response.Asset.AIEnhancementStatus != "pending" {
+		t.Fatalf("asset status/ai status = %s/%s, want ready/pending", response.Asset.Status, response.Asset.AIEnhancementStatus)
 	}
-	if !bytes.Contains([]byte(response.Content), []byte("## 品牌提示词")) || !bytes.Contains([]byte(response.Content), []byte("### 使用边界")) {
-		t.Fatalf("formatted content is not structured markdown: %s", response.Content)
+	if response.Task.TaskType != "extract" || response.Task.Status != "succeeded" {
+		t.Fatalf("response task = %#v, want succeeded extract task", response.Task)
+	}
+	if len(response.Chunks) == 0 {
+		t.Fatal("default chunks should be returned")
+	}
+	if bytes.Contains([]byte(response.Asset.ExtractedText), []byte("### 使用边界")) || knowledgeChunksContain(response.Chunks, "仅使用上方已确认信息") {
+		t.Fatalf("POST response waited for AI-enhanced markdown: asset=%s chunks=%#v", response.Asset.ExtractedText, response.Chunks)
+	}
+	if !sameStringSet(response.Chunks[0].KnowledgeBaseIDs, []string{"kb_brand"}) {
+		t.Fatalf("chunk knowledgeBaseIds = %#v, want kb_brand", response.Chunks[0].KnowledgeBaseIDs)
+	}
+	if !knowledgeChunksSearchTextContain(response.Chunks, "品牌与产品资料") {
+		t.Fatalf("searchText missing base name: %#v", response.Chunks)
+	}
+
+	initialTasks := listKnowledgeAssetTasksForTest(t, router, response.Asset.ID)
+	if !hasKnowledgeTaskWithStatuses(initialTasks, "ai_enhance", []string{"queued", "running", "succeeded"}) {
+		t.Fatalf("ai_enhance queued/running/succeeded task not found: %#v", initialTasks)
+	}
+
+	finalTasks := waitForKnowledgeTaskStatus(t, router, response.Asset.ID, "ai_enhance", "succeeded")
+	if !hasKnowledgeTask(finalTasks, "ai_enhance", "succeeded") {
+		t.Fatalf("ai_enhance succeeded task not found: %#v", finalTasks)
+	}
+	finalAsset := getKnowledgeAssetForTest(t, router, response.Asset.ID)
+	if finalAsset.Status != "ready" || finalAsset.AIEnhancementStatus != "succeeded" {
+		t.Fatalf("final asset status/ai status = %s/%s, want ready/succeeded", finalAsset.Status, finalAsset.AIEnhancementStatus)
+	}
+	finalChunks := listKnowledgeAssetChunksForTest(t, router, response.Asset.ID)
+	if len(finalChunks) == 0 {
+		t.Fatal("enhanced chunks should be persisted")
+	}
+	if !bytes.Contains([]byte(finalAsset.ExtractedText), []byte("### 使用边界")) || !knowledgeChunksContain(finalChunks, "仅使用上方已确认信息") {
+		t.Fatalf("chunks were not AI-enhanced markdown: asset=%s chunks=%#v", finalAsset.ExtractedText, finalChunks)
+	}
+	if !knowledgeChunksSearchTextContain(finalChunks, "品牌与产品资料") ||
+		!knowledgeChunksSearchTextContain(finalChunks, "使用边界") {
+		t.Fatalf("searchText missing base name or enhanced content: %#v", finalChunks)
 	}
 }
 
-func TestFormatGenerationKeywordsFallsBackToMockWhenOpenAIUnavailable(t *testing.T) {
+func TestCreateKnowledgeAssetAIEnhancementFallsBackWhenOpenAIUnavailable(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	router := gin.New()
 	apiGroup := router.Group("/api")
 	handler := NewWorkspaceHandler(nil, ai.NewRuntimeConfig(ai.Config{Provider: ai.ProviderOpenAI}))
+	handler.browserLogin = fakeBrowserLoginService{}
 	handler.Register(apiGroup, middleware.AuthWithTokenResolver(handler.ResolveUserSession))
 
 	body := bytes.NewBufferString(`{
-		"type": "generation_keywords",
-		"title": "发布内容关键词",
-		"content": "内容营销,增长,小红书长文"
+		"knowledgeBaseIds": ["kb_brand"],
+		"title": "增长素材",
+		"text": "客户通过内容矩阵提升线索质量。",
+		"mimeType": "text/markdown",
+		"originalFilename": "growth.md",
+		"aiEnhancementEnabled": true
 	}`)
-	req := httptest.NewRequest(http.MethodPost, "/api/knowledge-items/format", body)
+	req := httptest.NewRequest(http.MethodPost, "/api/knowledge-assets", body)
 	req.Header.Set("Authorization", "Bearer demo-token")
 	req.Header.Set("X-Workspace-ID", "wks_acme")
 	req.Header.Set("Content-Type", "application/json")
 
 	rec := httptest.NewRecorder()
 	router.ServeHTTP(rec, req)
-
-	if rec.Code != http.StatusOK {
-		t.Fatalf("status = %d, want %d, body = %s", rec.Code, http.StatusOK, rec.Body.String())
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("create asset status = %d, want %d, body = %s", rec.Code, http.StatusCreated, rec.Body.String())
 	}
 
 	var response struct {
-		Content       string `json:"content"`
-		Provider      string `json:"provider"`
-		Fallback      bool   `json:"fallback"`
-		FallbackError string `json:"fallbackError"`
+		Asset  model.KnowledgeAsset   `json:"asset"`
+		Chunks []model.KnowledgeChunk `json:"chunks"`
 	}
 	if err := json.Unmarshal(rec.Body.Bytes(), &response); err != nil {
-		t.Fatalf("unmarshal response: %v", err)
+		t.Fatalf("unmarshal asset response: %v", err)
 	}
-	if response.Provider != ai.ProviderMock {
-		t.Fatalf("provider = %q, want %q", response.Provider, ai.ProviderMock)
+	if response.Asset.Status != "ready" || response.Asset.AIEnhancementStatus != "pending" {
+		t.Fatalf("asset status/ai status = %s/%s, want ready/pending fallback", response.Asset.Status, response.Asset.AIEnhancementStatus)
 	}
-	if !response.Fallback || response.FallbackError == "" {
-		t.Fatalf("fallback marker not returned: %#v", response)
+	if len(response.Chunks) == 0 {
+		t.Fatal("fallback should leave usable chunks")
 	}
-	if !bytes.Contains([]byte(response.Content), []byte("## 生成目标")) ||
-		!bytes.Contains([]byte(response.Content), []byte("## 核心主题")) ||
-		!bytes.Contains([]byte(response.Content), []byte("## 事实边界")) {
-		t.Fatalf("formatted keywords are not a markdown prompt: %s", response.Content)
+
+	finalTasks := waitForKnowledgeTaskStatus(t, router, response.Asset.ID, "ai_enhance", "succeeded")
+	if !hasKnowledgeTask(finalTasks, "ai_enhance", "succeeded") {
+		t.Fatalf("fallback ai_enhance succeeded task not found: %#v", finalTasks)
+	}
+	finalAsset := getKnowledgeAssetForTest(t, router, response.Asset.ID)
+	if finalAsset.Status != "ready" || finalAsset.AIEnhancementStatus != "succeeded" {
+		t.Fatalf("final asset status/ai status = %s/%s, want ready/succeeded fallback", finalAsset.Status, finalAsset.AIEnhancementStatus)
+	}
+	if fallback, ok := finalAsset.Metadata["aiEnhancementFallback"].(bool); !ok || !fallback {
+		t.Fatalf("fallback metadata missing: %#v", finalAsset.Metadata)
+	}
+	if finalAsset.Metadata["aiEnhancementFallbackError"] == "" {
+		t.Fatalf("fallback error metadata missing: %#v", finalAsset.Metadata)
+	}
+}
+
+func TestWorkspaceKnowledgeItemRoutesAreNotRegistered(t *testing.T) {
+	router := testWorkspaceRouter()
+
+	cases := []struct {
+		method string
+		path   string
+		body   string
+	}{
+		{method: http.MethodGet, path: "/api/knowledge-items"},
+		{method: http.MethodPost, path: "/api/knowledge-items", body: `{"title":"旧条目","content":"旧内容","knowledgeBaseIds":["kb_brand"]}`},
+		{method: http.MethodPost, path: "/api/knowledge-items/assign-bases", body: `{"knowledgeItemIds":["kbi_1001"],"knowledgeBaseIds":["kb_brand"]}`},
+		{method: http.MethodPost, path: "/api/knowledge-items/format", body: `{"title":"旧格式化","content":"旧内容"}`},
+	}
+	for _, tc := range cases {
+		req := httptest.NewRequest(tc.method, tc.path, bytes.NewBufferString(tc.body))
+		req.Header.Set("Authorization", "Bearer demo-token")
+		req.Header.Set("X-Workspace-ID", "wks_acme")
+		req.Header.Set("Content-Type", "application/json")
+		rec := httptest.NewRecorder()
+		router.ServeHTTP(rec, req)
+		if rec.Code != http.StatusNotFound {
+			t.Fatalf("%s %s status = %d, want %d, body = %s", tc.method, tc.path, rec.Code, http.StatusNotFound, rec.Body.String())
+		}
 	}
 }
 
@@ -1073,19 +1777,79 @@ func TestAdminCanUpgradeUserSubscriptionForFormatting(t *testing.T) {
 	}
 
 	body := bytes.NewBufferString(`{
-		"type": "brand",
-		"title": "升级后格式化",
-		"content": "增长用户升级 VIP 后可以格式化。"
+		"title": "升级后增强",
+		"text": "增长用户升级 VIP 后可以使用 AI 增强资产。",
+		"mimeType": "text/markdown",
+		"originalFilename": "vip.md",
+		"aiEnhancementEnabled": true
 	}`)
-	req := httptest.NewRequest(http.MethodPost, "/api/knowledge-items/format", body)
+	req := httptest.NewRequest(http.MethodPost, "/api/knowledge-assets", body)
 	req.Header.Set("Authorization", "Bearer growth-token")
 	req.Header.Set("X-Workspace-ID", "wks_acme")
 	req.Header.Set("Content-Type", "application/json")
 
 	rec := httptest.NewRecorder()
 	router.ServeHTTP(rec, req)
-	if rec.Code != http.StatusOK {
-		t.Fatalf("format status = %d, want %d, body = %s", rec.Code, http.StatusOK, rec.Body.String())
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("create enhanced asset status = %d, want %d, body = %s", rec.Code, http.StatusCreated, rec.Body.String())
+	}
+}
+
+func TestFreeUserImageAndPDFKnowledgeAssetsRequirePaidOCR(t *testing.T) {
+	router := testWorkspaceRouter()
+
+	cases := []struct {
+		name             string
+		mimeType         string
+		originalFilename string
+		text             string
+	}{
+		{
+			name:             "image",
+			mimeType:         "image/png",
+			originalFilename: "poster.png",
+			text:             "not-a-real-image",
+		},
+		{
+			name:             "pdf",
+			mimeType:         "application/pdf",
+			originalFilename: "deck.pdf",
+			text:             "%PDF-1.4\nnot-a-real-pdf",
+		},
+	}
+	for _, tc := range cases {
+		body := bytes.NewBufferString(fmt.Sprintf(`{
+			"title": "OCR %s",
+			"text": %q,
+			"mimeType": %q,
+			"originalFilename": %q
+		}`, tc.name, tc.text, tc.mimeType, tc.originalFilename))
+		req := httptest.NewRequest(http.MethodPost, "/api/knowledge-assets", body)
+		req.Header.Set("Authorization", "Bearer growth-token")
+		req.Header.Set("X-Workspace-ID", "wks_acme")
+		req.Header.Set("Content-Type", "application/json")
+
+		rec := httptest.NewRecorder()
+		router.ServeHTTP(rec, req)
+		if rec.Code != http.StatusCreated {
+			t.Fatalf("%s create status = %d, want %d, body = %s", tc.name, rec.Code, http.StatusCreated, rec.Body.String())
+		}
+
+		var response struct {
+			Asset model.KnowledgeAsset `json:"asset"`
+		}
+		if err := json.Unmarshal(rec.Body.Bytes(), &response); err != nil {
+			t.Fatalf("%s unmarshal response: %v", tc.name, err)
+		}
+		if response.Asset.Status != "failed" {
+			t.Fatalf("%s asset status = %q, want failed", tc.name, response.Asset.Status)
+		}
+		if !strings.Contains(response.Asset.ErrorMessage, "paid subscription") {
+			t.Fatalf("%s error = %q, want paid subscription hint", tc.name, response.Asset.ErrorMessage)
+		}
+		if required, ok := response.Asset.Metadata["ocrRequired"].(bool); !ok || !required {
+			t.Fatalf("%s ocrRequired metadata missing: %#v", tc.name, response.Asset.Metadata)
+		}
 	}
 }
 
@@ -1093,20 +1857,21 @@ func TestGenerateContentAcceptsMultipleKnowledgeBases(t *testing.T) {
 	router := testWorkspaceRouter()
 	base := createWorkspaceKnowledgeBase(t, router, "生成联调素材包")
 
-	createItemBody := bytes.NewBufferString(fmt.Sprintf(`{
+	createAssetBody := bytes.NewBufferString(fmt.Sprintf(`{
 		"knowledgeBaseIds": [%q],
-		"type": "case",
 		"title": "生成补充案例",
-		"content": "多知识库包生成时应能检索到这个补充案例。"
+		"text": "多知识库包生成时应能检索到这个内容营销补充案例。",
+		"mimeType": "text/markdown",
+		"originalFilename": "generation-case.md"
 	}`, base.ID))
-	createItemReq := httptest.NewRequest(http.MethodPost, "/api/knowledge-items", createItemBody)
-	createItemReq.Header.Set("Authorization", "Bearer demo-token")
-	createItemReq.Header.Set("X-Workspace-ID", "wks_acme")
-	createItemReq.Header.Set("Content-Type", "application/json")
-	createItemRec := httptest.NewRecorder()
-	router.ServeHTTP(createItemRec, createItemReq)
-	if createItemRec.Code != http.StatusCreated {
-		t.Fatalf("create item status = %d, want %d, body = %s", createItemRec.Code, http.StatusCreated, createItemRec.Body.String())
+	createAssetReq := httptest.NewRequest(http.MethodPost, "/api/knowledge-assets", createAssetBody)
+	createAssetReq.Header.Set("Authorization", "Bearer demo-token")
+	createAssetReq.Header.Set("X-Workspace-ID", "wks_acme")
+	createAssetReq.Header.Set("Content-Type", "application/json")
+	createAssetRec := httptest.NewRecorder()
+	router.ServeHTTP(createAssetRec, createAssetReq)
+	if createAssetRec.Code != http.StatusCreated {
+		t.Fatalf("create asset status = %d, want %d, body = %s", createAssetRec.Code, http.StatusCreated, createAssetRec.Body.String())
 	}
 
 	body := bytes.NewBufferString(fmt.Sprintf(`{
@@ -1140,6 +1905,321 @@ func TestGenerateContentAcceptsMultipleKnowledgeBases(t *testing.T) {
 	}
 	if !bytes.Contains(rec.Body.Bytes(), []byte("内容营销")) {
 		t.Fatalf("generated content does not include keyword context: %s", rec.Body.String())
+	}
+}
+
+func TestGenerateContentPrefersKnowledgeChunksAndRecordsChunkID(t *testing.T) {
+	router, handler := testWorkspaceRouterWithHandler()
+	now := time.Now().UTC()
+
+	handler.mu.Lock()
+	handler.knowledgeAssets = append(handler.knowledgeAssets, model.KnowledgeAsset{
+		ID:               "kba_generation_ready",
+		WorkspaceID:      "wks_acme",
+		KnowledgeBaseIDs: []string{"kb_brand"},
+		Title:            "资产知识素材",
+		Status:           "ready",
+		UpdatedAt:        now,
+	})
+	handler.knowledgeAssets = append(handler.knowledgeAssets, model.KnowledgeAsset{
+		ID:               "kba_generation_failed",
+		WorkspaceID:      "wks_acme",
+		KnowledgeBaseIDs: []string{"kb_brand"},
+		Title:            "失败资产素材",
+		Status:           "failed",
+		UpdatedAt:        now,
+	})
+	handler.knowledgeChunks = append(handler.knowledgeChunks,
+		model.KnowledgeChunk{
+			ID:               "kbc_generation_ready_001",
+			AssetID:          "kba_generation_ready",
+			WorkspaceID:      "wks_acme",
+			KnowledgeBaseIDs: []string{"kb_brand"},
+			Title:            "内容营销资产片段",
+			Content:          "这是来自 ready 资产的内容营销 chunk，应优先进入生成上下文。",
+			SearchText:       "内容营销 ready asset chunk",
+			Tags:             []string{"内容营销"},
+			Summary:          "ready chunk summary",
+			Metadata:         map[string]any{"type": "asset_chunk"},
+			Enabled:          true,
+			UpdatedAt:        now,
+		},
+		model.KnowledgeChunk{
+			ID:               "kbc_generation_failed_001",
+			AssetID:          "kba_generation_failed",
+			WorkspaceID:      "wks_acme",
+			KnowledgeBaseIDs: []string{"kb_brand"},
+			Title:            "内容营销失败片段",
+			Content:          "这个 failed 资产 chunk 不应该进入生成上下文。",
+			SearchText:       "内容营销 failed asset chunk",
+			Tags:             []string{"内容营销"},
+			Metadata:         map[string]any{"type": "asset_chunk"},
+			Enabled:          true,
+			UpdatedAt:        now,
+		},
+	)
+	handler.mu.Unlock()
+
+	body := bytes.NewBufferString(`{
+		"keywords": ["内容营销"],
+		"contentType": "article",
+		"knowledgeBaseIds": ["kb_brand"]
+	}`)
+	req := httptest.NewRequest(http.MethodPost, "/api/contents/generate", body)
+	req.Header.Set("Authorization", "Bearer demo-token")
+	req.Header.Set("X-Workspace-ID", "wks_acme")
+	req.Header.Set("Content-Type", "application/json")
+
+	rec := httptest.NewRecorder()
+	router.ServeHTTP(rec, req)
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("generate status = %d, want %d, body = %s", rec.Code, http.StatusCreated, rec.Body.String())
+	}
+
+	var response struct {
+		Trace ai.GenerationTrace `json:"trace"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &response); err != nil {
+		t.Fatalf("unmarshal generated response: %v", err)
+	}
+	if !containsString(response.Trace.RetrievedIDs, "kbc_generation_ready_001") {
+		t.Fatalf("trace retrieved ids = %#v, want ready chunk id", response.Trace.RetrievedIDs)
+	}
+	if containsString(response.Trace.RetrievedIDs, "kbc_generation_failed_001") {
+		t.Fatalf("trace retrieved ids includes failed asset chunk: %#v", response.Trace.RetrievedIDs)
+	}
+	if !bytes.Contains(rec.Body.Bytes(), []byte("资产片段")) || !bytes.Contains(rec.Body.Bytes(), []byte("asset_chunk")) {
+		t.Fatalf("trace should include chunk title and source type: %s", rec.Body.String())
+	}
+
+	handler.mu.RLock()
+	if len(handler.generations) == 0 {
+		handler.mu.RUnlock()
+		t.Fatal("expected generation request record")
+	}
+	retrievedIDs := append([]string(nil), handler.generations[0].RetrievedKnowledgeIDs...)
+	handler.mu.RUnlock()
+	if len(retrievedIDs) != 1 || retrievedIDs[0] != "kbc_generation_ready_001" {
+		t.Fatalf("generation retrieved ids = %#v, want ready chunk only", retrievedIDs)
+	}
+	if !bytes.Contains(rec.Body.Bytes(), []byte("kbc_generation_ready_001")) {
+		t.Fatalf("generated response should expose used chunk id: %s", rec.Body.String())
+	}
+}
+
+func TestGenerateContentCanRetrieveUnclassifiedAssetWhenNoBaseSelected(t *testing.T) {
+	router, handler := testWorkspaceRouterWithHandler()
+	now := time.Now().UTC()
+
+	handler.mu.Lock()
+	handler.knowledgeAssets = append(handler.knowledgeAssets, model.KnowledgeAsset{
+		ID:               "kba_generation_unclassified",
+		WorkspaceID:      "wks_acme",
+		KnowledgeBaseIDs: []string{},
+		Title:            "未分类定位素材",
+		Status:           "ready",
+		UpdatedAt:        now,
+	})
+	handler.knowledgeChunks = append(handler.knowledgeChunks, model.KnowledgeChunk{
+		ID:               "kbc_generation_unclassified_001",
+		AssetID:          "kba_generation_unclassified",
+		WorkspaceID:      "wks_acme",
+		KnowledgeBaseIDs: []string{},
+		Title:            "未分类产品定位",
+		Content:          "未分类资产也可以在未选择知识库时进入工作区级检索。",
+		SearchText:       "未分类 产品定位 工作区级检索",
+		Tags:             []string{"未分类"},
+		Metadata:         map[string]any{"type": "asset_chunk"},
+		Enabled:          true,
+		UpdatedAt:        now,
+	})
+	handler.mu.Unlock()
+
+	body := bytes.NewBufferString(`{
+		"keywords": ["未分类", "产品定位"],
+		"contentType": "article"
+	}`)
+	req := httptest.NewRequest(http.MethodPost, "/api/contents/generate", body)
+	req.Header.Set("Authorization", "Bearer demo-token")
+	req.Header.Set("X-Workspace-ID", "wks_acme")
+	req.Header.Set("Content-Type", "application/json")
+
+	rec := httptest.NewRecorder()
+	router.ServeHTTP(rec, req)
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("generate unclassified status = %d, want %d, body = %s", rec.Code, http.StatusCreated, rec.Body.String())
+	}
+
+	var response struct {
+		Trace ai.GenerationTrace `json:"trace"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &response); err != nil {
+		t.Fatalf("unmarshal generated response: %v", err)
+	}
+	if !containsString(response.Trace.RetrievedIDs, "kbc_generation_unclassified_001") {
+		t.Fatalf("trace retrieved ids = %#v, want unclassified chunk id", response.Trace.RetrievedIDs)
+	}
+}
+
+func TestGenerateContentExcludesUnclassifiedAssetWhenBaseSelected(t *testing.T) {
+	router, handler := testWorkspaceRouterWithHandler()
+	now := time.Now().UTC()
+
+	handler.mu.Lock()
+	handler.knowledgeAssets = append(handler.knowledgeAssets, model.KnowledgeAsset{
+		ID:               "kba_generation_unclassified_scoped",
+		WorkspaceID:      "wks_acme",
+		KnowledgeBaseIDs: []string{},
+		Title:            "未分类定向过滤素材",
+		Status:           "ready",
+		UpdatedAt:        now,
+	})
+	handler.knowledgeChunks = append(handler.knowledgeChunks, model.KnowledgeChunk{
+		ID:               "kbc_generation_unclassified_scoped_001",
+		AssetID:          "kba_generation_unclassified_scoped",
+		WorkspaceID:      "wks_acme",
+		KnowledgeBaseIDs: []string{},
+		Title:            "未分类定向过滤",
+		Content:          "用户选择知识库包时，这条未分类资产 chunk 不应进入检索上下文。",
+		SearchText:       "品牌定位 未分类 定向过滤",
+		Tags:             []string{"品牌定位"},
+		Metadata:         map[string]any{"type": "asset_chunk"},
+		Enabled:          true,
+		UpdatedAt:        now,
+	})
+	handler.mu.Unlock()
+
+	body := bytes.NewBufferString(`{
+		"keywords": ["品牌定位", "未分类"],
+		"contentType": "article",
+		"knowledgeBaseIds": ["kb_brand"]
+	}`)
+	req := httptest.NewRequest(http.MethodPost, "/api/contents/generate", body)
+	req.Header.Set("Authorization", "Bearer demo-token")
+	req.Header.Set("X-Workspace-ID", "wks_acme")
+	req.Header.Set("Content-Type", "application/json")
+
+	rec := httptest.NewRecorder()
+	router.ServeHTTP(rec, req)
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("generate scoped status = %d, want %d, body = %s", rec.Code, http.StatusCreated, rec.Body.String())
+	}
+
+	var response struct {
+		Trace ai.GenerationTrace `json:"trace"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &response); err != nil {
+		t.Fatalf("unmarshal generated response: %v", err)
+	}
+	if containsString(response.Trace.RetrievedIDs, "kbc_generation_unclassified_scoped_001") {
+		t.Fatalf("trace retrieved ids includes unclassified chunk despite selected base: %#v", response.Trace.RetrievedIDs)
+	}
+}
+
+func TestGenerateContentDoesNotFallbackToLegacyKnowledgeItems(t *testing.T) {
+	router, handler := testWorkspaceRouterWithHandler()
+	now := time.Now().UTC()
+
+	handler.mu.Lock()
+	handler.knowledgeAssets = nil
+	handler.knowledgeChunks = nil
+	handler.knowledgeItems = []model.KnowledgeItem{
+		{
+			ID:               "kbi_legacy_only",
+			KnowledgeBaseIDs: []string{"kb_brand"},
+			WorkspaceID:      "wks_acme",
+			Type:             "brand",
+			Title:            "品牌定位",
+			Content:          "这条旧知识条目没有对应 chunk，不应被生成检索直接读取。",
+			Enabled:          true,
+			UpdatedAt:        now,
+		},
+	}
+	handler.mu.Unlock()
+
+	body := bytes.NewBufferString(`{
+		"keywords": ["品牌定位"],
+		"contentType": "article",
+		"knowledgeBaseIds": ["kb_brand"]
+	}`)
+	req := httptest.NewRequest(http.MethodPost, "/api/contents/generate", body)
+	req.Header.Set("Authorization", "Bearer demo-token")
+	req.Header.Set("X-Workspace-ID", "wks_acme")
+	req.Header.Set("Content-Type", "application/json")
+
+	rec := httptest.NewRecorder()
+	router.ServeHTTP(rec, req)
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("generate status = %d, want %d, body = %s", rec.Code, http.StatusCreated, rec.Body.String())
+	}
+
+	var response struct {
+		Trace ai.GenerationTrace `json:"trace"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &response); err != nil {
+		t.Fatalf("unmarshal generated response: %v", err)
+	}
+	if len(response.Trace.RetrievedIDs) != 0 {
+		t.Fatalf("trace retrieved ids = %#v, want no legacy item fallback", response.Trace.RetrievedIDs)
+	}
+
+	handler.mu.RLock()
+	if len(handler.generations) == 0 {
+		handler.mu.RUnlock()
+		t.Fatal("expected generation request record")
+	}
+	retrievedIDs := append([]string(nil), handler.generations[0].RetrievedKnowledgeIDs...)
+	handler.mu.RUnlock()
+	if len(retrievedIDs) != 0 {
+		t.Fatalf("generation retrieved ids = %#v, want no legacy item fallback", retrievedIDs)
+	}
+}
+
+func TestSeededLegacyKnowledgeItemsHaveAssetChunksForGeneration(t *testing.T) {
+	router, handler := testWorkspaceRouterWithHandler()
+
+	handler.mu.RLock()
+	hasAsset := false
+	hasChunk := false
+	for _, asset := range handler.knowledgeAssets {
+		if asset.ID == "kba_legacy_kbi_1001" && asset.Status == "ready" {
+			hasAsset = true
+		}
+	}
+	for _, chunk := range handler.knowledgeChunks {
+		if chunk.ID == "kbc_legacy_kbi_1001_0000" && chunk.AssetID == "kba_legacy_kbi_1001" {
+			hasChunk = true
+		}
+	}
+	handler.mu.RUnlock()
+	if !hasAsset || !hasChunk {
+		t.Fatalf("seeded legacy asset/chunk missing: hasAsset=%v hasChunk=%v", hasAsset, hasChunk)
+	}
+
+	body := bytes.NewBufferString(`{
+		"keywords": ["品牌定位"],
+		"contentType": "article",
+		"knowledgeBaseIds": ["kb_brand"]
+	}`)
+	req := httptest.NewRequest(http.MethodPost, "/api/contents/generate", body)
+	req.Header.Set("Authorization", "Bearer demo-token")
+	req.Header.Set("X-Workspace-ID", "wks_acme")
+	req.Header.Set("Content-Type", "application/json")
+
+	rec := httptest.NewRecorder()
+	router.ServeHTTP(rec, req)
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("generate status = %d, want %d, body = %s", rec.Code, http.StatusCreated, rec.Body.String())
+	}
+
+	var response struct {
+		Trace ai.GenerationTrace `json:"trace"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &response); err != nil {
+		t.Fatalf("unmarshal generated response: %v", err)
+	}
+	if !containsString(response.Trace.RetrievedIDs, "kbc_legacy_kbi_1001_0000") {
+		t.Fatalf("trace retrieved ids = %#v, want migrated legacy chunk id", response.Trace.RetrievedIDs)
 	}
 }
 
@@ -1750,6 +2830,171 @@ func TestXiaohongshuBrowserLoginFlow(t *testing.T) {
 	}
 }
 
+func TestSohuPhoneSMSInteractiveLoginFlow(t *testing.T) {
+	router, handler := testWorkspaceRouterWithHandler()
+	handler.interactiveLoginForPlatform = func(platformType string) (interactiveLoginService, bool) {
+		if platformType != platformTypeSohu {
+			return nil, false
+		}
+		return fakeInteractiveLoginService{}, true
+	}
+
+	body := bytes.NewBufferString(`{
+		"platformId": "plt_sohu",
+		"name": "搜狐号账号",
+		"externalId": "sohu-demo",
+		"loginMethod": "phone",
+		"phoneNumber": "13800000000"
+	}`)
+	createReq := httptest.NewRequest(http.MethodPost, "/api/media-accounts", body)
+	createReq.Header.Set("Authorization", "Bearer demo-token")
+	createReq.Header.Set("X-Workspace-ID", "wks_personal")
+	createReq.Header.Set("Content-Type", "application/json")
+	createRec := httptest.NewRecorder()
+	router.ServeHTTP(createRec, createReq)
+	if createRec.Code != http.StatusCreated {
+		t.Fatalf("create status = %d, want %d, body = %s", createRec.Code, http.StatusCreated, createRec.Body.String())
+	}
+	var account model.MediaAccount
+	if err := json.Unmarshal(createRec.Body.Bytes(), &account); err != nil {
+		t.Fatalf("unmarshal account: %v", err)
+	}
+	if account.Status != "pending_login" || account.LoginMethod != "phone" {
+		t.Fatalf("unexpected account login state: %#v", account)
+	}
+
+	startReq := httptest.NewRequest(http.MethodPost, fmt.Sprintf("/api/media-accounts/%s/auth/start", account.ID), bytes.NewBufferString(`{}`))
+	startReq.Header.Set("Authorization", "Bearer demo-token")
+	startReq.Header.Set("X-Workspace-ID", "wks_personal")
+	startReq.Header.Set("Content-Type", "application/json")
+	startRec := httptest.NewRecorder()
+	router.ServeHTTP(startRec, startReq)
+	if startRec.Code != http.StatusOK {
+		t.Fatalf("start status = %d, want %d, body = %s", startRec.Code, http.StatusOK, startRec.Body.String())
+	}
+	var startResponse struct {
+		SessionID string                                `json:"sessionId"`
+		Strategy  string                                `json:"strategy"`
+		State     browserplatform.InteractiveLoginState `json:"state"`
+	}
+	if err := json.Unmarshal(startRec.Body.Bytes(), &startResponse); err != nil {
+		t.Fatalf("unmarshal start response: %v", err)
+	}
+	if startResponse.Strategy != string(mediaAuthStrategyKindPhoneSMSBrowser) || startResponse.State.Status != "phone_required" {
+		t.Fatalf("unexpected start response: %#v", startResponse)
+	}
+
+	actionBody := bytes.NewBufferString(fmt.Sprintf(`{"sessionId":%q,"action":"submit_phone","phoneNumber":"13800000000"}`, startResponse.SessionID))
+	actionReq := httptest.NewRequest(http.MethodPost, fmt.Sprintf("/api/media-accounts/%s/auth/actions", account.ID), actionBody)
+	actionReq.Header.Set("Authorization", "Bearer demo-token")
+	actionReq.Header.Set("X-Workspace-ID", "wks_personal")
+	actionReq.Header.Set("Content-Type", "application/json")
+	actionRec := httptest.NewRecorder()
+	router.ServeHTTP(actionRec, actionReq)
+	if actionRec.Code != http.StatusOK {
+		t.Fatalf("action status = %d, want %d, body = %s", actionRec.Code, http.StatusOK, actionRec.Body.String())
+	}
+	var actionResponse struct {
+		State browserplatform.InteractiveLoginState `json:"state"`
+	}
+	if err := json.Unmarshal(actionRec.Body.Bytes(), &actionResponse); err != nil {
+		t.Fatalf("unmarshal action response: %v", err)
+	}
+	if actionResponse.State.Status != "captcha_required" || actionResponse.State.CaptchaScreenshotData == "" {
+		t.Fatalf("unexpected action state: %#v", actionResponse.State)
+	}
+}
+
+func TestSohuPhoneSMSInteractiveLoginStartReusesActiveSession(t *testing.T) {
+	router, handler := testWorkspaceRouterWithHandler()
+	startCalls := 0
+	handler.interactiveLoginForPlatform = func(platformType string) (interactiveLoginService, bool) {
+		if platformType != platformTypeSohu {
+			return nil, false
+		}
+		return fakeInteractiveLoginService{startCalls: &startCalls}, true
+	}
+
+	account := createSohuPhoneAccount(t, router)
+	first := startSohuPhoneAuthForTest(t, router, account.ID)
+	second := startSohuPhoneAuthForTest(t, router, account.ID)
+
+	if startCalls != 1 {
+		t.Fatalf("interactive login Start called %d times, want 1", startCalls)
+	}
+	if first.SessionID == "" || second.SessionID != first.SessionID {
+		t.Fatalf("expected reused session id, first=%q second=%q", first.SessionID, second.SessionID)
+	}
+	if !second.Reused {
+		t.Fatalf("second start reused = false, want true")
+	}
+	if second.State.Status != "phone_required" {
+		t.Fatalf("second state status = %q, want phone_required", second.State.Status)
+	}
+}
+
+func TestMediaAuthStrategyRegistryResolvesQRBrowserOnlyForBrowserAuthorization(t *testing.T) {
+	registry := mediaAuthStrategyRegistry{
+		browserLoginForPlatform: func(platformType string) (xiaohongshu.BrowserLoginService, string) {
+			return fakeBrowserLoginService{}, "https://example.test/login"
+		},
+	}
+	account := model.MediaAccount{LoginMethod: "qr"}
+	platform := model.MediaPlatform{
+		ID:      "plt_strategy_qr",
+		Name:    "策略二维码平台",
+		Type:    "strategy_qr",
+		Enabled: true,
+		Capabilities: domain.MediaPlatformCapabilities{
+			AuthorizationMethods: []domain.AuthorizationMethod{domain.AuthorizationMethodQRLogin},
+			Capabilities: []domain.ConnectorCapabilityContract{
+				{
+					Name:    domain.ConnectorCapabilityAuthorization,
+					Mode:    domain.ConnectorCapabilityModeBrowser,
+					Enabled: true,
+				},
+			},
+		},
+	}
+
+	strategy, ok := registry.Resolve(platform, account)
+	if !ok {
+		t.Fatal("expected qr browser auth strategy")
+	}
+	if strategy.Kind() != mediaAuthStrategyKindQRBrowser || !strategy.SupportsBrowserLogin() {
+		t.Fatalf("unexpected strategy: kind=%s browser=%v", strategy.Kind(), strategy.SupportsBrowserLogin())
+	}
+}
+
+func TestMediaAuthStrategyRegistryRejectsManualAuthorizationForBrowserLogin(t *testing.T) {
+	registry := mediaAuthStrategyRegistry{
+		browserLoginForPlatform: func(platformType string) (xiaohongshu.BrowserLoginService, string) {
+			return fakeBrowserLoginService{}, "https://example.test/login"
+		},
+	}
+	account := model.MediaAccount{LoginMethod: "manual"}
+	platform := model.MediaPlatform{
+		ID:      "plt_strategy_manual",
+		Name:    "手动授权平台",
+		Type:    "strategy_manual",
+		Enabled: true,
+		Capabilities: domain.MediaPlatformCapabilities{
+			AuthorizationMethods: []domain.AuthorizationMethod{domain.AuthorizationMethodManualOnly},
+			Capabilities: []domain.ConnectorCapabilityContract{
+				{
+					Name:    domain.ConnectorCapabilityAuthorization,
+					Mode:    domain.ConnectorCapabilityModeManual,
+					Enabled: true,
+				},
+			},
+		},
+	}
+
+	if strategy, ok := registry.Resolve(platform, account); ok {
+		t.Fatalf("manual platform should not resolve browser login strategy: %#v", strategy)
+	}
+}
+
 func createXiaohongshuAccount(t *testing.T, router *gin.Engine) model.MediaAccount {
 	t.Helper()
 
@@ -1775,6 +3020,59 @@ func createXiaohongshuAccount(t *testing.T, router *gin.Engine) model.MediaAccou
 		t.Fatalf("unmarshal account response: %v", err)
 	}
 	return account
+}
+
+func createSohuPhoneAccount(t *testing.T, router *gin.Engine) model.MediaAccount {
+	t.Helper()
+
+	body := bytes.NewBufferString(`{
+		"platformId": "plt_sohu",
+		"name": "搜狐号账号",
+		"externalId": "sohu-demo",
+		"loginMethod": "phone",
+		"phoneNumber": "13800000000"
+	}`)
+	req := httptest.NewRequest(http.MethodPost, "/api/media-accounts", body)
+	req.Header.Set("Authorization", "Bearer demo-token")
+	req.Header.Set("X-Workspace-ID", "wks_personal")
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+	router.ServeHTTP(rec, req)
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("create sohu account status = %d, want %d, body = %s", rec.Code, http.StatusCreated, rec.Body.String())
+	}
+
+	var account model.MediaAccount
+	if err := json.Unmarshal(rec.Body.Bytes(), &account); err != nil {
+		t.Fatalf("unmarshal sohu account response: %v", err)
+	}
+	return account
+}
+
+type mediaAccountAuthStartTestResponse struct {
+	SessionID string                                `json:"sessionId"`
+	Strategy  string                                `json:"strategy"`
+	Reused    bool                                  `json:"reused"`
+	State     browserplatform.InteractiveLoginState `json:"state"`
+}
+
+func startSohuPhoneAuthForTest(t *testing.T, router *gin.Engine, accountID string) mediaAccountAuthStartTestResponse {
+	t.Helper()
+	req := httptest.NewRequest(http.MethodPost, fmt.Sprintf("/api/media-accounts/%s/auth/start", accountID), bytes.NewBufferString(`{}`))
+	req.Header.Set("Authorization", "Bearer demo-token")
+	req.Header.Set("X-Workspace-ID", "wks_personal")
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+	router.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("start sohu phone auth status = %d, want %d, body = %s", rec.Code, http.StatusOK, rec.Body.String())
+	}
+
+	var response mediaAccountAuthStartTestResponse
+	if err := json.Unmarshal(rec.Body.Bytes(), &response); err != nil {
+		t.Fatalf("unmarshal sohu phone auth start response: %v", err)
+	}
+	return response
 }
 
 func createWorkspaceKnowledgeBase(t *testing.T, router *gin.Engine, name string) model.KnowledgeBase {
@@ -1819,12 +3117,129 @@ func sameStringSet(actual []string, expected []string) bool {
 	return true
 }
 
+func hasKnowledgeTask(items []model.KnowledgeProcessingTask, taskType string, status string) bool {
+	for _, item := range items {
+		if item.TaskType == taskType && item.Status == status {
+			return true
+		}
+	}
+	return false
+}
+
+func hasKnowledgeTaskWithStatuses(items []model.KnowledgeProcessingTask, taskType string, statuses []string) bool {
+	for _, status := range statuses {
+		if hasKnowledgeTask(items, taskType, status) {
+			return true
+		}
+	}
+	return false
+}
+
+func waitForKnowledgeTaskStatus(t *testing.T, router *gin.Engine, assetID string, taskType string, status string) []model.KnowledgeProcessingTask {
+	t.Helper()
+	var items []model.KnowledgeProcessingTask
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		items = listKnowledgeAssetTasksForTest(t, router, assetID)
+		if hasKnowledgeTask(items, taskType, status) {
+			return items
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	t.Fatalf("task %s did not reach %s, last tasks: %#v", taskType, status, items)
+	return nil
+}
+
+func listKnowledgeAssetTasksForTest(t *testing.T, router *gin.Engine, assetID string) []model.KnowledgeProcessingTask {
+	t.Helper()
+	req := httptest.NewRequest(http.MethodGet, "/api/knowledge-assets/"+assetID+"/tasks", nil)
+	req.Header.Set("Authorization", "Bearer demo-token")
+	req.Header.Set("X-Workspace-ID", "wks_acme")
+	rec := httptest.NewRecorder()
+	router.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("list tasks status = %d, want %d, body = %s", rec.Code, http.StatusOK, rec.Body.String())
+	}
+	var response struct {
+		Items []model.KnowledgeProcessingTask `json:"items"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &response); err != nil {
+		t.Fatalf("unmarshal task response: %v", err)
+	}
+	return response.Items
+}
+
+func getKnowledgeAssetForTest(t *testing.T, router *gin.Engine, assetID string) model.KnowledgeAsset {
+	t.Helper()
+	req := httptest.NewRequest(http.MethodGet, "/api/knowledge-assets/"+assetID, nil)
+	req.Header.Set("Authorization", "Bearer demo-token")
+	req.Header.Set("X-Workspace-ID", "wks_acme")
+	rec := httptest.NewRecorder()
+	router.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("get asset status = %d, want %d, body = %s", rec.Code, http.StatusOK, rec.Body.String())
+	}
+	var asset model.KnowledgeAsset
+	if err := json.Unmarshal(rec.Body.Bytes(), &asset); err != nil {
+		t.Fatalf("unmarshal asset response: %v", err)
+	}
+	return asset
+}
+
+func listKnowledgeAssetChunksForTest(t *testing.T, router *gin.Engine, assetID string) []model.KnowledgeChunk {
+	t.Helper()
+	req := httptest.NewRequest(http.MethodGet, "/api/knowledge-assets/"+assetID+"/chunks", nil)
+	req.Header.Set("Authorization", "Bearer demo-token")
+	req.Header.Set("X-Workspace-ID", "wks_acme")
+	rec := httptest.NewRecorder()
+	router.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("list chunks status = %d, want %d, body = %s", rec.Code, http.StatusOK, rec.Body.String())
+	}
+	var response struct {
+		Items []model.KnowledgeChunk `json:"items"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &response); err != nil {
+		t.Fatalf("unmarshal chunks response: %v", err)
+	}
+	return response.Items
+}
+
+func knowledgeChunksContain(items []model.KnowledgeChunk, value string) bool {
+	for _, item := range items {
+		if strings.Contains(item.Content, value) || strings.Contains(item.SearchText, value) {
+			return true
+		}
+	}
+	return false
+}
+
+func knowledgeChunksSearchTextContain(items []model.KnowledgeChunk, value string) bool {
+	for _, item := range items {
+		if strings.Contains(item.SearchText, value) {
+			return true
+		}
+	}
+	return false
+}
+
 func testWorkspaceRouter() *gin.Engine {
+	router, _ := testWorkspaceRouterWithHandler()
+	return router
+}
+
+func testWorkspaceRouterWithHandler() (*gin.Engine, *WorkspaceHandler) {
+	gin.SetMode(gin.TestMode)
+	handler := NewWorkspaceHandler(nil, ai.NewRuntimeConfig(ai.Config{Provider: ai.ProviderMock}))
+	handler.browserLogin = fakeBrowserLoginService{}
+	router := testRouterForHandler(handler)
+	return router, handler
+}
+
+func testRouterForHandler(handler *WorkspaceHandler) *gin.Engine {
 	gin.SetMode(gin.TestMode)
 	router := gin.New()
 	apiGroup := router.Group("/api")
-	handler := NewWorkspaceHandler(nil, ai.NewRuntimeConfig(ai.Config{Provider: ai.ProviderMock}))
-	handler.browserLogin = fakeBrowserLoginService{}
 	handler.Register(apiGroup, middleware.AuthWithTokenResolver(handler.ResolveUserSession))
 	return router
 }
@@ -1850,4 +3265,69 @@ func (fakeBrowserLoginService) Complete(_ context.Context, req xiaohongshu.Brows
 		LoggedIn:    true,
 		CompletedAt: time.Now().UTC(),
 	}, nil
+}
+
+type fakeInteractiveLoginService struct {
+	startCalls *int
+}
+
+func (fakeInteractiveLoginService) LoginURLValue() string {
+	return "https://mp.sohu.com/mpfe/v4/login"
+}
+
+func (service fakeInteractiveLoginService) Start(_ context.Context, req browserplatform.InteractiveLoginStartRequest) (browserplatform.InteractiveLoginState, error) {
+	if service.startCalls != nil {
+		(*service.startCalls)++
+	}
+	return browserplatform.InteractiveLoginState{
+		SessionID:      req.SessionID,
+		Platform:       platformTypeSohu,
+		LoginURL:       "https://mp.sohu.com/mpfe/v4/login",
+		PageURL:        "https://mp.sohu.com/mpfe/v4/login",
+		ProfileDir:     req.ProfileDir,
+		StateFile:      req.StateFile,
+		CommandFile:    req.CommandFile,
+		Status:         "phone_required",
+		Message:        "请输入搜狐号绑定手机号",
+		AllowedActions: []string{"submit_phone"},
+		Warnings:       []string{},
+		StartedAt:      time.Now().UTC().Format(time.RFC3339),
+		LastCheckedAt:  time.Now().UTC().Format(time.RFC3339),
+	}, nil
+}
+
+func (fakeInteractiveLoginService) State(_ context.Context, sessionID string, profileDir string, stateFile string, commandFile string) (browserplatform.InteractiveLoginState, bool, error) {
+	return browserplatform.InteractiveLoginState{
+		SessionID:      sessionID,
+		Platform:       platformTypeSohu,
+		LoginURL:       "https://mp.sohu.com/mpfe/v4/login",
+		PageURL:        "https://mp.sohu.com/mpfe/v4/login",
+		ProfileDir:     profileDir,
+		StateFile:      stateFile,
+		CommandFile:    commandFile,
+		Status:         "phone_required",
+		Message:        "请输入搜狐号绑定手机号",
+		AllowedActions: []string{"submit_phone"},
+		Warnings:       []string{},
+		LastCheckedAt:  time.Now().UTC().Format(time.RFC3339),
+	}, true, nil
+}
+
+func (fakeInteractiveLoginService) Action(_ context.Context, profileDir string, stateFile string, commandFile string, req browserplatform.InteractiveLoginActionRequest) (browserplatform.InteractiveLoginState, bool, error) {
+	return browserplatform.InteractiveLoginState{
+		SessionID:             req.SessionID,
+		Platform:              platformTypeSohu,
+		LoginURL:              "https://mp.sohu.com/mpfe/v4/login",
+		PageURL:               "https://mp.sohu.com/mpfe/v4/login",
+		ProfileDir:            profileDir,
+		StateFile:             stateFile,
+		CommandFile:           commandFile,
+		Status:                "captcha_required",
+		Message:               "请输入图形验证码",
+		CaptchaScreenshotData: "data:image/png;base64,test",
+		AllowedActions:        []string{"submit_captcha", "refresh_captcha"},
+		Warnings:              []string{},
+		LastCheckedAt:         time.Now().UTC().Format(time.RFC3339),
+		LastCommandID:         req.Action,
+	}, true, nil
 }

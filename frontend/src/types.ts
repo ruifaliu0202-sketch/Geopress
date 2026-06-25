@@ -48,7 +48,10 @@ export type KnowledgeBase = {
   workspaceId: string;
   name: string;
   description: string;
+  status: string;
   itemCount: number;
+  deletedAt?: string;
+  deleteExpiresAt?: string;
   updatedAt: string;
 };
 
@@ -60,6 +63,64 @@ export type KnowledgeItem = {
   title: string;
   content: string;
   enabled: boolean;
+  updatedAt: string;
+};
+
+export type KnowledgeAsset = {
+  id: string;
+  workspaceId: string;
+  knowledgeBaseIds: string[];
+  title: string;
+  assetType: string;
+  mimeType: string;
+  originalFilename: string;
+  storageKey: string;
+  checksum: string;
+  status: string;
+  errorMessage: string;
+  progress: number;
+  extractedText: string;
+  aiEnhancementEnabled: boolean;
+  aiEnhancementStatus: string;
+  metadata: Record<string, unknown>;
+  deletedAt?: string;
+  deleteExpiresAt?: string;
+  createdAt: string;
+  updatedAt: string;
+};
+
+export type KnowledgeTrash = {
+  knowledgeBases: KnowledgeBase[];
+  knowledgeAssets: KnowledgeAsset[];
+};
+export type KnowledgeChunk = {
+  id: string;
+  assetId: string;
+  workspaceId: string;
+  knowledgeBaseIds: string[];
+  chunkIndex: number;
+  title: string;
+  content: string;
+  searchText: string;
+  summary: string;
+  tags: string[];
+  metadata: Record<string, unknown>;
+  enabled: boolean;
+  embeddingStatus: string;
+  embeddingError: string;
+  updatedAt: string;
+};
+export type KnowledgeProcessingTask = {
+  id: string;
+  assetId: string;
+  workspaceId: string;
+  taskType: string;
+  status: string;
+  progress: number;
+  errorMessage: string;
+  createdAt: string;
+  startedAt?: string;
+  finishedAt?: string;
   updatedAt: string;
 };
 
@@ -94,6 +155,12 @@ export type MediaPlatform = {
   supportsImage: boolean;
   supportsScheduling: boolean;
   credentialFields: string[];
+  capabilities?: {
+    authorizationMethods?: string[];
+    publishModes?: string[];
+    contentFormats?: string[];
+    capabilities?: Array<{ name: string; mode: string; enabled: boolean; manualFallback?: boolean; notes?: string }>;
+  };
 };
 
 export type MediaAccount = {
@@ -908,7 +975,7 @@ export type WorkspaceData = {
   workspaces: Workspace[];
   overview: Overview;
   knowledgeBases: KnowledgeBase[];
-  knowledgeItems: KnowledgeItem[];
+  knowledgeAssets: KnowledgeAsset[];
   mediaPlatforms: MediaPlatform[];
   mediaAccounts: MediaAccount[];
   contents: Content[];
@@ -921,35 +988,40 @@ export type CreateKnowledgeBasePayload = {
   description: string;
 };
 
-export type CreateKnowledgeItemPayload = {
-  knowledgeBaseId?: string;
-  knowledgeBaseIds?: string[];
-  type: string;
-  title: string;
-  content: string;
-};
-
-export type FormatKnowledgeContentPayload = {
-  type: string;
+export type CreateKnowledgeAssetFromTextPayload = {
   title?: string;
-  content: string;
+  text?: string;
+  content?: string;
+  knowledgeBaseId?: string;
+  knowledgeBaseIds: string[];
+  aiEnhancementEnabled?: boolean;
+  summary?: string;
+  tags?: string[];
+  metadata?: Record<string, unknown>;
+  mimeType?: string;
+  originalFilename?: string;
+  assetType?: string;
 };
 
-export type FormatKnowledgeContentResponse = {
-  content: string;
-  provider: string;
-  model: string;
-  fallback?: boolean;
-  fallbackError?: string;
-  tokenUsage: {
-    inputTokens: number;
-    outputTokens: number;
-    totalTokens: number;
-  };
+export type UploadKnowledgeAssetPayload = {
+  file: File | Blob;
+  title?: string;
+  knowledgeBaseId?: string;
+  knowledgeBaseIds: string[];
+  aiEnhancementEnabled?: boolean;
+  summary?: string;
+  tags?: string[];
+  mimeType?: string;
+  assetType?: string;
 };
 
-export type AssignKnowledgeItemsToBasesPayload = {
-  knowledgeItemIds: string[];
+export type CreateKnowledgeAssetResponse = {
+  asset: KnowledgeAsset;
+  task: KnowledgeProcessingTask;
+  chunks: KnowledgeChunk[];
+};
+
+export type UpdateKnowledgeAssetBasesPayload = {
   knowledgeBaseIds: string[];
 };
 
@@ -1072,6 +1144,7 @@ export type StartMediaAccountBrowserLoginResponse = {
   account: MediaAccount;
   expiresAt: string;
   mode?: string;
+  strategy?: string;
   qrScreenshotData: string;
   qrLoginUrl: string;
   sessionId: string;
@@ -1081,6 +1154,52 @@ export type StartMediaAccountBrowserLoginResponse = {
 
 export type CompleteMediaAccountBrowserLoginPayload = {
   sessionId: string;
+};
+
+export type MediaAccountAuthState = {
+  sessionId: string;
+  platform: string;
+  loginUrl: string;
+  pageUrl: string;
+  profileDir: string;
+  stateFile: string;
+  commandFile?: string;
+  status: string;
+  message: string;
+  loggedIn: boolean;
+  captchaScreenshotData?: string;
+  allowedActions: string[];
+  warnings: string[];
+  startedAt: string;
+  lastCheckedAt: string;
+  completedAt?: string;
+  lastCommandId?: string;
+};
+
+export type StartMediaAccountAuthResponse = {
+  account: MediaAccount;
+  expiresAt: string;
+  mode?: string;
+  strategy?: string;
+  sessionId: string;
+  state: MediaAccountAuthState;
+  stateFile: string;
+  commandFile: string;
+  reused?: boolean;
+};
+
+export type MediaAccountAuthStatusResponse = {
+  account: MediaAccount;
+  state: MediaAccountAuthState;
+};
+
+export type MediaAccountAuthActionPayload = {
+  sessionId: string;
+  action: string;
+  phoneNumber?: string;
+  captchaCode?: string;
+  smsCode?: string;
+  payload?: Record<string, unknown>;
 };
 
 export type GenerateContentPayload = {

@@ -1,6 +1,5 @@
 import type {
   AgencyClientRelation,
-  AssignKnowledgeItemsToBasesPayload,
   ApprovalTask,
   ApprovalWorkflow,
   BrandAsset,
@@ -17,17 +16,19 @@ import type {
   CreateBrandGuardrailPayload,
   CreateContentPayload,
   CreateKnowledgeBasePayload,
-  CreateKnowledgeItemPayload,
   CreateMediaAccountPayload,
   CreatePublishSchedulePayload,
   GenerateReportPackagePayload,
-  FormatKnowledgeContentPayload,
-  FormatKnowledgeContentResponse,
   GenerateContentPayload,
   GenerateContentResponse,
   InstalledSkillPackage,
+  CreateKnowledgeAssetFromTextPayload,
+  CreateKnowledgeAssetResponse,
   KnowledgeBase,
-  KnowledgeItem,
+  KnowledgeAsset,
+  KnowledgeChunk,
+  KnowledgeProcessingTask,
+  KnowledgeTrash,
   LoginResponse,
   MediaAccount,
   MediaAccountMatrixItem,
@@ -48,6 +49,9 @@ import type {
   StartMediaAccountBrowserLoginPayload,
   StartMediaAccountBrowserLoginResponse,
   CompleteMediaAccountBrowserLoginPayload,
+  MediaAccountAuthActionPayload,
+  MediaAccountAuthStatusResponse,
+  StartMediaAccountAuthResponse,
   CreateCreatorCampaignBriefPayload,
   CreateCreatorOrderPayload,
   CreateCreatorOrderResponse,
@@ -76,6 +80,8 @@ import type {
   ReviewCreatorDeliverablePayload,
   SubscriptionPlan,
   SubmitCreatorDeliverablePayload,
+  UploadKnowledgeAssetPayload,
+  UpdateKnowledgeAssetBasesPayload,
   User,
   WorkspaceSkillEntitlement,
   Workspace,
@@ -105,7 +111,8 @@ type MeResponse = {
 
 async function request<T>(path: string, token?: string, workspaceId?: string, init?: RequestInit): Promise<T> {
   const headers = new Headers(init?.headers);
-  if (init?.body && !headers.has('Content-Type')) {
+  const isFormDataBody = typeof FormData !== 'undefined' && init?.body instanceof FormData;
+  if (init?.body && !isFormDataBody && !headers.has('Content-Type')) {
     headers.set('Content-Type', 'application/json');
   }
   if (token) {
@@ -168,12 +175,22 @@ export async function completeOnboarding(
 }
 
 export async function fetchWorkspace(token: string, workspaceId: string): Promise<WorkspaceData> {
-  const [me, overview, knowledgeBases, knowledgeItems, mediaPlatforms, mediaAccounts, contents, schedules, jobs] =
+  const [
+    me,
+    overview,
+    knowledgeBases,
+    knowledgeAssets,
+    mediaPlatforms,
+    mediaAccounts,
+    contents,
+    schedules,
+    jobs,
+  ] =
     await Promise.all([
       request<MeResponse>('/me', token, workspaceId),
       request<Overview>('/overview', token, workspaceId),
       request<ListResponse<KnowledgeBase>>('/knowledge-bases', token, workspaceId),
-      request<ListResponse<KnowledgeItem>>('/knowledge-items', token, workspaceId),
+      fetchKnowledgeAssets(token, workspaceId).catch(() => []),
       request<ListResponse<MediaPlatform>>('/media-platforms', token, workspaceId),
       request<ListResponse<MediaAccount>>('/media-accounts', token, workspaceId),
       request<ListResponse<Content>>('/contents', token, workspaceId),
@@ -186,7 +203,7 @@ export async function fetchWorkspace(token: string, workspaceId: string): Promis
     workspaces: me.workspaces,
     overview,
     knowledgeBases: knowledgeBases.items,
-    knowledgeItems: knowledgeItems.items,
+    knowledgeAssets,
     mediaPlatforms: mediaPlatforms.items,
     mediaAccounts: mediaAccounts.items,
     contents: contents.items,
@@ -206,36 +223,174 @@ export async function createKnowledgeBase(
   });
 }
 
-export async function createKnowledgeItem(
+export async function trashKnowledgeBase(token: string, workspaceId: string, baseId: string): Promise<KnowledgeBase> {
+  return request<KnowledgeBase>(`/knowledge-bases/${baseId}/trash`, token, workspaceId, {
+    method: 'POST',
+  });
+}
+
+export async function restoreKnowledgeBase(token: string, workspaceId: string, baseId: string): Promise<KnowledgeBase> {
+  return request<KnowledgeBase>(`/knowledge-bases/${baseId}/restore`, token, workspaceId, {
+    method: 'POST',
+  });
+}
+
+export async function deleteKnowledgeBaseForever(token: string, workspaceId: string, baseId: string): Promise<{ deleted: boolean }> {
+  return request<{ deleted: boolean }>(`/knowledge-bases/${baseId}`, token, workspaceId, {
+    method: 'DELETE',
+  });
+}
+
+export async function fetchKnowledgeTrash(token: string, workspaceId: string): Promise<KnowledgeTrash> {
+  return request<KnowledgeTrash>('/knowledge-trash', token, workspaceId);
+}
+
+export async function purgeExpiredKnowledgeTrash(
   token: string,
   workspaceId: string,
-  payload: CreateKnowledgeItemPayload,
-): Promise<KnowledgeItem> {
-  return request<KnowledgeItem>('/knowledge-items', token, workspaceId, {
+): Promise<{ knowledgeBaseCount: number; knowledgeAssetCount: number }> {
+  return request<{ knowledgeBaseCount: number; knowledgeAssetCount: number }>('/knowledge-trash/purge-expired', token, workspaceId, {
+    method: 'POST',
+  });
+}
+
+export async function fetchKnowledgeAssets(
+  token: string,
+  workspaceId: string,
+  params: { knowledgeBaseId?: string } = {},
+): Promise<KnowledgeAsset[]> {
+  const query = new URLSearchParams();
+  if (params.knowledgeBaseId) {
+    query.set('knowledgeBaseId', params.knowledgeBaseId);
+  }
+  const suffix = query.toString() ? `?${query.toString()}` : '';
+  const response = await request<ListResponse<KnowledgeAsset>>(`/knowledge-assets${suffix}`, token, workspaceId);
+  return response.items;
+}
+
+export async function createKnowledgeAssetFromText(
+  token: string,
+  workspaceId: string,
+  payload: CreateKnowledgeAssetFromTextPayload,
+): Promise<CreateKnowledgeAssetResponse> {
+  return request<CreateKnowledgeAssetResponse>('/knowledge-assets', token, workspaceId, {
     method: 'POST',
     body: JSON.stringify(payload),
   });
 }
 
-export async function formatKnowledgeContent(
+export async function uploadKnowledgeAsset(
   token: string,
   workspaceId: string,
-  payload: FormatKnowledgeContentPayload,
-): Promise<FormatKnowledgeContentResponse> {
-  return request<FormatKnowledgeContentResponse>('/knowledge-items/format', token, workspaceId, {
+  payload: UploadKnowledgeAssetPayload,
+): Promise<CreateKnowledgeAssetResponse> {
+  const formData = new FormData();
+  formData.append('file', payload.file);
+  if (payload.title) {
+    formData.append('title', payload.title);
+  }
+  if (payload.knowledgeBaseId) {
+    formData.append('knowledgeBaseId', payload.knowledgeBaseId);
+  }
+  if (payload.knowledgeBaseIds.length > 0) {
+    formData.append('knowledgeBaseIds', payload.knowledgeBaseIds.join(','));
+  }
+  if (payload.aiEnhancementEnabled !== undefined) {
+    formData.append('aiEnhancementEnabled', String(payload.aiEnhancementEnabled));
+  }
+  if (payload.summary) {
+    formData.append('summary', payload.summary);
+  }
+  if (payload.tags && payload.tags.length > 0) {
+    formData.append('tags', payload.tags.join(','));
+  }
+  if (payload.mimeType) {
+    formData.append('mimeType', payload.mimeType);
+  }
+  if (payload.assetType) {
+    formData.append('assetType', payload.assetType);
+  }
+
+  return request<CreateKnowledgeAssetResponse>('/knowledge-assets', token, workspaceId, {
     method: 'POST',
-    body: JSON.stringify(payload),
+    body: formData,
   });
 }
 
-export async function assignKnowledgeItemsToBases(
+export async function fetchKnowledgeAssetChunks(
   token: string,
   workspaceId: string,
-  payload: AssignKnowledgeItemsToBasesPayload,
-): Promise<ListResponse<KnowledgeItem>> {
-  return request<ListResponse<KnowledgeItem>>('/knowledge-items/assign-bases', token, workspaceId, {
-    method: 'POST',
+  assetId: string,
+): Promise<KnowledgeChunk[]> {
+  const response = await request<ListResponse<KnowledgeChunk>>(
+    `/knowledge-assets/${assetId}/chunks`,
+    token,
+    workspaceId,
+  );
+  return response.items;
+}
+
+export async function fetchKnowledgeAssetTasks(
+  token: string,
+  workspaceId: string,
+  assetId: string,
+): Promise<KnowledgeProcessingTask[]> {
+  const response = await request<ListResponse<KnowledgeProcessingTask>>(
+    `/knowledge-assets/${assetId}/tasks`,
+    token,
+    workspaceId,
+  );
+  return response.items;
+}
+
+export async function updateKnowledgeAssetBases(
+  token: string,
+  workspaceId: string,
+  assetId: string,
+  payload: UpdateKnowledgeAssetBasesPayload,
+): Promise<KnowledgeAsset> {
+  const response = await request<{ asset: KnowledgeAsset; chunks: KnowledgeChunk[] }>(`/knowledge-assets/${assetId}/bases`, token, workspaceId, {
+    method: 'PUT',
     body: JSON.stringify(payload),
+  });
+  return response.asset;
+}
+
+export async function trashKnowledgeAsset(token: string, workspaceId: string, assetId: string): Promise<KnowledgeAsset> {
+  return request<KnowledgeAsset>(`/knowledge-assets/${assetId}/trash`, token, workspaceId, {
+    method: 'POST',
+  });
+}
+
+export async function restoreKnowledgeAsset(token: string, workspaceId: string, assetId: string): Promise<KnowledgeAsset> {
+  return request<KnowledgeAsset>(`/knowledge-assets/${assetId}/restore`, token, workspaceId, {
+    method: 'POST',
+  });
+}
+
+export async function deleteKnowledgeAssetForever(token: string, workspaceId: string, assetId: string): Promise<{ deleted: boolean }> {
+  return request<{ deleted: boolean }>(`/knowledge-assets/${assetId}`, token, workspaceId, {
+    method: 'DELETE',
+  });
+}
+
+export async function retryKnowledgeAssetProcessing(
+  token: string,
+  workspaceId: string,
+  assetId: string,
+): Promise<CreateKnowledgeAssetResponse> {
+  return request<CreateKnowledgeAssetResponse>(`/knowledge-assets/${assetId}/retry`, token, workspaceId, {
+    method: 'POST',
+  });
+}
+
+export async function enhanceKnowledgeAsset(
+  token: string,
+  workspaceId: string,
+  assetId: string,
+): Promise<CreateKnowledgeAssetResponse> {
+  return request<CreateKnowledgeAssetResponse>(`/knowledge-assets/${assetId}/ai-enhancement`, token, workspaceId, {
+    method: 'POST',
   });
 }
 
@@ -447,6 +602,37 @@ export async function completeMediaAccountBrowserLogin(
   payload: CompleteMediaAccountBrowserLoginPayload,
 ): Promise<MediaAccount> {
   return request<MediaAccount>(`/media-accounts/${accountId}/browser-login/complete`, token, workspaceId, {
+    method: 'POST',
+    body: JSON.stringify(payload),
+  });
+}
+
+export async function startMediaAccountAuth(
+  token: string,
+  workspaceId: string,
+  accountId: string,
+): Promise<StartMediaAccountAuthResponse> {
+  return request<StartMediaAccountAuthResponse>(`/media-accounts/${accountId}/auth/start`, token, workspaceId, {
+    method: 'POST',
+    body: JSON.stringify({}),
+  });
+}
+
+export async function fetchMediaAccountAuthStatus(
+  token: string,
+  workspaceId: string,
+  accountId: string,
+): Promise<MediaAccountAuthStatusResponse> {
+  return request<MediaAccountAuthStatusResponse>(`/media-accounts/${accountId}/auth/status`, token, workspaceId);
+}
+
+export async function sendMediaAccountAuthAction(
+  token: string,
+  workspaceId: string,
+  accountId: string,
+  payload: MediaAccountAuthActionPayload,
+): Promise<MediaAccountAuthStatusResponse> {
+  return request<MediaAccountAuthStatusResponse>(`/media-accounts/${accountId}/auth/actions`, token, workspaceId, {
     method: 'POST',
     body: JSON.stringify(payload),
   });

@@ -43,6 +43,7 @@ type AuthorizationMethod string
 const (
 	AuthorizationMethodNone       AuthorizationMethod = "none"
 	AuthorizationMethodQRLogin    AuthorizationMethod = "qr_login"
+	AuthorizationMethodPhoneSMS   AuthorizationMethod = "phone_sms"
 	AuthorizationMethodOAuth      AuthorizationMethod = "oauth"
 	AuthorizationMethodAPIToken   AuthorizationMethod = "api_token"
 	AuthorizationMethodManualOnly AuthorizationMethod = "manual_only"
@@ -51,6 +52,7 @@ const (
 var supportedAuthorizationMethods = map[AuthorizationMethod]bool{
 	AuthorizationMethodNone:       true,
 	AuthorizationMethodQRLogin:    true,
+	AuthorizationMethodPhoneSMS:   true,
 	AuthorizationMethodOAuth:      true,
 	AuthorizationMethodAPIToken:   true,
 	AuthorizationMethodManualOnly: true,
@@ -175,6 +177,10 @@ func LegacyCapabilities(supportsArticle, supportsImage, supportsScheduling bool,
 			authorizationMethods = []AuthorizationMethod{AuthorizationMethodQRLogin}
 			break
 		}
+		if field == "phoneNumber" {
+			authorizationMethods = []AuthorizationMethod{AuthorizationMethodPhoneSMS}
+			break
+		}
 	}
 
 	contentFormats := make([]string, 0, 2)
@@ -217,7 +223,7 @@ func LegacyCapabilities(supportsArticle, supportsImage, supportsScheduling bool,
 func connectorModeForAuthorization(methods []AuthorizationMethod) ConnectorCapabilityMode {
 	for _, method := range methods {
 		switch method {
-		case AuthorizationMethodQRLogin:
+		case AuthorizationMethodQRLogin, AuthorizationMethodPhoneSMS:
 			return ConnectorCapabilityModeBrowser
 		case AuthorizationMethodOAuth, AuthorizationMethodAPIToken:
 			return ConnectorCapabilityModeAPI

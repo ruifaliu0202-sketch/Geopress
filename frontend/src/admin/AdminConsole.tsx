@@ -476,9 +476,9 @@ function MediaPlatformEdit(props: EditProps) {
 
 function MediaPlatformForm() {
   return (
-    <SimpleForm defaultValues={{ name: '小红书', type: 'xiaohongshu', enabled: true, supportsArticle: true, supportsImage: true, supportsScheduling: false, credentialFields: ['qrLogin'] }}>
+    <SimpleForm defaultValues={{ name: '网易号', type: 'netease', enabled: true, supportsArticle: true, supportsImage: true, supportsScheduling: false, credentialFields: ['qrLogin'] }}>
       <TextInput source="name" label="平台名称" validate={required()} fullWidth />
-      <TextInput source="type" label="平台类型" validate={required()} helperText="当前仅支持 xiaohongshu" fullWidth />
+      <TextInput source="type" label="平台类型" validate={required()} helperText="支持 xiaohongshu、netease、toutiao、sohu" fullWidth />
       <TextInput
         source="credentialFields"
         label="凭证字段"

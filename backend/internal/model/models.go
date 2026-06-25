@@ -122,12 +122,15 @@ type WorkspaceMember struct {
 }
 
 type KnowledgeBase struct {
-	ID          string    `json:"id"`
-	WorkspaceID string    `json:"workspaceId"`
-	Name        string    `json:"name"`
-	Description string    `json:"description"`
-	ItemCount   int       `json:"itemCount"`
-	UpdatedAt   time.Time `json:"updatedAt"`
+	ID              string     `json:"id"`
+	WorkspaceID     string     `json:"workspaceId"`
+	Name            string     `json:"name"`
+	Description     string     `json:"description"`
+	Status          string     `json:"status"`
+	ItemCount       int        `json:"itemCount"`
+	DeletedAt       *time.Time `json:"deletedAt,omitempty"`
+	DeleteExpiresAt *time.Time `json:"deleteExpiresAt,omitempty"`
+	UpdatedAt       time.Time  `json:"updatedAt"`
 }
 
 type KnowledgeItem struct {
@@ -139,6 +142,62 @@ type KnowledgeItem struct {
 	Content          string    `json:"content"`
 	Enabled          bool      `json:"enabled"`
 	UpdatedAt        time.Time `json:"updatedAt"`
+}
+
+type KnowledgeAsset struct {
+	ID                   string         `json:"id"`
+	WorkspaceID          string         `json:"workspaceId"`
+	KnowledgeBaseIDs     []string       `json:"knowledgeBaseIds"`
+	Title                string         `json:"title"`
+	AssetType            string         `json:"assetType"`
+	MimeType             string         `json:"mimeType"`
+	OriginalFilename     string         `json:"originalFilename"`
+	StorageKey           string         `json:"storageKey"`
+	Checksum             string         `json:"checksum"`
+	SourceData           []byte         `json:"-"`
+	Status               string         `json:"status"`
+	ErrorMessage         string         `json:"errorMessage"`
+	Progress             int            `json:"progress"`
+	ExtractedText        string         `json:"extractedText"`
+	AIEnhancementEnabled bool           `json:"aiEnhancementEnabled"`
+	AIEnhancementStatus  string         `json:"aiEnhancementStatus"`
+	Metadata             map[string]any `json:"metadata"`
+	DeletedAt            *time.Time     `json:"deletedAt,omitempty"`
+	DeleteExpiresAt      *time.Time     `json:"deleteExpiresAt,omitempty"`
+	CreatedAt            time.Time      `json:"createdAt"`
+	UpdatedAt            time.Time      `json:"updatedAt"`
+}
+
+type KnowledgeChunk struct {
+	ID               string         `json:"id"`
+	AssetID          string         `json:"assetId"`
+	WorkspaceID      string         `json:"workspaceId"`
+	KnowledgeBaseIDs []string       `json:"knowledgeBaseIds"`
+	ChunkIndex       int            `json:"chunkIndex"`
+	Title            string         `json:"title"`
+	Content          string         `json:"content"`
+	SearchText       string         `json:"searchText"`
+	Summary          string         `json:"summary"`
+	Tags             []string       `json:"tags"`
+	Metadata         map[string]any `json:"metadata"`
+	Enabled          bool           `json:"enabled"`
+	EmbeddingStatus  string         `json:"embeddingStatus"`
+	EmbeddingError   string         `json:"embeddingError"`
+	UpdatedAt        time.Time      `json:"updatedAt"`
+}
+
+type KnowledgeProcessingTask struct {
+	ID           string     `json:"id"`
+	AssetID      string     `json:"assetId"`
+	WorkspaceID  string     `json:"workspaceId"`
+	TaskType     string     `json:"taskType"`
+	Status       string     `json:"status"`
+	Progress     int        `json:"progress"`
+	ErrorMessage string     `json:"errorMessage"`
+	CreatedAt    time.Time  `json:"createdAt"`
+	StartedAt    *time.Time `json:"startedAt,omitempty"`
+	FinishedAt   *time.Time `json:"finishedAt,omitempty"`
+	UpdatedAt    time.Time  `json:"updatedAt"`
 }
 
 type PlatformKnowledgeBase struct {
