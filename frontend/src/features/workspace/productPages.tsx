@@ -12,10 +12,11 @@ import {
   FormControl,
   Grid,
   InputLabel,
-  Link,
   MenuItem,
   Select,
   Stack,
+  Tab,
+  Tabs,
   Table,
   TableBody,
   TableCell,
@@ -29,10 +30,14 @@ import AddIcon from '@mui/icons-material/Add';
 import AutoAwesomeOutlinedIcon from '@mui/icons-material/AutoAwesomeOutlined';
 import AutorenewIcon from '@mui/icons-material/Autorenew';
 import CheckCircleOutlineIcon from '@mui/icons-material/CheckCircleOutline';
+import EditNoteOutlinedIcon from '@mui/icons-material/EditNoteOutlined';
 import FactCheckOutlinedIcon from '@mui/icons-material/FactCheckOutlined';
 import LibraryBooksOutlinedIcon from '@mui/icons-material/LibraryBooksOutlined';
+import LoginOutlinedIcon from '@mui/icons-material/LoginOutlined';
 import PlaylistAddCheckOutlinedIcon from '@mui/icons-material/PlaylistAddCheckOutlined';
 import PriceCheckOutlinedIcon from '@mui/icons-material/PriceCheckOutlined';
+import PublishOutlinedIcon from '@mui/icons-material/PublishOutlined';
+import VisibilityOutlinedIcon from '@mui/icons-material/VisibilityOutlined';
 import {
   createAgencyClientRelation,
   createApprovalWorkflow,
@@ -52,7 +57,6 @@ import {
   fetchCampaignReportSummary,
   fetchCampaigns,
   fetchComplianceChecks,
-  fetchContentMetrics,
   fetchCreators,
   fetchCreatorCampaignBriefs,
   fetchCreatorDeliverables,
@@ -60,7 +64,6 @@ import {
   fetchCreatorSettlements,
   fetchCreatorShortlists,
   fetchInstalledSkillPackages,
-  fetchMediaAccountMatrix,
   fetchReportPackages,
   fetchSkillPackageMarketplace,
   fetchSkillPackageUsage,
@@ -69,7 +72,6 @@ import {
   installSkillPackage,
   processApprovalTask,
   purchaseSkillPackage,
-  requestMediaAccountSync,
   submitComplianceCheck,
 } from '../../api';
 import { InfoRow, MetricCard, Section } from '../../components/common';
@@ -83,7 +85,6 @@ import type {
   CampaignCalendarItem,
   CampaignReportSummary,
   ComplianceCheck,
-  ContentMetric,
   Creator,
   CreatorCampaignBrief,
   CreatorDeliverable,
@@ -91,7 +92,6 @@ import type {
   CreatorSettlement,
   CreatorShortlist,
   InstalledSkillPackage,
-  MediaAccountMatrixItem,
   ReportPackage,
   SkillPackageMarketplaceItem,
   SkillPackageUsageMetric,
@@ -222,184 +222,1349 @@ function nextMonthInputValue() {
   return value.toISOString().slice(0, 10);
 }
 
-export function MediaMatrixView({ token, workspaceId, data }: ProductPageProps) {
-  const [state, setState] = useState<AsyncState<{ matrix: MediaAccountMatrixItem[]; contentMetrics: ContentMetric[] }>>({
-    ...emptyState,
-    items: { matrix: [], contentMetrics: [] },
-  });
-  const [syncingAccountId, setSyncingAccountId] = useState('');
+type SohuAccountStatus = 'connected' | 'needs_auth' | 'draft';
 
-  const load = useCallback(async () => {
-    setState((current) => ({ ...current, loading: true, error: null }));
-    try {
-      const [matrix, contentMetrics] = await Promise.all([
-        fetchMediaAccountMatrix(token, workspaceId),
-        fetchContentMetrics(token, workspaceId, { limit: 20 }),
-      ]);
-      setState({ items: { matrix, contentMetrics }, loading: false, error: null });
-    } catch (err) {
-      setState((current) => ({ ...current, loading: false, error: errorMessage(err, '媒体矩阵加载失败') }));
-    }
-  }, [token, workspaceId]);
-
-  useEffect(() => {
-    void load();
-  }, [load]);
-
-  const requestSync = async (accountId: string) => {
-    setSyncingAccountId(accountId);
-    setState((current) => ({ ...current, error: null }));
-    try {
-      await requestMediaAccountSync(token, workspaceId, accountId, { syncType: 'full' });
-      await load();
-    } catch (err) {
-      setState((current) => ({ ...current, error: errorMessage(err, '同步任务创建失败') }));
-    } finally {
-      setSyncingAccountId('');
-    }
+type SohuMatrixAccount = {
+  id: string;
+  name: string;
+  handle: string;
+  group: string;
+  owner: string;
+  role: string;
+  status: SohuAccountStatus;
+  healthStatus: string;
+  dataFreshness: string;
+  persona: string;
+  positioning: string;
+  targetAudience: string;
+  phoneMasked: string;
+  homepageUrl: string;
+  lastProfileSyncedAt: string;
+  lastMetricsSyncedAt: string;
+  nextAction: string;
+  contentCategories: string[];
+  metrics: {
+    followers: number;
+    contentCount: number;
+    totalReads: number;
+    totalLikes: number;
+    comments: number;
+    engagementRate: number;
   };
+  recentPublish: {
+    title: string;
+    status: string;
+    publishedAt: string;
+    reads: number;
+    interactions: number;
+  };
+  warnings: string[];
+};
 
-  const connectedCount = state.items.matrix.filter((item) => item.account.status === 'connected').length;
-  const staleCount = state.items.matrix.filter((item) => item.dataFreshness !== 'fresh').length;
+type SohuFlowStep = {
+  id: string;
+  label: string;
+  status: 'done' | 'active' | 'pending' | 'blocked';
+  detail: string;
+};
+
+type SohuContentMetricRow = {
+  id: string;
+  title: string;
+  accountId: string;
+  status: string;
+  publishedAt: string;
+  reads: number;
+  likes: number;
+  comments: number;
+  externalUrl: string;
+};
+
+const sohuMatrixAccounts: SohuMatrixAccount[] = [
+  {
+    id: 'sohu_main',
+    name: '品牌增长观察',
+    handle: 'sohu_growth_daily',
+    group: '品牌主号',
+    owner: '运营一组',
+    role: '主发布号',
+    status: 'connected',
+    healthStatus: 'healthy',
+    dataFreshness: 'fresh',
+    persona: '行业观察者',
+    positioning: '营销增长、品牌内容方法论',
+    targetAudience: '品牌市场负责人、中小企业主、内容运营',
+    phoneMasked: '138****3921',
+    homepageUrl: 'mp.sohu.com/profile/growth-daily',
+    lastProfileSyncedAt: '2026-06-25 18:20',
+    lastMetricsSyncedAt: '2026-06-25 18:28',
+    nextAction: '补录昨日内容阅读数据',
+    contentCategories: ['品牌增长', '投放复盘', '行业观察'],
+    metrics: {
+      followers: 42860,
+      contentCount: 286,
+      totalReads: 1842000,
+      totalLikes: 23610,
+      comments: 3260,
+      engagementRate: 0.0146,
+    },
+    recentPublish: {
+      title: '从种草到转化：内容团队如何复盘投放效率',
+      status: 'published',
+      publishedAt: '2026-06-25 10:30',
+      reads: 18420,
+      interactions: 426,
+    },
+    warnings: [],
+  },
+  {
+    id: 'sohu_lab',
+    name: '产品实验室',
+    handle: 'product_lab_sohu',
+    group: '垂类子号',
+    owner: '产品内容组',
+    role: '垂类承接',
+    status: 'connected',
+    healthStatus: 'watching',
+    dataFreshness: 'stale',
+    persona: '产品经理视角',
+    positioning: '工具评测、SaaS 选型、内容自动化',
+    targetAudience: '产品经理、创业团队、内容负责人',
+    phoneMasked: '186****5072',
+    homepageUrl: 'mp.sohu.com/profile/product-lab',
+    lastProfileSyncedAt: '2026-06-22 09:15',
+    lastMetricsSyncedAt: '2026-06-22 09:18',
+    nextAction: '确认后台数据入口字段',
+    contentCategories: ['SaaS', '效率工具', '案例拆解'],
+    metrics: {
+      followers: 16890,
+      contentCount: 132,
+      totalReads: 718000,
+      totalLikes: 9240,
+      comments: 980,
+      engagementRate: 0.0121,
+    },
+    recentPublish: {
+      title: '内容工作台的 5 个核心指标应该怎么设计',
+      status: 'manual_pending',
+      publishedAt: '2026-06-24 16:10',
+      reads: 9620,
+      interactions: 188,
+    },
+    warnings: ['指标快照超过 72 小时'],
+  },
+  {
+    id: 'sohu_test',
+    name: '搜狐号测试账号',
+    handle: 'geo_test_sohu',
+    group: '测试号',
+    owner: '技术验证',
+    role: '链路验证',
+    status: 'needs_auth',
+    healthStatus: 'needs_authorization',
+    dataFreshness: 'missing',
+    persona: '测试账号',
+    positioning: '登录、发文、回流验证',
+    targetAudience: '内部测试',
+    phoneMasked: '159****8846',
+    homepageUrl: 'mp.sohu.com/profile/test',
+    lastProfileSyncedAt: '-',
+    lastMetricsSyncedAt: '-',
+    nextAction: '完成手机号验证码登录',
+    contentCategories: ['测试发布'],
+    metrics: {
+      followers: 0,
+      contentCount: 0,
+      totalReads: 0,
+      totalLikes: 0,
+      comments: 0,
+      engagementRate: 0,
+    },
+    recentPublish: {
+      title: '暂无发布记录',
+      status: 'draft',
+      publishedAt: '-',
+      reads: 0,
+      interactions: 0,
+    },
+    warnings: ['未完成搜狐号授权'],
+  },
+];
+
+const sohuFlowSteps: SohuFlowStep[] = [
+  { id: 'account', label: '账号建档', status: 'done', detail: '记录手机号、主页、分组、负责人和定位' },
+  { id: 'auth', label: '登录授权', status: 'active', detail: '复用搜狐号 phone/SMS 浏览器登录流程' },
+  { id: 'snapshot', label: '数据快照', status: 'pending', detail: '录入后台可见粉丝、内容、阅读和互动数据' },
+  { id: 'publish', label: '发布任务', status: 'pending', detail: '选择内容和搜狐号账号执行浏览器发布' },
+  { id: 'metrics', label: '结果回流', status: 'pending', detail: '按内容 URL 补录阅读、点赞、评论等指标' },
+];
+
+const sohuContentMetrics: SohuContentMetricRow[] = [
+  {
+    id: 'content_sohu_1',
+    title: '从种草到转化：内容团队如何复盘投放效率',
+    accountId: 'sohu_main',
+    status: 'published',
+    publishedAt: '2026-06-25 10:30',
+    reads: 18420,
+    likes: 312,
+    comments: 74,
+    externalUrl: 'https://mp.sohu.com/a/884201928_121001',
+  },
+  {
+    id: 'content_sohu_2',
+    title: '内容工作台的 5 个核心指标应该怎么设计',
+    accountId: 'sohu_lab',
+    status: 'manual_pending',
+    publishedAt: '2026-06-24 16:10',
+    reads: 9620,
+    likes: 141,
+    comments: 47,
+    externalUrl: 'https://mp.sohu.com/a/884111320_121001',
+  },
+  {
+    id: 'content_sohu_3',
+    title: '搜狐号链路测试：图文发布与结果确认',
+    accountId: 'sohu_test',
+    status: 'draft',
+    publishedAt: '-',
+    reads: 0,
+    likes: 0,
+    comments: 0,
+    externalUrl: '',
+  },
+];
+
+const sohuVisibleFieldGroups = [
+  {
+    title: '账号主页',
+    fields: ['昵称', '头像', '搜狐号/主页地址', '简介', '认证状态', '粉丝数'],
+  },
+  {
+    title: '后台首页',
+    fields: ['账号状态', '系统通知', '昨日阅读', '新增粉丝', '待处理事项'],
+  },
+  {
+    title: '内容管理',
+    fields: ['文章标题', '发布时间', '审核状态', '外部链接', '阅读', '点赞', '评论'],
+  },
+  {
+    title: '数据分析',
+    fields: ['总阅读', '推荐量', '互动量', '粉丝趋势', '单篇内容趋势'],
+  },
+];
+
+const sohuRoadmapItems = [
+  '第一步：人工录入账号快照和单篇内容指标',
+  '第二步：浏览器辅助读取当前页面可见字段',
+  '第三步：同步任务队列化，沉淀采集日志和失败原因',
+  '第四步：按账号定位、内容类型和发布时间做复盘报表',
+];
+
+type MatrixPlatformKey = 'overview' | 'sohu' | 'xiaohongshu' | 'toutiao' | 'netease';
+type MatrixAssetPlatformKey = Exclude<MatrixPlatformKey, 'overview'>;
+
+type MatrixPlatformConfig = {
+  key: MatrixAssetPlatformKey;
+  label: string;
+  iconLabel: string;
+  description: string;
+  authMode: string;
+  dataMode: string;
+  primaryAction: string;
+  flowSteps: SohuFlowStep[];
+  visibleFieldGroups: Array<{ title: string; fields: string[] }>;
+  roadmapItems: string[];
+};
+
+type MediaMatrixAccount = SohuMatrixAccount & {
+  platformKey: MatrixAssetPlatformKey;
+  platformName: string;
+  platformIcon: string;
+  loginMode: string;
+  dataSource: string;
+  capabilitySummary: string;
+};
+
+type MediaMatrixContentMetricRow = SohuContentMetricRow & {
+  platformKey: MatrixAssetPlatformKey;
+  platformName: string;
+};
+
+type MediaMatrixTodoItem = {
+  id: string;
+  platformKey: MatrixAssetPlatformKey;
+  accountId: string;
+  title: string;
+  priority: 'high' | 'medium' | 'low';
+  status: string;
+  dueAt: string;
+};
+
+const defaultPlatformFlowSteps: SohuFlowStep[] = [
+  { id: 'account', label: '账号建档', status: 'done', detail: '记录主页、负责人、分组、定位和账号能力' },
+  { id: 'auth', label: '授权方式', status: 'pending', detail: '确认平台支持扫码、手机号、手动或 API 授权' },
+  { id: 'snapshot', label: '数据快照', status: 'pending', detail: '先用人工录入沉淀账号级可视数据' },
+  { id: 'publish', label: '发布任务', status: 'pending', detail: '接入平台发布能力或保留人工确认入口' },
+  { id: 'metrics', label: '结果回流', status: 'pending', detail: '按内容链接补录阅读、互动和外部状态' },
+];
+
+const matrixPlatformConfigs: MatrixPlatformConfig[] = [
+  {
+    key: 'sohu',
+    label: '搜狐号',
+    iconLabel: '搜',
+    description: '优先打通手机号登录、文章发布和可视数据快照。',
+    authMode: '手机号验证码',
+    dataMode: '人工录入 / 浏览器辅助',
+    primaryAction: '发起搜狐号登录',
+    flowSteps: sohuFlowSteps,
+    visibleFieldGroups: sohuVisibleFieldGroups,
+    roadmapItems: sohuRoadmapItems,
+  },
+  {
+    key: 'xiaohongshu',
+    label: '小红书',
+    iconLabel: '小',
+    description: '先维护账号资产和公开主页快照，后续再评估授权能力。',
+    authMode: '扫码登录 / 手动维护',
+    dataMode: '公开可见快照',
+    primaryAction: '录入主页快照',
+    flowSteps: defaultPlatformFlowSteps,
+    visibleFieldGroups: [
+      { title: '公开主页', fields: ['昵称', '小红书号', '头像', '简介', '粉丝', '获赞与收藏', '笔记数'] },
+      { title: '发布记录', fields: ['笔记标题', '发布时间', '链接', '互动摘要', '人工备注'] },
+      { title: '运营风险', fields: ['账号异常', '内容审核', '数据过期', '登录状态'] },
+    ],
+    roadmapItems: ['维护主页快照', '接入二维码登录状态', '记录笔记发布结果', '评估官方授权或浏览器辅助采集'],
+  },
+  {
+    key: 'toutiao',
+    label: '头条号',
+    iconLabel: '头',
+    description: '管理图文发布、内容链接和内容级阅读互动数据。',
+    authMode: '扫码登录',
+    dataMode: '人工录入 / 浏览器辅助',
+    primaryAction: '发起头条号登录',
+    flowSteps: defaultPlatformFlowSteps,
+    visibleFieldGroups: [
+      { title: '账号主页', fields: ['头条号名称', '头像', '认证信息', '粉丝', '介绍'] },
+      { title: '内容管理', fields: ['标题', '状态', '发布时间', '阅读', '评论', '收益提示'] },
+      { title: '数据概览', fields: ['推荐量', '阅读量', '粉丝变化', '互动量'] },
+    ],
+    roadmapItems: ['复用浏览器登录', '记录文章发布状态', '补录内容数据', '沉淀收益/推荐指标字段'],
+  },
+  {
+    key: 'netease',
+    label: '网易号',
+    iconLabel: '网',
+    description: '维护账号档案、发布状态和内容数据回填。',
+    authMode: '扫码登录',
+    dataMode: '人工录入 / 浏览器辅助',
+    primaryAction: '发起网易号登录',
+    flowSteps: defaultPlatformFlowSteps,
+    visibleFieldGroups: [
+      { title: '账号主页', fields: ['网易号名称', '账号 ID', '头像', '简介', '粉丝'] },
+      { title: '内容列表', fields: ['标题', '审核状态', '发布时间', '阅读', '评论'] },
+      { title: '运营状态', fields: ['登录状态', '数据更新时间', '异常提示'] },
+    ],
+    roadmapItems: ['复用二维码登录', '接入文章发布', '记录外部 URL', '扩展内容指标回流'],
+  },
+];
+
+const additionalMatrixAccounts: MediaMatrixAccount[] = [
+  {
+    id: 'xhs_brand',
+    platformKey: 'xiaohongshu',
+    platformName: '小红书',
+    platformIcon: '小',
+    loginMode: '扫码登录',
+    dataSource: '公开主页快照',
+    capabilitySummary: '主页档案、发布排期、人工数据快照',
+    name: '品牌灵感研究所',
+    handle: 'RED_growth_lab',
+    group: '品牌主号',
+    owner: '内容增长组',
+    role: '种草主阵地',
+    status: 'connected',
+    healthStatus: 'watching',
+    dataFreshness: 'stale',
+    persona: '品牌研究员',
+    positioning: '品牌案例、生活方式场景、产品使用灵感',
+    targetAudience: '消费品牌主理人、年轻职场女性',
+    phoneMasked: '扫码登录',
+    homepageUrl: 'xiaohongshu.com/user/profile/red-growth-lab',
+    lastProfileSyncedAt: '2026-06-23 20:12',
+    lastMetricsSyncedAt: '2026-06-23 20:18',
+    nextAction: '补录最新主页展示数据',
+    contentCategories: ['生活方式', '品牌案例', '产品场景'],
+    metrics: {
+      followers: 62800,
+      contentCount: 94,
+      totalReads: 1260000,
+      totalLikes: 58200,
+      comments: 4210,
+      engagementRate: 0.0495,
+    },
+    recentPublish: {
+      title: '新品上市前，品牌内容如何提前种草',
+      status: 'published',
+      publishedAt: '2026-06-24 19:40',
+      reads: 41200,
+      interactions: 2360,
+    },
+    warnings: ['主页数据快照超过 48 小时'],
+  },
+  {
+    id: 'xhs_store',
+    platformKey: 'xiaohongshu',
+    platformName: '小红书',
+    platformIcon: '小',
+    loginMode: '手动维护',
+    dataSource: '人工录入',
+    capabilitySummary: '账号档案、内容排期、发布结果确认',
+    name: '门店探访日记',
+    handle: 'store_visit_notes',
+    group: '区域子号',
+    owner: '区域运营',
+    role: '本地内容承接',
+    status: 'draft',
+    healthStatus: 'watching',
+    dataFreshness: 'missing',
+    persona: '探店记录员',
+    positioning: '门店体验、活动预告、用户故事',
+    targetAudience: '本地消费者、会员用户',
+    phoneMasked: '手动维护',
+    homepageUrl: 'xiaohongshu.com/user/profile/store-visit',
+    lastProfileSyncedAt: '-',
+    lastMetricsSyncedAt: '-',
+    nextAction: '确认账号主页和负责人',
+    contentCategories: ['门店活动', '用户故事'],
+    metrics: {
+      followers: 8200,
+      contentCount: 36,
+      totalReads: 210000,
+      totalLikes: 8600,
+      comments: 510,
+      engagementRate: 0.0434,
+    },
+    recentPublish: {
+      title: '周末门店体验活动复盘',
+      status: 'draft',
+      publishedAt: '-',
+      reads: 0,
+      interactions: 0,
+    },
+    warnings: ['账号档案未完善'],
+  },
+  {
+    id: 'toutiao_main',
+    platformKey: 'toutiao',
+    platformName: '头条号',
+    platformIcon: '头',
+    loginMode: '扫码登录',
+    dataSource: '人工录入 / 浏览器辅助',
+    capabilitySummary: '文章发布、外链回填、阅读互动录入',
+    name: '增长方法周刊',
+    handle: 'growth_weekly',
+    group: '品牌主号',
+    owner: '运营一组',
+    role: '资讯长文分发',
+    status: 'connected',
+    healthStatus: 'healthy',
+    dataFreshness: 'fresh',
+    persona: '行业编辑',
+    positioning: '增长策略、行业观察、工具方法',
+    targetAudience: '市场负责人、企业经营者',
+    phoneMasked: '扫码登录',
+    homepageUrl: 'mp.toutiao.com/profile/growth-weekly',
+    lastProfileSyncedAt: '2026-06-25 16:00',
+    lastMetricsSyncedAt: '2026-06-25 16:05',
+    nextAction: '检查待发布文章审核状态',
+    contentCategories: ['行业资讯', '增长策略', '工具方法'],
+    metrics: {
+      followers: 73500,
+      contentCount: 412,
+      totalReads: 2860000,
+      totalLikes: 31800,
+      comments: 5840,
+      engagementRate: 0.0131,
+    },
+    recentPublish: {
+      title: 'AI 内容团队如何搭建选题流水线',
+      status: 'published',
+      publishedAt: '2026-06-25 09:00',
+      reads: 36600,
+      interactions: 740,
+    },
+    warnings: [],
+  },
+  {
+    id: 'toutiao_test',
+    platformKey: 'toutiao',
+    platformName: '头条号',
+    platformIcon: '头',
+    loginMode: '扫码登录',
+    dataSource: '人工录入',
+    capabilitySummary: '发布链路验证',
+    name: '头条链路测试号',
+    handle: 'tt_geo_test',
+    group: '测试号',
+    owner: '技术验证',
+    role: '链路验证',
+    status: 'needs_auth',
+    healthStatus: 'needs_authorization',
+    dataFreshness: 'missing',
+    persona: '测试账号',
+    positioning: '登录、发布、确认链接',
+    targetAudience: '内部测试',
+    phoneMasked: '扫码登录',
+    homepageUrl: 'mp.toutiao.com/profile/test',
+    lastProfileSyncedAt: '-',
+    lastMetricsSyncedAt: '-',
+    nextAction: '重新扫码授权',
+    contentCategories: ['测试发布'],
+    metrics: {
+      followers: 0,
+      contentCount: 0,
+      totalReads: 0,
+      totalLikes: 0,
+      comments: 0,
+      engagementRate: 0,
+    },
+    recentPublish: {
+      title: '暂无发布记录',
+      status: 'draft',
+      publishedAt: '-',
+      reads: 0,
+      interactions: 0,
+    },
+    warnings: ['未完成授权'],
+  },
+  {
+    id: 'netease_main',
+    platformKey: 'netease',
+    platformName: '网易号',
+    platformIcon: '网',
+    loginMode: '扫码登录',
+    dataSource: '人工录入 / 浏览器辅助',
+    capabilitySummary: '账号档案、文章发布、结果确认',
+    name: '企业内容观察',
+    handle: 'netease_content_ops',
+    group: '品牌主号',
+    owner: '品牌内容组',
+    role: '资讯分发',
+    status: 'connected',
+    healthStatus: 'healthy',
+    dataFreshness: 'fresh',
+    persona: '企业内容编辑',
+    positioning: '企业内容运营、案例观察、行业观点',
+    targetAudience: '企业市场部、内容团队',
+    phoneMasked: '扫码登录',
+    homepageUrl: 'mp.163.com/profile/content-ops',
+    lastProfileSyncedAt: '2026-06-25 14:35',
+    lastMetricsSyncedAt: '2026-06-25 14:40',
+    nextAction: '录入今天发布文章外链',
+    contentCategories: ['行业观点', '企业内容', '案例复盘'],
+    metrics: {
+      followers: 28400,
+      contentCount: 178,
+      totalReads: 932000,
+      totalLikes: 11800,
+      comments: 1420,
+      engagementRate: 0.0142,
+    },
+    recentPublish: {
+      title: '企业内容团队怎样做跨平台分发',
+      status: 'manual_pending',
+      publishedAt: '2026-06-25 11:20',
+      reads: 12800,
+      interactions: 190,
+    },
+    warnings: ['发布结果 URL 待人工确认'],
+  },
+];
+
+const mediaMatrixAccounts: MediaMatrixAccount[] = [
+  ...sohuMatrixAccounts.map((account) => ({
+    ...account,
+    platformKey: 'sohu' as const,
+    platformName: '搜狐号',
+    platformIcon: '搜',
+    loginMode: '手机号验证码',
+    dataSource: '人工录入 / 浏览器辅助',
+    capabilitySummary: '手机号登录、文章发布、结果回填',
+  })),
+  ...additionalMatrixAccounts,
+];
+
+const mediaMatrixContentMetrics: MediaMatrixContentMetricRow[] = [
+  ...sohuContentMetrics.map((item) => ({
+    ...item,
+    platformKey: 'sohu' as const,
+    platformName: '搜狐号',
+  })),
+  {
+    id: 'content_xhs_1',
+    platformKey: 'xiaohongshu',
+    platformName: '小红书',
+    title: '新品上市前，品牌内容如何提前种草',
+    accountId: 'xhs_brand',
+    status: 'published',
+    publishedAt: '2026-06-24 19:40',
+    reads: 41200,
+    likes: 1980,
+    comments: 380,
+    externalUrl: 'https://www.xiaohongshu.com/explore/mock-note',
+  },
+  {
+    id: 'content_toutiao_1',
+    platformKey: 'toutiao',
+    platformName: '头条号',
+    title: 'AI 内容团队如何搭建选题流水线',
+    accountId: 'toutiao_main',
+    status: 'published',
+    publishedAt: '2026-06-25 09:00',
+    reads: 36600,
+    likes: 520,
+    comments: 220,
+    externalUrl: 'https://www.toutiao.com/article/mock',
+  },
+  {
+    id: 'content_netease_1',
+    platformKey: 'netease',
+    platformName: '网易号',
+    title: '企业内容团队怎样做跨平台分发',
+    accountId: 'netease_main',
+    status: 'manual_pending',
+    publishedAt: '2026-06-25 11:20',
+    reads: 12800,
+    likes: 142,
+    comments: 48,
+    externalUrl: '',
+  },
+];
+
+const mediaMatrixTodos: MediaMatrixTodoItem[] = [
+  { id: 'todo_sohu_auth', platformKey: 'sohu', accountId: 'sohu_test', title: '搜狐号测试账号需要完成手机号验证码登录', priority: 'high', status: 'needs_auth', dueAt: '今天' },
+  { id: 'todo_xhs_snapshot', platformKey: 'xiaohongshu', accountId: 'xhs_brand', title: '小红书品牌主号主页数据超过 48 小时未更新', priority: 'medium', status: 'stale', dueAt: '今天' },
+  { id: 'todo_netease_url', platformKey: 'netease', accountId: 'netease_main', title: '网易号发布结果 URL 待人工确认', priority: 'medium', status: 'manual_pending', dueAt: '今天' },
+  { id: 'todo_tt_auth', platformKey: 'toutiao', accountId: 'toutiao_test', title: '头条链路测试号授权失效，需要重新扫码', priority: 'high', status: 'needs_auth', dueAt: '明天' },
+];
+
+function compactNumber(value: number) {
+  return new Intl.NumberFormat('zh-CN', {
+    notation: value >= 10000 ? 'compact' : 'standard',
+    maximumFractionDigits: 1,
+  }).format(value);
+}
+
+function percentValue(value: number) {
+  return `${(value * 100).toFixed(2)}%`;
+}
+
+function sohuStatusLabel(value: string) {
+  const labels: Record<string, string> = {
+    connected: '已连接',
+    needs_auth: '待授权',
+    draft: '草稿',
+    healthy: '健康',
+    watching: '观察中',
+    needs_authorization: '需授权',
+    fresh: '最新',
+    stale: '待刷新',
+    missing: '无快照',
+    published: '已发布',
+    manual_pending: '待确认',
+    done: '完成',
+    active: '进行中',
+    pending: '待接入',
+    blocked: '受阻',
+    high: '高',
+    medium: '中',
+    low: '低',
+  };
+  return labels[value] ?? value;
+}
+
+function sohuStatusColor(value: string): 'default' | 'primary' | 'info' | 'success' | 'warning' | 'error' {
+  if (['connected', 'healthy', 'fresh', 'published', 'done'].includes(value)) {
+    return 'success';
+  }
+  if (['needs_auth', 'needs_authorization', 'stale', 'manual_pending', 'active', 'watching'].includes(value)) {
+    return 'warning';
+  }
+  if (['missing', 'blocked'].includes(value)) {
+    return 'error';
+  }
+  if (['pending', 'draft'].includes(value)) {
+    return 'info';
+  }
+  return 'default';
+}
+
+function platformConfigByKey(platformKey: MatrixAssetPlatformKey) {
+  return matrixPlatformConfigs.find((platform) => platform.key === platformKey) ?? matrixPlatformConfigs[0];
+}
+
+function matrixAccountsByPlatform(platformKey: MatrixAssetPlatformKey) {
+  return mediaMatrixAccounts.filter((account) => account.platformKey === platformKey);
+}
+
+function matrixContentByPlatform(platformKey: MatrixAssetPlatformKey) {
+  return mediaMatrixContentMetrics.filter((item) => item.platformKey === platformKey);
+}
+
+function matrixAccountName(accountId: string) {
+  return mediaMatrixAccounts.find((account) => account.id === accountId)?.name ?? accountId;
+}
+
+function platformSummary(platform: MatrixPlatformConfig) {
+  const accounts = matrixAccountsByPlatform(platform.key);
+  const content = matrixContentByPlatform(platform.key);
+  const todos = mediaMatrixTodos.filter((item) => item.platformKey === platform.key);
+  return {
+    accountCount: accounts.length,
+    connectedCount: accounts.filter((account) => account.status === 'connected').length,
+    authIssueCount: accounts.filter((account) => account.status === 'needs_auth').length,
+    staleCount: accounts.filter((account) => account.dataFreshness !== 'fresh').length,
+    followerCount: accounts.reduce((sum, account) => sum + account.metrics.followers, 0),
+    publishCount: content.filter((item) => item.status === 'published').length,
+    issueCount: todos.length,
+  };
+}
+
+function MatrixWorkflowStep({ step, index }: { step: SohuFlowStep; index: number }) {
+  return (
+    <Box
+      sx={{
+        display: 'grid',
+        gridTemplateColumns: '32px minmax(0, 1fr)',
+        gap: 1.25,
+        minHeight: 94,
+        border: '1px solid',
+        borderColor: step.status === 'active' ? 'warning.light' : 'divider',
+        borderRadius: 1,
+        p: 1.5,
+        bgcolor: step.status === 'active' ? 'warning.50' : 'background.paper',
+      }}
+    >
+      <Box
+        sx={{
+          width: 32,
+          height: 32,
+          borderRadius: '50%',
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'center',
+          bgcolor: `${sohuStatusColor(step.status)}.main`,
+          color: 'common.white',
+          fontWeight: 700,
+        }}
+      >
+        {index + 1}
+      </Box>
+      <Stack spacing={0.75} sx={{ minWidth: 0 }}>
+        <Stack direction="row" spacing={1} alignItems="center" flexWrap="wrap" useFlexGap>
+          <Typography fontWeight={700} sx={wrappingTextSx}>
+            {step.label}
+          </Typography>
+          <Chip size="small" label={sohuStatusLabel(step.status)} color={sohuStatusColor(step.status)} />
+        </Stack>
+        <Typography variant="body2" color="text.secondary" sx={secondaryTextSx}>
+          {step.detail}
+        </Typography>
+      </Stack>
+    </Box>
+  );
+}
+
+function PlatformStatusCard({ platform, active, onSelect }: { platform: MatrixPlatformConfig; active: boolean; onSelect: () => void }) {
+  const summary = platformSummary(platform);
+  return (
+    <Box
+      component="button"
+      type="button"
+      onClick={onSelect}
+      sx={{
+        width: '100%',
+        minHeight: 192,
+        textAlign: 'left',
+        border: '1px solid',
+        borderColor: active ? 'primary.main' : 'divider',
+        borderRadius: 1,
+        bgcolor: active ? 'action.selected' : 'background.paper',
+        p: 2,
+        cursor: 'pointer',
+        font: 'inherit',
+        color: 'inherit',
+        transition: 'border-color 120ms ease, background-color 120ms ease',
+        '&:hover': {
+          borderColor: 'primary.main',
+          bgcolor: 'action.hover',
+        },
+      }}
+    >
+      <Stack spacing={1.5} sx={{ minWidth: 0 }}>
+        <Stack direction="row" spacing={1.25} alignItems="center">
+          <Box
+            sx={{
+              width: 42,
+              height: 42,
+              borderRadius: 1,
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              bgcolor: 'primary.main',
+              color: 'primary.contrastText',
+              fontWeight: 800,
+              flexShrink: 0,
+            }}
+          >
+            {platform.iconLabel}
+          </Box>
+          <Box sx={{ minWidth: 0 }}>
+            <Typography fontWeight={800} sx={wrappingTextSx}>
+              {platform.label}
+            </Typography>
+            <Typography variant="body2" color="text.secondary" sx={secondaryTextSx}>
+              {platform.description}
+            </Typography>
+          </Box>
+        </Stack>
+        <Grid container spacing={1}>
+          <Grid size={6}>
+            <InfoRow label="账号" value={String(summary.accountCount)} />
+          </Grid>
+          <Grid size={6}>
+            <InfoRow label="已连接" value={String(summary.connectedCount)} />
+          </Grid>
+          <Grid size={6}>
+            <InfoRow label="待授权" value={String(summary.authIssueCount)} />
+          </Grid>
+          <Grid size={6}>
+            <InfoRow label="待处理" value={String(summary.issueCount)} />
+          </Grid>
+        </Grid>
+        <Stack direction="row" spacing={0.75} flexWrap="wrap" useFlexGap>
+          <Chip size="small" label={platform.authMode} variant="outlined" />
+          <Chip size="small" label={platform.dataMode} variant="outlined" />
+        </Stack>
+      </Stack>
+    </Box>
+  );
+}
+
+function PlatformOverviewTab({ activePlatform, onSelectPlatform }: { activePlatform: MatrixPlatformKey; onSelectPlatform: (value: MatrixPlatformKey) => void }) {
+  const totalAccounts = mediaMatrixAccounts.length;
+  const connectedCount = mediaMatrixAccounts.filter((account) => account.status === 'connected').length;
+  const totalFollowers = mediaMatrixAccounts.reduce((sum, account) => sum + account.metrics.followers, 0);
+  const publishedCount = mediaMatrixContentMetrics.filter((item) => item.status === 'published').length;
+  const staleCount = mediaMatrixAccounts.filter((account) => account.dataFreshness !== 'fresh').length;
+  const manualPendingCount = mediaMatrixContentMetrics.filter((item) => item.status === 'manual_pending').length;
 
   return (
     <Stack spacing={3}>
       <Grid container spacing={2}>
-        <MetricCard label="矩阵账号" value={state.items.matrix.length} helper="纳入运营视图的媒体号" />
-        <MetricCard label="已连接" value={connectedCount} helper="可执行登录态任务" />
-        <MetricCard label="待刷新" value={staleCount} helper="指标新鲜度需关注" tone={staleCount > 0 ? 'error' : 'primary'} />
-        <MetricCard label="内容指标" value={state.items.contentMetrics.length} helper="最近采集的内容数据" />
+        <MetricCard label="矩阵账号" value={totalAccounts} helper="所有平台纳管账号" />
+        <MetricCard label="已连接" value={connectedCount} helper="可进入发布或后台查看" />
+        <MetricCard label="总粉丝" value={totalFollowers} helper={`最近快照汇总，约 ${compactNumber(totalFollowers)}`} />
+        <MetricCard label="近 7 天发布" value={publishedCount} helper="mock 发布回流记录" />
+        <MetricCard label="待刷新" value={staleCount} helper="快照缺失或过期" tone={staleCount > 0 ? 'error' : 'primary'} />
+        <MetricCard label="待确认" value={manualPendingCount} helper="发布 URL 或指标待补录" tone={manualPendingCount > 0 ? 'error' : 'primary'} />
       </Grid>
 
-      <Section
-        title="媒体号矩阵"
-        action={
-          <Button startIcon={<AutorenewIcon />} variant="outlined" onClick={load} disabled={state.loading}>
-            刷新
-          </Button>
-        }
-      >
-        <Stack spacing={2}>
-          {state.error && <Alert severity="error">{state.error}</Alert>}
-          {state.loading ? (
-            <LoadingRow label="正在加载媒体矩阵" />
-          ) : state.items.matrix.length === 0 ? (
-            <EmptyText>暂无媒体号矩阵数据</EmptyText>
-          ) : (
-            <ProductTable minWidth={900}>
+      <Section title="平台状态">
+        <Grid container spacing={1.5}>
+          {matrixPlatformConfigs.map((platform) => (
+            <Grid key={platform.key} size={{ xs: 12, md: 6, xl: 3 }}>
+              <PlatformStatusCard platform={platform} active={activePlatform === platform.key} onSelect={() => onSelectPlatform(platform.key)} />
+            </Grid>
+          ))}
+        </Grid>
+      </Section>
+
+      <Grid container spacing={2}>
+        <Grid size={{ xs: 12, lg: 5 }}>
+          <Section title="待处理事项">
+            <Stack spacing={1.25}>
+              {mediaMatrixTodos.map((todo) => {
+                const platform = platformConfigByKey(todo.platformKey);
+                return (
+                  <Box key={todo.id} sx={{ border: '1px solid', borderColor: 'divider', borderRadius: 1, p: 1.5 }}>
+                    <Stack spacing={1}>
+                      <Stack direction="row" spacing={0.75} alignItems="center" flexWrap="wrap" useFlexGap>
+                        <Chip size="small" label={platform.label} />
+                        <Chip size="small" label={`优先级 ${sohuStatusLabel(todo.priority)}`} color={todo.priority === 'high' ? 'error' : 'warning'} variant="outlined" />
+                        <Chip size="small" label={sohuStatusLabel(todo.status)} color={sohuStatusColor(todo.status)} />
+                      </Stack>
+                      <Typography fontWeight={700} sx={wrappingTextSx}>
+                        {todo.title}
+                      </Typography>
+                      <Typography variant="body2" color="text.secondary">
+                        {matrixAccountName(todo.accountId)} / {todo.dueAt}
+                      </Typography>
+                    </Stack>
+                  </Box>
+                );
+              })}
+            </Stack>
+          </Section>
+        </Grid>
+
+        <Grid size={{ xs: 12, lg: 7 }}>
+          <Section title="最近发布回流">
+            <ProductTable minWidth={820}>
+              <TableHead>
+                <TableRow>
+                  <TableCell>内容</TableCell>
+                  <TableCell>平台</TableCell>
+                  <TableCell>账号</TableCell>
+                  <TableCell>状态</TableCell>
+                  <TableCell>阅读</TableCell>
+                  <TableCell>互动</TableCell>
+                </TableRow>
+              </TableHead>
+              <TableBody>
+                {mediaMatrixContentMetrics.map((item) => (
+                  <TableRow key={item.id} hover>
+                    <TableCell sx={{ minWidth: 220 }}>
+                      <Typography fontWeight={700} sx={secondaryTextSx}>
+                        {item.title}
+                      </Typography>
+                      <Typography variant="body2" color="text.secondary">
+                        {item.publishedAt}
+                      </Typography>
+                    </TableCell>
+                    <TableCell sx={{ minWidth: 110 }}>{item.platformName}</TableCell>
+                    <TableCell sx={{ minWidth: 140 }}>{matrixAccountName(item.accountId)}</TableCell>
+                    <TableCell>
+                      <Chip size="small" label={sohuStatusLabel(item.status)} color={sohuStatusColor(item.status)} />
+                    </TableCell>
+                    <TableCell>{compactNumber(item.reads)}</TableCell>
+                    <TableCell>{(item.likes + item.comments).toLocaleString()}</TableCell>
+                  </TableRow>
+                ))}
+              </TableBody>
+            </ProductTable>
+          </Section>
+        </Grid>
+      </Grid>
+    </Stack>
+  );
+}
+
+export function MediaMatrixView({ data }: ProductPageProps) {
+  const [activeTab, setActiveTab] = useState<MatrixPlatformKey>('overview');
+  const [selectedAccountId, setSelectedAccountId] = useState(mediaMatrixAccounts[0]?.id ?? '');
+  const [groupFilter, setGroupFilter] = useState('all');
+  const [statusFilter, setStatusFilter] = useState('all');
+  const [snapshotForm, setSnapshotForm] = useState({
+    followerCount: '42860',
+    contentCount: '286',
+    totalReads: '1842000',
+    note: '后台首页 + 内容管理页人工录入',
+  });
+  const [savedAt, setSavedAt] = useState('');
+
+  const activePlatformKey = activeTab === 'overview' ? 'sohu' : activeTab;
+  const activePlatform = platformConfigByKey(activePlatformKey);
+  const platformAccounts = matrixAccountsByPlatform(activePlatform.key);
+  const platformContentMetrics = matrixContentByPlatform(activePlatform.key);
+  const existingPlatformAccountCount = data.mediaAccounts.filter((account) => {
+    const platform = data.mediaPlatforms.find((item) => item.id === account.platformId);
+    return platform?.type === activePlatform.key || account.platformId === `plt_${activePlatform.key}`;
+  }).length;
+  const filteredAccounts = platformAccounts.filter((account) => {
+    const groupOK = groupFilter === 'all' || account.group === groupFilter;
+    const statusOK = statusFilter === 'all' || account.status === statusFilter;
+    return groupOK && statusOK;
+  });
+  const selectedAccount =
+    platformAccounts.find((account) => account.id === selectedAccountId) ??
+    platformAccounts[0] ??
+    mediaMatrixAccounts.find((account) => account.id === selectedAccountId) ??
+    mediaMatrixAccounts[0];
+  const connectedCount = platformAccounts.filter((account) => account.status === 'connected').length;
+  const staleCount = platformAccounts.filter((account) => account.dataFreshness !== 'fresh').length;
+  const totalFollowers = platformAccounts.reduce((sum, account) => sum + account.metrics.followers, 0);
+  const totalReads = platformAccounts.reduce((sum, account) => sum + account.metrics.totalReads, 0);
+  const publishedCount = platformContentMetrics.filter((item) => item.status === 'published').length;
+
+  const submitMockSnapshot = () => {
+    setSavedAt(new Date().toLocaleString('zh-CN', { hour12: false }));
+  };
+
+  const selectTab = (value: MatrixPlatformKey) => {
+    setActiveTab(value);
+    if (value !== 'overview') {
+      const first = matrixAccountsByPlatform(value)[0];
+      if (first) {
+        setSelectedAccountId(first.id);
+      }
+    }
+  };
+
+  const renderPlatformTab = () => (
+    <Stack spacing={3}>
+      <Alert severity="info">
+        当前为{activePlatform.label}资产视图 mock 数据。工作区已有{activePlatform.label}账号：{existingPlatformAccountCount} 个。
+      </Alert>
+
+      <Grid container spacing={2}>
+        <MetricCard label={`${activePlatform.label}账号`} value={platformAccounts.length} helper="纳管账号资产" />
+        <MetricCard label="已连接" value={connectedCount} helper="可进入发布和后台查看" />
+        <MetricCard label="总粉丝" value={totalFollowers} helper={`最近账号快照汇总，约 ${compactNumber(totalFollowers)}`} />
+        <MetricCard label="总阅读" value={totalReads} helper={`mock 可视数据累计，约 ${compactNumber(totalReads)}`} />
+        <MetricCard label="已发布" value={publishedCount} helper="已回填外部 URL" />
+        <MetricCard label="待刷新" value={staleCount} helper="快照缺失或过期" tone={staleCount > 0 ? 'error' : 'primary'} />
+      </Grid>
+
+      <Section title={`${activePlatform.label}功能链路`}>
+        <Grid container spacing={1.5}>
+          {activePlatform.flowSteps.map((step, index) => (
+            <Grid key={step.id} size={{ xs: 12, md: 6, xl: 2.4 }}>
+              <MatrixWorkflowStep step={step} index={index} />
+            </Grid>
+          ))}
+        </Grid>
+      </Section>
+
+      <Grid container spacing={2}>
+        <Grid size={{ xs: 12, xl: 8 }}>
+          <Section
+            title={`${activePlatform.label}账号资产`}
+            action={
+              <Stack direction={{ xs: 'column', sm: 'row' }} spacing={1}>
+                <FormControl size="small" sx={{ minWidth: 132 }}>
+                  <InputLabel>分组</InputLabel>
+                  <Select label="分组" value={groupFilter} onChange={(event) => setGroupFilter(String(event.target.value))}>
+                    <MenuItem value="all">全部</MenuItem>
+                    <MenuItem value="品牌主号">品牌主号</MenuItem>
+                    <MenuItem value="垂类子号">垂类子号</MenuItem>
+                    <MenuItem value="区域子号">区域子号</MenuItem>
+                    <MenuItem value="测试号">测试号</MenuItem>
+                  </Select>
+                </FormControl>
+                <FormControl size="small" sx={{ minWidth: 132 }}>
+                  <InputLabel>状态</InputLabel>
+                  <Select label="状态" value={statusFilter} onChange={(event) => setStatusFilter(String(event.target.value))}>
+                    <MenuItem value="all">全部</MenuItem>
+                    <MenuItem value="connected">已连接</MenuItem>
+                    <MenuItem value="needs_auth">待授权</MenuItem>
+                    <MenuItem value="draft">草稿</MenuItem>
+                  </Select>
+                </FormControl>
+              </Stack>
+            }
+          >
+            <ProductTable minWidth={1080}>
               <TableHead>
                 <TableRow>
                   <TableCell>账号</TableCell>
-                  <TableCell>平台</TableCell>
+                  <TableCell>角色 / 负责人</TableCell>
                   <TableCell>定位</TableCell>
-                  <TableCell>粉丝 / 互动率</TableCell>
-                  <TableCell>健康状态</TableCell>
-                  <TableCell>同步状态</TableCell>
+                  <TableCell>粉丝 / 内容</TableCell>
+                  <TableCell>阅读 / 互动</TableCell>
+                  <TableCell>状态</TableCell>
+                  <TableCell>最近发布</TableCell>
                   <TableCell align="right">操作</TableCell>
                 </TableRow>
               </TableHead>
               <TableBody>
-                {state.items.matrix.map((item) => (
-                  <TableRow key={item.account.id} hover>
-                    <TableCell sx={{ minWidth: 160 }}>
-                      <Typography fontWeight={700} sx={wrappingTextSx}>
-                        {item.account.name}
-                      </Typography>
-                      <Typography variant="body2" color="text.secondary" sx={wrappingTextSx}>
-                        {item.account.externalId || item.account.id}
-                      </Typography>
-                    </TableCell>
-                    <TableCell sx={{ minWidth: 120 }}>{item.platform.name}</TableCell>
-                    <TableCell sx={{ minWidth: 220, maxWidth: 320 }}>
-                      <Typography variant="body2" sx={secondaryTextSx}>
-                        {item.account.positioning || item.account.persona || '-'}
-                      </Typography>
-                      <Typography variant="body2" color="text.secondary" sx={secondaryTextSx}>
-                        {item.account.targetAudience || '-'}
-                      </Typography>
-                    </TableCell>
-                    <TableCell>
-                      {item.latestSnapshot ? (
-                        <>
-                          <Typography fontWeight={700}>{item.latestSnapshot.followerCount.toLocaleString()}</Typography>
-                          <Typography variant="body2" color="text.secondary">
-                            {(item.latestSnapshot.engagementRate * 100).toFixed(2)}%
+                {filteredAccounts.map((account) => (
+                  <TableRow
+                    key={account.id}
+                    hover
+                    selected={account.id === selectedAccountId}
+                    onClick={() => setSelectedAccountId(account.id)}
+                    sx={{ cursor: 'pointer' }}
+                  >
+                    <TableCell sx={{ minWidth: 190 }}>
+                      <Stack direction="row" spacing={1} alignItems="flex-start">
+                        <Box
+                          sx={{
+                            width: 32,
+                            height: 32,
+                            borderRadius: 1,
+                            display: 'flex',
+                            alignItems: 'center',
+                            justifyContent: 'center',
+                            bgcolor: 'primary.main',
+                            color: 'primary.contrastText',
+                            fontWeight: 800,
+                            flexShrink: 0,
+                          }}
+                        >
+                          {account.platformIcon}
+                        </Box>
+                        <Box sx={{ minWidth: 0 }}>
+                          <Typography fontWeight={800} sx={wrappingTextSx}>
+                            {account.name}
                           </Typography>
-                        </>
-                      ) : (
-                        '-'
-                      )}
-                    </TableCell>
-                    <TableCell>
-                      <Chip size="small" label={item.account.healthStatus || 'unknown'} color={statusColor(item.account.healthStatus)} />
-                    </TableCell>
-                    <TableCell>
-                      <Stack spacing={0.5}>
-                        <Chip size="small" label={item.account.lastSyncStatus || 'never_synced'} color={statusColor(item.account.lastSyncStatus)} />
-                        {item.warnings.map((warning) => (
-                          <Typography key={warning} variant="body2" color="text.secondary" sx={wrappingTextSx}>
-                            {warning}
+                          <Typography variant="body2" color="text.secondary" sx={wrappingTextSx}>
+                            {account.handle}
                           </Typography>
-                        ))}
+                          <Typography variant="body2" color="text.secondary" sx={wrappingTextSx}>
+                            {account.homepageUrl}
+                          </Typography>
+                        </Box>
                       </Stack>
                     </TableCell>
-                    <TableCell align="right">
-                      <Button
-                        size="small"
-                        startIcon={<AutorenewIcon />}
-                        disabled={syncingAccountId === item.account.id}
-                        onClick={() => requestSync(item.account.id)}
-                        sx={{ whiteSpace: 'nowrap' }}
-                      >
-                        同步
-                      </Button>
+                    <TableCell sx={{ minWidth: 150 }}>
+                      <Typography variant="body2" fontWeight={700} sx={wrappingTextSx}>
+                        {account.group}
+                      </Typography>
+                      <Typography variant="body2" color="text.secondary" sx={wrappingTextSx}>
+                        {account.role} / {account.owner}
+                      </Typography>
+                    </TableCell>
+                    <TableCell sx={{ minWidth: 220, maxWidth: 320 }}>
+                      <Typography variant="body2" sx={secondaryTextSx}>
+                        {account.positioning}
+                      </Typography>
+                      <Typography variant="body2" color="text.secondary" sx={secondaryTextSx}>
+                        {account.targetAudience}
+                      </Typography>
+                    </TableCell>
+                    <TableCell sx={{ minWidth: 120 }}>
+                      <Typography fontWeight={800}>{compactNumber(account.metrics.followers)}</Typography>
+                      <Typography variant="body2" color="text.secondary">
+                        {account.metrics.contentCount} 篇内容
+                      </Typography>
+                    </TableCell>
+                    <TableCell sx={{ minWidth: 130 }}>
+                      <Typography fontWeight={800}>{compactNumber(account.metrics.totalReads)}</Typography>
+                      <Typography variant="body2" color="text.secondary">
+                        {percentValue(account.metrics.engagementRate)}
+                      </Typography>
+                    </TableCell>
+                    <TableCell sx={{ minWidth: 128 }}>
+                      <Stack spacing={0.75} alignItems="flex-start">
+                        <Chip size="small" label={sohuStatusLabel(account.status)} color={sohuStatusColor(account.status)} />
+                        <Chip size="small" label={sohuStatusLabel(account.dataFreshness)} color={sohuStatusColor(account.dataFreshness)} variant="outlined" />
+                      </Stack>
+                    </TableCell>
+                    <TableCell sx={{ minWidth: 220, maxWidth: 280 }}>
+                      <Typography variant="body2" fontWeight={700} sx={secondaryTextSx}>
+                        {account.recentPublish.title}
+                      </Typography>
+                      <Typography variant="body2" color="text.secondary" sx={wrappingTextSx}>
+                        {account.recentPublish.publishedAt}
+                      </Typography>
+                    </TableCell>
+                    <TableCell align="right" sx={{ minWidth: 210 }}>
+                      <Stack direction="row" spacing={0.75} justifyContent="flex-end" flexWrap="wrap" useFlexGap>
+                        <Button size="small" startIcon={<VisibilityOutlinedIcon />} onClick={() => setSelectedAccountId(account.id)}>
+                          详情
+                        </Button>
+                        <Button size="small" startIcon={<PublishOutlinedIcon />}>
+                          发文
+                        </Button>
+                      </Stack>
                     </TableCell>
                   </TableRow>
                 ))}
               </TableBody>
             </ProductTable>
-          )}
-        </Stack>
-      </Section>
+          </Section>
+        </Grid>
 
-      <Section title="内容指标回流">
-        {state.items.contentMetrics.length === 0 ? (
-          <EmptyText>暂无内容指标</EmptyText>
-        ) : (
-          <ProductTable minWidth={760}>
-            <TableHead>
-              <TableRow>
-                <TableCell>内容</TableCell>
-                <TableCell>账号</TableCell>
-                <TableCell>曝光 / 互动</TableCell>
-                <TableCell>日期</TableCell>
-                <TableCell>外部链接</TableCell>
-              </TableRow>
-            </TableHead>
-            <TableBody>
-              {state.items.contentMetrics.map((item) => (
-                <TableRow key={item.id} hover>
-                  <TableCell sx={{ minWidth: 160 }}>{item.contentId}</TableCell>
-                  <TableCell sx={{ minWidth: 140 }}>{accountName(data.mediaAccounts, item.mediaAccountId)}</TableCell>
-                  <TableCell>
-                    {item.impressionCount.toLocaleString()} / {item.likeCount + item.commentCount + item.shareCount}
-                  </TableCell>
-                  <TableCell>{formatDate(item.metricDate)}</TableCell>
-                  <TableCell sx={{ minWidth: 180 }}>
-                    {item.externalUrl ? (
-                      <Link href={item.externalUrl} target="_blank" rel="noreferrer" sx={wrappingTextSx}>
-                        {item.externalUrl}
-                      </Link>
-                    ) : (
-                      '-'
-                    )}
-                  </TableCell>
+        <Grid size={{ xs: 12, xl: 4 }}>
+          <Section title="账号详情">
+            {selectedAccount ? (
+              <Stack spacing={2}>
+                <Stack direction="row" spacing={1} flexWrap="wrap" useFlexGap>
+                  <Chip label={selectedAccount.platformName} color="primary" />
+                  <Chip label={selectedAccount.group} color="primary" variant="outlined" />
+                  <Chip label={sohuStatusLabel(selectedAccount.healthStatus)} color={sohuStatusColor(selectedAccount.healthStatus)} />
+                  <Chip label={selectedAccount.loginMode} variant="outlined" />
+                </Stack>
+                <Stack spacing={1}>
+                  <InfoRow label="账号" value={`${selectedAccount.name} / ${selectedAccount.handle}`} />
+                  <InfoRow label="人设" value={selectedAccount.persona} />
+                  <InfoRow label="内容方向" value={selectedAccount.contentCategories.join('、')} />
+                  <InfoRow label="能力" value={selectedAccount.capabilitySummary} />
+                  <InfoRow label="数据来源" value={selectedAccount.dataSource} />
+                  <InfoRow label="最近主页同步" value={selectedAccount.lastProfileSyncedAt} />
+                  <InfoRow label="最近指标同步" value={selectedAccount.lastMetricsSyncedAt} />
+                  <InfoRow label="下一步" value={selectedAccount.nextAction} />
+                </Stack>
+                {selectedAccount.warnings.length > 0 && (
+                  <Alert severity="warning">
+                    {selectedAccount.warnings.join('；')}
+                  </Alert>
+                )}
+                <Divider />
+                <Stack spacing={1}>
+                  <Typography fontWeight={800}>数据快照录入</Typography>
+                  <Stack direction={{ xs: 'column', sm: 'row' }} spacing={1}>
+                    <TextField
+                      size="small"
+                      label="粉丝数"
+                      value={snapshotForm.followerCount}
+                      onChange={(event) => setSnapshotForm((current) => ({ ...current, followerCount: event.target.value }))}
+                    />
+                    <TextField
+                      size="small"
+                      label="内容数"
+                      value={snapshotForm.contentCount}
+                      onChange={(event) => setSnapshotForm((current) => ({ ...current, contentCount: event.target.value }))}
+                    />
+                  </Stack>
+                  <TextField
+                    size="small"
+                    label="总阅读"
+                    value={snapshotForm.totalReads}
+                    onChange={(event) => setSnapshotForm((current) => ({ ...current, totalReads: event.target.value }))}
+                  />
+                  <TextField
+                    size="small"
+                    label="来源备注"
+                    value={snapshotForm.note}
+                    onChange={(event) => setSnapshotForm((current) => ({ ...current, note: event.target.value }))}
+                    multiline
+                    minRows={2}
+                  />
+                  <Button startIcon={<EditNoteOutlinedIcon />} variant="contained" onClick={submitMockSnapshot}>
+                    暂存快照
+                  </Button>
+                  {savedAt && (
+                    <Typography variant="body2" color="text.secondary">
+                      最近暂存：{savedAt}
+                    </Typography>
+                  )}
+                </Stack>
+              </Stack>
+            ) : (
+              <EmptyText>请选择一个媒体号账号</EmptyText>
+            )}
+          </Section>
+        </Grid>
+      </Grid>
+
+      <Grid container spacing={2}>
+        <Grid size={{ xs: 12, lg: 7 }}>
+          <Section title="发布与内容指标回流">
+            <ProductTable minWidth={820}>
+              <TableHead>
+                <TableRow>
+                  <TableCell>内容</TableCell>
+                  <TableCell>账号</TableCell>
+                  <TableCell>状态</TableCell>
+                  <TableCell>阅读</TableCell>
+                  <TableCell>互动</TableCell>
+                  <TableCell>外部链接</TableCell>
                 </TableRow>
+              </TableHead>
+              <TableBody>
+                {platformContentMetrics.map((item) => (
+                  <TableRow key={item.id} hover>
+                    <TableCell sx={{ minWidth: 220 }}>
+                      <Typography fontWeight={700} sx={secondaryTextSx}>
+                        {item.title}
+                      </Typography>
+                      <Typography variant="body2" color="text.secondary">
+                        {item.publishedAt}
+                      </Typography>
+                    </TableCell>
+                    <TableCell sx={{ minWidth: 140 }}>{matrixAccountName(item.accountId)}</TableCell>
+                    <TableCell>
+                      <Chip size="small" label={sohuStatusLabel(item.status)} color={sohuStatusColor(item.status)} />
+                    </TableCell>
+                    <TableCell>{compactNumber(item.reads)}</TableCell>
+                    <TableCell>{(item.likes + item.comments).toLocaleString()}</TableCell>
+                    <TableCell sx={{ minWidth: 220 }}>
+                      <Typography variant="body2" sx={wrappingTextSx}>
+                        {item.externalUrl || '-'}
+                      </Typography>
+                    </TableCell>
+                  </TableRow>
+                ))}
+              </TableBody>
+            </ProductTable>
+          </Section>
+        </Grid>
+
+        <Grid size={{ xs: 12, lg: 5 }}>
+          <Section title="可视字段清单">
+            <Stack spacing={1.5}>
+              {activePlatform.visibleFieldGroups.map((group) => (
+                <Box key={group.title} sx={{ border: '1px solid', borderColor: 'divider', borderRadius: 1, p: 1.5 }}>
+                  <Typography fontWeight={800} sx={{ mb: 1 }}>
+                    {group.title}
+                  </Typography>
+                  <Stack direction="row" spacing={0.75} flexWrap="wrap" useFlexGap>
+                    {group.fields.map((field) => (
+                      <Chip key={field} size="small" label={field} variant="outlined" />
+                    ))}
+                  </Stack>
+                </Box>
               ))}
-            </TableBody>
-          </ProductTable>
-        )}
+            </Stack>
+          </Section>
+        </Grid>
+      </Grid>
+
+      <Section title="后续迭代规划">
+        <Grid container spacing={1.5}>
+          {activePlatform.roadmapItems.map((item, index) => (
+            <Grid key={item} size={{ xs: 12, md: 6, xl: 3 }}>
+              <Box sx={{ border: '1px solid', borderColor: 'divider', borderRadius: 1, p: 1.5, minHeight: 96 }}>
+                <Stack spacing={1}>
+                  <Chip label={`P${index + 1}`} color={index === 0 ? 'primary' : 'default'} sx={{ alignSelf: 'flex-start' }} />
+                  <Typography variant="body2" sx={wrappingTextSx}>
+                    {item}
+                  </Typography>
+                </Stack>
+              </Box>
+            </Grid>
+          ))}
+        </Grid>
       </Section>
+    </Stack>
+  );
+
+  return (
+    <Stack spacing={3}>
+      <Stack direction={{ xs: 'column', lg: 'row' }} spacing={2} alignItems={{ xs: 'stretch', lg: 'center' }} justifyContent="space-between">
+        <Stack spacing={0.75} sx={{ minWidth: 0 }}>
+          <Typography variant="h5" fontWeight={800} sx={wrappingTextSx}>
+            媒体矩阵
+          </Typography>
+          <Typography color="text.secondary" sx={wrappingTextSx}>
+            总览看所有平台健康度，平台页维护具体媒体号资产、登录、发布和数据快照。
+          </Typography>
+        </Stack>
+        <Stack direction={{ xs: 'column', sm: 'row' }} spacing={1} flexWrap="wrap" useFlexGap>
+          <Button startIcon={<AddIcon />} variant="contained">
+            新增账号
+          </Button>
+          <Button startIcon={<LoginOutlinedIcon />} variant="outlined">
+            发起授权
+          </Button>
+          <Button startIcon={<EditNoteOutlinedIcon />} variant="outlined">
+            录入快照
+          </Button>
+        </Stack>
+      </Stack>
+
+      <Box sx={{ borderBottom: 1, borderColor: 'divider' }}>
+        <Tabs
+          value={activeTab}
+          onChange={(_, value: MatrixPlatformKey) => selectTab(value)}
+          variant="scrollable"
+          scrollButtons="auto"
+          allowScrollButtonsMobile
+        >
+          <Tab value="overview" label="总览" />
+          {matrixPlatformConfigs.map((platform) => (
+            <Tab key={platform.key} value={platform.key} label={platform.label} />
+          ))}
+        </Tabs>
+      </Box>
+
+      {activeTab === 'overview' ? <PlatformOverviewTab activePlatform={activeTab} onSelectPlatform={selectTab} /> : renderPlatformTab()}
     </Stack>
   );
 }

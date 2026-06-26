@@ -138,6 +138,7 @@ deploy/
 - The previous inline workspace workbench has been replaced by a pluggable floating AI assistant surface. The default persona is a Corgi-themed assistant implemented as a replaceable component asset, with typed action callbacks for generating content, creating knowledge bases/assets, binding media accounts, creating schedules, replaying the onboarding guide, and refreshing workspace data.
 - The floating assistant is intentionally contract-based: persona assets, actions, disabled-state fallbacks, and action handlers live behind typed descriptors so future IP avatars or assistant panels can be swapped without rewriting business workflows.
 - Tenant workspace product pages are visible in the left navigation for media matrix, campaigns, creator collaboration, skill package marketplace, and brand compliance/reporting. These pages use the existing workspace API client and include list, create, action, loading, empty, and error states where supported by backend endpoints.
+- The media matrix workspace page currently uses a mock-first tabbed layout for `总览`, `搜狐号`, `小红书`, `头条号`, and `网易号`. The overview tab shows all-platform aggregate metrics, platform status cards, pending actions, and recent publish metric backflow; each platform tab shows account assets, workflow health, snapshot entry points, content metrics, visible-field checklists, and staged roadmap notes. Backend sync and metric persistence are still planned.
 - Installed creative skill packages can be selected from the content generation dialog through `skillPackageVersionId`, connecting marketplace purchase/install flows to the AI generation request path.
 - Workspace tables and product pages include responsive hardening: horizontal table containers, stable metric cards, wrapping text, empty rows, mobile-friendly section actions, and overflow controls for long titles, IDs, URLs, and generated content.
 - Workspace console has an in-product onboarding tour with overlay, target highlighting, automatic page switching, Back/Next/Enter/ESC controls, and manual restart from the top bar. It teaches the full workflow: choose workspace, create knowledge base package, create or upload guide assets, connect a media account, generate from keywords, create publish task, and confirm publish result.
@@ -368,6 +369,57 @@ Platform-specific login notes:
 - The Playwright publish worker records `publishOutcome.leftEditor=true` when the page leaves the Xiaohongshu editor/settings surface after clicking publish. The backend treats that signal as successful submission/publish instead of leaving the job as manual pending.
 - NetEase, Toutiao, and Sohu browser article publishing use `internal/integration/browserplatform.Publisher` plus `scripts/{platform}-browser-publish.mjs`; they should reuse the saved browser profile instead of calling private web APIs directly.
 - Robust cross-platform queueing, retries, and result reconciliation are still planned; current browser publishing keeps the manual confirmation fallback.
+
+## Media Matrix Product Notes
+
+The media matrix is the workspace's media account asset and operations control surface, not only an account list. It should answer:
+
+- Which platform accounts the workspace owns or operates.
+- Whether each account can currently log in, publish, and refresh metrics.
+- Which accounts need operator action.
+- How the recent and scheduled publishing workload is distributed.
+- How account-level and content-level metrics are changing over time.
+
+Layout direction:
+
+- Use platform tabs as the primary navigation: `总览`, `搜狐号`, `小红书`, `头条号`, `网易号`. Do not duplicate this with a separate top platform filter. Reserve secondary filters for status, account group, owner, date range, and metric freshness.
+- `总览` should show all-platform aggregate metrics, platform cards, pending actions, and recent publish result backflow. It should be scan-first and should not expose every account field.
+- Each platform tab should show platform-scoped aggregate metrics, account asset table, workflow status, account detail and snapshot entry points, content metric rows, visible-field checklist, and the platform's next implementation steps.
+- Sohu/搜狐号 is the first chain to make concrete because it already has a phone/SMS browser login flow and browser publish adapter. Other platforms should reuse the same product shape and only customize the platform adapter details.
+
+Media account metadata should be modeled in layers:
+
+- Identity: platform, display name, external account ID or handle, homepage URL, avatar URL, introduction, verification status, and account type such as main account, sub-account, test account, creator account, or brand account.
+- Ownership and access: workspace, owner, operations group, account group, ownership type such as owned, client-authorized, creator-operated, or agency-operated, login method, authorization status, and capability summary such as article publishing, image/text publishing, scheduling, and metric reading.
+- Positioning: account persona, content positioning, target audience, categories, suitable content types, compliance notes, prohibited topics, and account objective.
+- Operational state: health status, last login check time, last profile sync time, last metric sync time, recent publish time, next scheduled action, warning reason, and operator notes.
+- Metric provenance: source type, captured time, freshness status, and whether the value came from manual entry, browser-assisted page reading, browser-context request, official API, or publish-result backflow.
+- Platform-specific fields should live in typed `platformMetadata` or JSON metadata until the field becomes cross-platform. Examples include Sohu masked phone and backend IDs, Xiaohongshu profile/handle fields, Toutiao account benefits, and NetEase account identifiers.
+
+Metrics should be snapshot-based:
+
+- Store account metric snapshots for follower count, following count when visible, content count, total reads/views, likes, comments, favorites/shares when visible, engagement rate, captured time, and data source.
+- Store content metric snapshots for each successfully published task: external content ID, external URL, publish job ID, read/view count, like count, comment count, share/favorite/click counts when visible, captured time, and data source.
+- Do not require real-time metric collection. Scheduled refresh is enough for the first product version.
+- Keep historical snapshots and let the service compute totals, trends, deltas, stale-data flags, and platform summaries. Do not only store the latest computed total because that loses trend and auditability.
+- Use staged refresh windows for published content, such as 1 hour, 6 hours, 24 hours, 3 days, 7 days, 14 days, and 30 days after publish. After the stable window, stop frequent refresh unless an operator requests manual sync.
+- Avoid crawling every historical work on every run. Refresh recently published tracked content, stale accounts, and operator-selected accounts first.
+
+Collection strategy:
+
+- Prefer official APIs only when the platform clearly provides the needed account and content metrics for the workspace's authorization scope.
+- The baseline implementation should be browser-assisted and based on the same server-managed persistent Playwright profile used for login and publishing.
+- Direct browser-context requests can be used inside a platform adapter when they are observed to be stable and share the logged-in browser state, but they should have a fallback to visible page reading or manual snapshot entry.
+- Do not build the product around private reverse-engineered web APIs as the primary contract. Logged-in cookies may make some requests work, but private endpoints often depend on dynamic headers, signatures, CSRF tokens, risk controls, and page version changes.
+- If a platform shows slider verification, risk review, or manual confirmation, the adapter should report `manual_intervention_required`; operators complete the challenge in the visible browser and then continue the sync.
+
+Planned backend model alignment:
+
+- `media_accounts`: account master data, authorization state, platform metadata, operations metadata, and capability summary.
+- `media_account_metric_snapshots`: account-level metric snapshots and provenance.
+- `content_metrics`: content-level metric snapshots tied to `publish_jobs` and external content IDs.
+- `media_account_sync_jobs`: scheduled and manual sync attempts, status, error reason, capture source, and next retry time.
+- `media_account_login_sessions`: browser login session state and persisted browser profile metadata.
 
 ## AI Generation Implementation Notes
 
