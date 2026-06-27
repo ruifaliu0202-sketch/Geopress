@@ -74,6 +74,7 @@ scripts/
   lib/geopress-browser-login.mjs   Shared QR browser login worker helper
   lib/geopress-browser-publish.mjs Shared browser article publishing worker helper
   xiaohongshu-browser-login.mjs    Playwright worker for Xiaohongshu QR login
+  xiaohongshu-account-metadata.mjs Playwright worker for Xiaohongshu creator-home account metadata and overview metric snapshots
   xiaohongshu-browser-publish.mjs  Playwright worker for Xiaohongshu browser publishing
   netease-browser-login.mjs        Playwright worker for NetEase/网易号 QR login
   netease-browser-publish.mjs      Playwright worker for NetEase/网易号 publishing
@@ -111,6 +112,7 @@ deploy/
 - Tenant media account list/create.
 - Media account authorization is strategy-based. QR browser strategies use `qr_login`; interactive phone/SMS browser strategies use `phone_sms`; future platforms should add or select a strategy instead of forcing all login flows through the shared QR script.
 - Xiaohongshu, NetEase, and Toutiao media account QR binding use server-managed Playwright persistent browser contexts.
+- Xiaohongshu account metadata sync has a minimum browser-assisted chain: `scripts/xiaohongshu-account-metadata.mjs` reads the creator home page from the saved browser profile, `internal/integration/xiaohongshu.PlaywrightAccountMetadataCollector` parses the worker output, and `go run ./cmd/sync-xhs-metadata` updates `media_accounts.matrix_metadata`, marks account health/sync state, writes `media_account_metric_snapshots`, and records a completed `media_account_sync_jobs` row.
 - Sohu media account binding uses an interactive phone/SMS Playwright flow: switch to phone login, collect phone number in the right drawer, screenshot the graphical captcha, send the SMS code request, collect SMS code, check agreements, and confirm login state.
 - Media account browser login sessions are persisted in PostgreSQL, not only process memory. Watchers write `geopress-login-state.json` and, for interactive flows, read `geopress-login-command.json` inside the account profile directory.
 - Browser login watchers report structured state for QR waiting, phone/captcha/SMS steps, manual intervention, profile-in-use, action failure, expiration, and connected states.
@@ -138,7 +140,7 @@ deploy/
 - The previous inline workspace workbench has been replaced by a pluggable floating AI assistant surface. The default persona is a Corgi-themed assistant implemented as a replaceable component asset, with typed action callbacks for generating content, creating knowledge bases/assets, binding media accounts, creating schedules, replaying the onboarding guide, and refreshing workspace data.
 - The floating assistant is intentionally contract-based: persona assets, actions, disabled-state fallbacks, and action handlers live behind typed descriptors so future IP avatars or assistant panels can be swapped without rewriting business workflows.
 - Tenant workspace product pages are visible in the left navigation for media matrix, campaigns, creator collaboration, skill package marketplace, and brand compliance/reporting. These pages use the existing workspace API client and include list, create, action, loading, empty, and error states where supported by backend endpoints.
-- The media matrix workspace page currently uses a mock-first tabbed layout for `总览`, `搜狐号`, `小红书`, `头条号`, and `网易号`. The overview tab shows all-platform aggregate metrics, platform status cards, pending actions, and recent publish metric backflow; each platform tab shows account assets, workflow health, snapshot entry points, content metrics, visible-field checklists, and staged roadmap notes. Backend sync and metric persistence are still planned.
+- The media matrix workspace page now uses the existing media matrix APIs instead of mock data. The minimum UI has `总览`, `搜狐号`, `小红书`, `头条号`, and `网易号` tabs, and only exposes the current minimum product loop: personal/workspace media account assets and account state, publish task backflow, account follower snapshots, and per-content read/engagement metrics. Platform planning panels, visible-field checklists, and manual snapshot forms are intentionally kept out of the first implementation path.
 - Installed creative skill packages can be selected from the content generation dialog through `skillPackageVersionId`, connecting marketplace purchase/install flows to the AI generation request path.
 - Workspace tables and product pages include responsive hardening: horizontal table containers, stable metric cards, wrapping text, empty rows, mobile-friendly section actions, and overflow controls for long titles, IDs, URLs, and generated content.
 - Workspace console has an in-product onboarding tour with overlay, target highlighting, automatic page switching, Back/Next/Enter/ESC controls, and manual restart from the top bar. It teaches the full workflow: choose workspace, create knowledge base package, create or upload guide assets, connect a media account, generate from keywords, create publish task, and confirm publish result.
@@ -260,6 +262,20 @@ Native build:
 
 This runs the frontend build, copies `frontend/dist` into `backend/internal/web/dist`, and emits `dist/geopress-api`. The generated `dist/geopress-api` and `frontend/dist` are ignored build outputs; `backend/internal/web/dist` is the embedded asset source used by Go builds.
 
+Manual Xiaohongshu metadata sync validation:
+
+```bash
+cd backend
+GEOPRESS_PROJECT_ROOT=/path/to/Geopress \
+GEOPRESS_CHROME_PATH=/usr/bin/google-chrome \
+go run ./cmd/sync-xhs-metadata \
+  --workspace-id wks_personal \
+  --account-id acc_xhs_personal \
+  --timeout 120s
+```
+
+This command reuses `runtime/browser-profiles/{workspaceId}/{accountId}`. It is intended as the first local chain for account metadata and account-level metrics before the same collector is wired into a durable scheduler or worker.
+
 The backend defaults to `http://localhost:18080`. The frontend dev server defaults to `http://localhost:5173` and proxies `/api` to `http://localhost:18080`.
 
 Relevant environment variables:
@@ -273,6 +289,8 @@ Relevant environment variables:
 - `GEOPRESS_NODE_BIN`: Node.js binary used by browser Playwright workers.
 - `GEOPRESS_CHROME_PATH`: Chromium/Chrome executable used by the Playwright worker.
 - `GEOPRESS_XHS_BROWSER_LOGIN_SCRIPT`: override path for the Xiaohongshu browser login script.
+- `GEOPRESS_XHS_ACCOUNT_METADATA_SCRIPT`: override path for the Xiaohongshu account metadata script.
+- `GEOPRESS_XHS_METADATA_TIMEOUT_SECONDS`: Xiaohongshu account metadata collector timeout.
 - `GEOPRESS_XHS_BROWSER_PUBLISH_SCRIPT`: override path for the Xiaohongshu browser publish script.
 - `GEOPRESS_NETEASE_LOGIN_URL`, `GEOPRESS_NETEASE_PUBLISH_URL`: override NetEase/网易号 browser login and publish URLs.
 - `GEOPRESS_NETEASE_BROWSER_LOGIN_SCRIPT`, `GEOPRESS_NETEASE_BROWSER_PUBLISH_SCRIPT`: override NetEase/网易号 Playwright worker scripts.
@@ -383,8 +401,9 @@ The media matrix is the workspace's media account asset and operations control s
 Layout direction:
 
 - Use platform tabs as the primary navigation: `总览`, `搜狐号`, `小红书`, `头条号`, `网易号`. Do not duplicate this with a separate top platform filter. Reserve secondary filters for status, account group, owner, date range, and metric freshness.
-- `总览` should show all-platform aggregate metrics, platform cards, pending actions, and recent publish result backflow. It should be scan-first and should not expose every account field.
-- Each platform tab should show platform-scoped aggregate metrics, account asset table, workflow status, account detail and snapshot entry points, content metric rows, visible-field checklist, and the platform's next implementation steps.
+- `总览` should show all-platform aggregate metrics, platform cards, pending accounts, and recent publish result backflow. It should be scan-first and should not expose every account field.
+- Each platform tab should show platform-scoped aggregate metrics, account asset table, account detail, sync action, and publish/content metric rows.
+- The minimum page should not include future planning panels, visible-field checklists, or manual snapshot forms. Add those only when the corresponding backend workflow exists.
 - Sohu/搜狐号 is the first chain to make concrete because it already has a phone/SMS browser login flow and browser publish adapter. Other platforms should reuse the same product shape and only customize the platform adapter details.
 
 Media account metadata should be modeled in layers:
@@ -417,7 +436,7 @@ Planned backend model alignment:
 
 - `media_accounts`: account master data, authorization state, platform metadata, operations metadata, and capability summary.
 - `media_account_metric_snapshots`: account-level metric snapshots and provenance.
-- `content_metrics`: content-level metric snapshots tied to `publish_jobs` and external content IDs.
+- `content_metrics`: content-level metric snapshots tied to `publish_jobs` and external content IDs. This is the current project entity for per-published-content metrics; do not add a duplicate `publish_job_metrics` table unless the existing table can no longer express the product contract.
 - `media_account_sync_jobs`: scheduled and manual sync attempts, status, error reason, capture source, and next retry time.
 - `media_account_login_sessions`: browser login session state and persisted browser profile metadata.
 

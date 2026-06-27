@@ -407,10 +407,212 @@ func (db *DB) CreateMediaAccountSyncJob(ctx context.Context, item model.MediaAcc
 	return saved, nil
 }
 
+func (db *DB) SaveMediaAccountMetricsSyncResult(ctx context.Context, account model.MediaAccount, snapshot model.MediaAccountMetricSnapshot, job model.MediaAccountSyncJob) error {
+	if db == nil || db.conn == nil {
+		return nil
+	}
+
+	tx, err := db.conn.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer func() {
+		_ = tx.Rollback()
+	}()
+
+	if err = saveMediaAccountTx(ctx, tx, account); err != nil {
+		return err
+	}
+	if err = saveMediaAccountMetricSnapshotTx(ctx, tx, snapshot); err != nil {
+		return err
+	}
+	if err = saveMediaAccountSyncJobTx(ctx, tx, job); err != nil {
+		return err
+	}
+	if err = updateMediaAccountSyncStateTx(ctx, tx, job); err != nil {
+		return err
+	}
+	return tx.Commit()
+}
+
+func saveMediaAccountTx(ctx context.Context, execer interface {
+	ExecContext(context.Context, string, ...any) (sql.Result, error)
+}, item model.MediaAccount) error {
+	credentials := map[string]string{}
+	for key, value := range item.CredentialMeta {
+		credentials[key] = value
+	}
+	credentials["loginMethod"] = item.LoginMethod
+	credentialsJSON, err := json.Marshal(credentials)
+	if err != nil {
+		return err
+	}
+	matrixMetadata, err := jsonText(item.MatrixMetadata)
+	if err != nil {
+		return err
+	}
+	lastCheckedAt := item.LastCheckedAt
+	if lastCheckedAt.IsZero() {
+		lastCheckedAt = time.Now().UTC()
+	}
+	_, err = execer.ExecContext(ctx, `
+		INSERT INTO media_accounts (
+			id, workspace_id, platform_id, name, external_id, status, credentials, expires_at, last_checked_at,
+			account_group, ownership_type, operating_role, persona, positioning, target_audience,
+			content_categories, health_status, health_notes, authorization_scopes, sync_enabled,
+			last_sync_job_id, last_sync_status, last_sync_message, last_profile_synced_at, last_metrics_synced_at,
+			next_sync_at, matrix_metadata, created_at, updated_at
+		)
+		VALUES ($1, $2, $3, $4, $5, $6, $7::jsonb, $8, $9, $10, $11, $12, $13, $14, $15, $16::text[], $17, $18, $19::text[], $20, $21, $22, $23, $24, $25, $26, $27::jsonb, $28, $29)
+		ON CONFLICT (id) DO UPDATE SET
+			workspace_id = EXCLUDED.workspace_id,
+			platform_id = EXCLUDED.platform_id,
+			name = EXCLUDED.name,
+			external_id = EXCLUDED.external_id,
+			status = EXCLUDED.status,
+			credentials = EXCLUDED.credentials,
+			expires_at = EXCLUDED.expires_at,
+			last_checked_at = EXCLUDED.last_checked_at,
+			account_group = EXCLUDED.account_group,
+			ownership_type = EXCLUDED.ownership_type,
+			operating_role = EXCLUDED.operating_role,
+			persona = EXCLUDED.persona,
+			positioning = EXCLUDED.positioning,
+			target_audience = EXCLUDED.target_audience,
+			content_categories = EXCLUDED.content_categories,
+			health_status = EXCLUDED.health_status,
+			health_notes = EXCLUDED.health_notes,
+			authorization_scopes = EXCLUDED.authorization_scopes,
+			sync_enabled = EXCLUDED.sync_enabled,
+			last_sync_job_id = EXCLUDED.last_sync_job_id,
+			last_sync_status = EXCLUDED.last_sync_status,
+			last_sync_message = EXCLUDED.last_sync_message,
+			last_profile_synced_at = EXCLUDED.last_profile_synced_at,
+			last_metrics_synced_at = EXCLUDED.last_metrics_synced_at,
+			next_sync_at = EXCLUDED.next_sync_at,
+			matrix_metadata = EXCLUDED.matrix_metadata,
+			updated_at = EXCLUDED.updated_at
+	`, item.ID,
+		item.WorkspaceID,
+		item.PlatformID,
+		item.Name,
+		item.ExternalID,
+		item.Status,
+		string(credentialsJSON),
+		item.ExpiresAt,
+		lastCheckedAt,
+		item.AccountGroup,
+		defaultString(item.OwnershipType, "owned"),
+		defaultString(item.OperatingRole, "primary"),
+		item.Persona,
+		item.Positioning,
+		item.TargetAudience,
+		pgTextArray(item.ContentCategories),
+		defaultString(item.HealthStatus, mediaAccountHealthFromStatus(item.Status)),
+		item.HealthNotes,
+		pgTextArray(item.AuthorizationScopes),
+		item.SyncEnabled,
+		item.LastSyncJobID,
+		item.LastSyncStatus,
+		item.LastSyncMessage,
+		item.LastProfileSyncedAt,
+		item.LastMetricsSyncedAt,
+		item.NextSyncAt,
+		matrixMetadata,
+		lastCheckedAt,
+		time.Now().UTC(),
+	)
+	return err
+}
+
+func saveMediaAccountSyncJobTx(ctx context.Context, execer interface {
+	ExecContext(context.Context, string, ...any) (sql.Result, error)
+}, item model.MediaAccountSyncJob) error {
+	requestPayload, err := json.Marshal(nonNilAnyMap(item.RequestPayload))
+	if err != nil {
+		return err
+	}
+	resultSummary, err := json.Marshal(nonNilAnyMap(item.ResultSummary))
+	if err != nil {
+		return err
+	}
+	requestedAt := item.RequestedAt
+	if requestedAt.IsZero() {
+		requestedAt = time.Now().UTC()
+	}
+	createdAt := item.CreatedAt
+	if createdAt.IsZero() {
+		createdAt = requestedAt
+	}
+	updatedAt := item.UpdatedAt
+	if updatedAt.IsZero() {
+		updatedAt = time.Now().UTC()
+	}
+	idempotencyKey := item.IdempotencyKey
+	if idempotencyKey == "" {
+		idempotencyKey = fmt.Sprintf("%s:%s:%s", defaultString(item.SyncType, "metrics"), item.MediaAccountID, requestedAt.Format("20060102150405"))
+	}
+
+	_, err = execer.ExecContext(ctx, `
+		INSERT INTO media_account_sync_jobs (
+			id,
+			workspace_id,
+			media_account_id,
+			platform_id,
+			requested_by_user_id,
+			sync_type,
+			status,
+			requested_at,
+			started_at,
+			finished_at,
+			idempotency_key,
+			request_payload,
+			result_summary,
+			error_message,
+			created_at,
+			updated_at
+		)
+		VALUES ($1, $2, $3, $4, nullif($5, ''), $6, $7, $8, $9, $10, $11, $12::jsonb, $13::jsonb, $14, $15, $16)
+		ON CONFLICT (workspace_id, media_account_id, idempotency_key) DO UPDATE SET
+			sync_type = EXCLUDED.sync_type,
+			status = EXCLUDED.status,
+			started_at = EXCLUDED.started_at,
+			finished_at = EXCLUDED.finished_at,
+			request_payload = EXCLUDED.request_payload,
+			result_summary = EXCLUDED.result_summary,
+			error_message = EXCLUDED.error_message,
+			updated_at = EXCLUDED.updated_at
+	`, item.ID,
+		item.WorkspaceID,
+		item.MediaAccountID,
+		item.PlatformID,
+		item.RequestedByUserID,
+		defaultString(item.SyncType, "metrics"),
+		defaultString(item.Status, "completed"),
+		requestedAt,
+		item.StartedAt,
+		item.FinishedAt,
+		idempotencyKey,
+		string(requestPayload),
+		string(resultSummary),
+		item.ErrorMessage,
+		createdAt,
+		updatedAt,
+	)
+	return err
+}
+
 func (db *DB) SaveMediaAccountMetricSnapshot(ctx context.Context, item model.MediaAccountMetricSnapshot) error {
 	if db == nil || db.conn == nil {
 		return nil
 	}
+
+	return saveMediaAccountMetricSnapshotTx(ctx, db.conn, item)
+}
+
+func saveMediaAccountMetricSnapshotTx(ctx context.Context, execer interface {
+	ExecContext(context.Context, string, ...any) (sql.Result, error)
+}, item model.MediaAccountMetricSnapshot) error {
 
 	audienceSignals, err := json.Marshal(nonNilAnyMap(item.AudienceSignals))
 	if err != nil {
@@ -433,7 +635,7 @@ func (db *DB) SaveMediaAccountMetricSnapshot(ctx context.Context, item model.Med
 		createdAt = capturedAt
 	}
 
-	_, err = db.conn.ExecContext(ctx, `
+	_, err = execer.ExecContext(ctx, `
 		INSERT INTO media_account_metric_snapshots (
 			id,
 			workspace_id,
@@ -588,11 +790,17 @@ func (db *DB) SaveContentMetric(ctx context.Context, item model.ContentMetric) e
 }
 
 func (db *DB) updateMediaAccountSyncState(ctx context.Context, item model.MediaAccountSyncJob) error {
+	return updateMediaAccountSyncStateTx(ctx, db.conn, item)
+}
+
+func updateMediaAccountSyncStateTx(ctx context.Context, execer interface {
+	ExecContext(context.Context, string, ...any) (sql.Result, error)
+}, item model.MediaAccountSyncJob) error {
 	message := item.ErrorMessage
 	if message == "" {
-		message = fmt.Sprintf("%s sync queued", defaultString(item.SyncType, "metrics"))
+		message = fmt.Sprintf("%s sync %s", defaultString(item.SyncType, "metrics"), defaultString(item.Status, "queued"))
 	}
-	_, err := db.conn.ExecContext(ctx, `
+	_, err := execer.ExecContext(ctx, `
 		UPDATE media_accounts
 		SET
 			last_sync_job_id = $3,
