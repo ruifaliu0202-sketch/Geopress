@@ -285,6 +285,8 @@ func readFirstLine(reader io.Reader, timeout time.Duration) ([]byte, error) {
 	done := make(chan result, 1)
 	go func() {
 		scanner := bufio.NewScanner(reader)
+		// 交互登录首包可能带图形验证码截图，默认 64KB scanner buffer 不够。
+		scanner.Buffer(make([]byte, 64*1024), 8*1024*1024)
 		if scanner.Scan() {
 			done <- result{line: bytes.TrimSpace(scanner.Bytes())}
 			return

@@ -282,20 +282,23 @@ async function loginStatus(page, config) {
   const pageUrl = page.url();
   const title = await safeTitle(page);
   const cookieNames = [...names].sort();
+  const loginPattern = config.loginTextPattern || /登录|扫码|二维码|验证码|手机验证码|账号密码/;
+  const loggedInPattern = config.loggedInTextPattern || /发布|发文|创作|内容管理|作品管理|数据|账号/;
+  const onLoginPage = /login|signin|passport|sso/i.test(pageUrl);
+  const hasLoginText = loginPattern.test(bodyText);
+  const hasCreatorShell = loggedInPattern.test(bodyText);
 
   for (const cookieName of config.loggedInCookieNames || []) {
-    if (names.has(cookieName)) {
+    if (names.has(cookieName) && !onLoginPage && (hasCreatorShell || !hasLoginText)) {
       return status(true, pageUrl, title, cookieNames, bodyText, `cookie_present:${cookieName}`);
     }
   }
 
-  const loginPattern = config.loginTextPattern || /登录|扫码|二维码|验证码|手机验证码|账号密码/;
-  const loggedInPattern = config.loggedInTextPattern || /发布|发文|创作|内容管理|作品管理|数据|账号/;
-  if (loggedInPattern.test(bodyText) && !loginPattern.test(bodyText)) {
+  if (!onLoginPage && hasCreatorShell && !hasLoginText) {
     return status(true, pageUrl, title, cookieNames, bodyText, 'creator_shell_text_present');
   }
 
-  if (!/login|signin|passport|sso/i.test(pageUrl) && !loginPattern.test(bodyText)) {
+  if (!onLoginPage && !hasLoginText) {
     return status(true, pageUrl, title, cookieNames, bodyText, 'left_login_page');
   }
 

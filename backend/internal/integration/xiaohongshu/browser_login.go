@@ -256,6 +256,8 @@ func readFirstLine(reader io.Reader, timeout time.Duration) ([]byte, error) {
 	done := make(chan result, 1)
 	go func() {
 		scanner := bufio.NewScanner(reader)
+		// 登录首包可能包含二维码 data URL，默认 64KB scanner buffer 会误判为 token too long。
+		scanner.Buffer(make([]byte, 64*1024), 8*1024*1024)
 		if scanner.Scan() {
 			done <- result{line: bytes.TrimSpace(scanner.Bytes())}
 			return

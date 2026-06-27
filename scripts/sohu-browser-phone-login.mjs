@@ -18,6 +18,10 @@ const debugDir = args['debug-dir'] ? path.resolve(args['debug-dir']) : path.join
 const watchTimeoutMs = Number(args['watch-timeout-ms'] || 10 * 60 * 1000);
 const pollMs = Number(args['poll-ms'] || 800);
 const headless = !['0', 'false', 'no'].includes(String(process.env.GEOPRESS_BROWSER_HEADLESS || 'true').toLowerCase());
+const sohuUserAgent =
+  args['user-agent'] ||
+  process.env.GEOPRESS_SOHU_USER_AGENT ||
+  'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/149.0.7827.102 Safari/537.36';
 
 if (action !== 'watch' && action !== 'status') {
   throw new Error(`Unsupported action: ${action}`);
@@ -38,12 +42,14 @@ if (['1', 'true', 'yes'].includes(String(process.env.GEOPRESS_CHROMIUM_NO_SANDBO
 }
 
 let context;
+const pageDiagnostics = createPageDiagnostics();
 try {
   context = await playwright.chromium.launchPersistentContext(profileDir, {
     executablePath: chromePath,
     headless,
     viewport: { width: 1280, height: 900 },
     locale: 'zh-CN',
+    userAgent: sohuUserAgent,
     args: chromiumArgs,
   });
 } catch (error) {
@@ -74,10 +80,20 @@ try {
 
 try {
   const page = context.pages()[0] ?? (await context.newPage());
+  attachPageDiagnostics(page, pageDiagnostics);
   await page.goto(loginUrl, { waitUntil: 'domcontentloaded', timeout: 30000 });
   await page.waitForLoadState('networkidle', { timeout: 15000 }).catch(() => undefined);
+  await page.waitForTimeout(1200);
+  const initialBlankState = await detectBlankPage(page, pageDiagnostics);
+  if (initialBlankState.blank) {
+    await writeAndPrintState(page, 'blank_page', '搜狐号登录页为空白，请刷新页面或重新发起登录。', {
+      allowedActions: ['reload_page', 'continue_check', 'debug_screenshot'],
+      rawStatus: initialBlankState,
+    });
+  } else {
   await switchToPhoneLogin(page);
   await writeAndPrintState(page, 'phone_required', '请输入搜狐号绑定手机号', { allowedActions: ['submit_phone'] });
+  }
 
   const deadline = Date.now() + watchTimeoutMs;
   let finished = false;
@@ -94,6 +110,14 @@ try {
     if (await hasRiskChallenge(page)) {
       await writeAndPrintState(page, 'manual_intervention_required', '检测到滑块或风控挑战，请在浏览器窗口中手动完成后继续检测', {
         allowedActions: ['continue_check'],
+      }, false);
+    }
+
+    const blankState = await detectBlankPage(page, pageDiagnostics);
+    if (blankState.blank) {
+      await writeAndPrintState(page, 'blank_page', '搜狐号登录页为空白，请刷新页面或重新发起登录。', {
+        allowedActions: ['reload_page', 'continue_check', 'debug_screenshot'],
+        rawStatus: blankState,
       }, false);
     }
 
@@ -129,6 +153,29 @@ async function handleCommandSafely(page, command) {
 async function handleCommand(page, command) {
   const type = String(command.type || '');
   const commandId = String(command.commandId || '');
+  if (type === 'reload_page') {
+    await page.reload({ waitUntil: 'domcontentloaded', timeout: 30000 }).catch(async () => {
+      await page.goto(loginUrl, { waitUntil: 'domcontentloaded', timeout: 30000 });
+    });
+    await page.waitForLoadState('networkidle', { timeout: 15000 }).catch(() => undefined);
+    await page.waitForTimeout(1200);
+    const blankState = await detectBlankPage(page, pageDiagnostics);
+    if (blankState.blank) {
+      await writeAndPrintState(page, 'blank_page', '搜狐号登录页仍为空白，请关闭当前窗口后重新发起登录。', {
+        allowedActions: ['reload_page', 'continue_check', 'debug_screenshot'],
+        lastCommandId: commandId,
+        rawStatus: blankState,
+      });
+      return;
+    }
+    await switchToPhoneLogin(page);
+    await writeAndPrintState(page, 'phone_required', '搜狐号登录页已刷新，请输入绑定手机号', {
+      allowedActions: ['submit_phone'],
+      lastCommandId: commandId,
+    });
+    return;
+  }
+
   if (type === 'submit_phone') {
     const phoneNumber = String(command.phoneNumber || '').trim();
     if (!phoneNumber) {
@@ -227,6 +274,15 @@ async function handleCommand(page, command) {
       await writeAndPrintState(page, 'connected', '搜狐号登录已确认', { loggedIn: true, completedAt: new Date().toISOString(), lastCommandId: commandId });
       return;
     }
+    const blankState = await detectBlankPage(page, pageDiagnostics);
+    if (blankState.blank) {
+      await writeAndPrintState(page, 'blank_page', '搜狐号登录页为空白，请刷新页面或重新发起登录。', {
+        allowedActions: ['reload_page', 'continue_check', 'debug_screenshot'],
+        lastCommandId: commandId,
+        rawStatus: blankState,
+      });
+      return;
+    }
     await writeAndPrintState(page, 'manual_intervention_required', '仍未检测到登录态，请继续在浏览器窗口完成验证', {
       allowedActions: ['continue_check'],
       lastCommandId: commandId,
@@ -237,10 +293,11 @@ async function handleCommand(page, command) {
     const screenshotPath = await captureDebugScreenshot(page);
     const pageText = await page.locator('body').innerText({ timeout: 2000 }).catch(() => '');
     await writeAndPrintState(page, 'debug_screenshot_ready', '已截取当前搜狐号登录页面', {
-      allowedActions: ['continue_check', 'debug_screenshot'],
+      allowedActions: ['reload_page', 'continue_check', 'debug_screenshot'],
       debugScreenshotPath: screenshotPath,
       lastCommandId: commandId,
       rawStatus: {
+        ...(await detectBlankPage(page, pageDiagnostics)),
         pageText: pageText.slice(0, 2000),
       },
     });
@@ -417,6 +474,85 @@ async function isLoggedIn(page) {
   }
   const text = await page.locator('body').innerText({ timeout: 2000 }).catch(() => '');
   return /发布|发文|创作|内容管理|文章管理|作品管理|数据|收益|搜狐号/.test(text) && !/登录|手机验证码|图形验证码/.test(text);
+}
+
+function createPageDiagnostics() {
+  return {
+    consoleMessages: [],
+    requestFailures: [],
+    pageErrors: [],
+  };
+}
+
+function attachPageDiagnostics(page, diagnostics) {
+  page.on('console', (message) => {
+    diagnostics.consoleMessages.push({
+      type: message.type(),
+      text: sanitizeDiagnosticText(message.text()).slice(0, 1000),
+    });
+    trimDiagnostics(diagnostics.consoleMessages);
+  });
+  page.on('requestfailed', (request) => {
+    diagnostics.requestFailures.push({
+      url: sanitizeDiagnosticText(request.url()).slice(0, 1000),
+      method: request.method(),
+      failureText: sanitizeDiagnosticText(request.failure()?.errorText || ''),
+    });
+    trimDiagnostics(diagnostics.requestFailures);
+  });
+  page.on('pageerror', (error) => {
+    diagnostics.pageErrors.push({
+      message: sanitizeDiagnosticText(error.message).slice(0, 1000),
+    });
+    trimDiagnostics(diagnostics.pageErrors);
+  });
+}
+
+async function detectBlankPage(page, diagnostics) {
+  const detail = await page.evaluate(() => {
+    const bodyText = (document.body?.innerText || document.body?.textContent || '').replace(/\s+/g, ' ').trim();
+    const app = document.querySelector('#app');
+    const appText = (app?.innerText || app?.textContent || '').replace(/\s+/g, ' ').trim();
+    return {
+      bodyTextLength: bodyText.length,
+      appTextLength: appText.length,
+      bodyChildCount: document.body?.children?.length || 0,
+      appChildCount: app?.children?.length || 0,
+      readyState: document.readyState,
+      title: document.title,
+      htmlLength: document.documentElement?.outerHTML?.length || 0,
+    };
+  }).catch((error) => ({
+    bodyTextLength: 0,
+    appTextLength: 0,
+    bodyChildCount: 0,
+    appChildCount: 0,
+    readyState: '',
+    title: '',
+    htmlLength: 0,
+    evaluateError: String(error?.message || error || ''),
+  }));
+  return {
+    blank: detail.bodyTextLength === 0 && detail.appChildCount === 0,
+    pageUrl: page.url(),
+    ...detail,
+    consoleMessages: diagnostics.consoleMessages.slice(-10),
+    requestFailures: diagnostics.requestFailures.slice(-10),
+    pageErrors: diagnostics.pageErrors.slice(-10),
+  };
+}
+
+function trimDiagnostics(values) {
+  if (values.length > 30) {
+    values.splice(0, values.length - 30);
+  }
+}
+
+function sanitizeDiagnosticText(value) {
+  return String(value || '')
+    .replace(/(token|session|cookie|authorization|csrf|signature|password)=?[^&\s]+/gi, '$1=[redacted]')
+    .replace(/\s+/g, ' ')
+    .trim();
 }
 
 async function hasRiskChallenge(page) {

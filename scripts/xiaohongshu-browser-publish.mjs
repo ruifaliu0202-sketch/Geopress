@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 
-import { mkdir } from 'node:fs/promises';
+import { mkdir, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 
@@ -39,17 +39,27 @@ const context = await playwright.chromium.launchPersistentContext(profileDir, {
 let page;
 try {
   page = context.pages()[0] ?? (await context.newPage());
+  const networkCapture = createNetworkCapture(page);
   const publishOutcome = await publishLongArticle(page);
+  await page.waitForTimeout(3000);
+  const networkEvents = await networkCapture.flush();
+  const publishIdentity = inferPublishIdentity(networkEvents, publishOutcome, page.url());
+  const networkCapturePath = await saveNetworkCapture(networkEvents, publishIdentity);
   const screenshotPath = await saveScreenshot(page, publishOutcome.status === 'published' ? 'xhs-publish-verified' : 'xhs-publish-pending-verification');
   console.log(JSON.stringify({
     status: publishOutcome.status,
     message: publishOutcome.message,
+    externalId: publishIdentity.externalId,
+    externalUrl: publishIdentity.externalUrl,
     pageUrl: page.url(),
     screenshotPath,
     submittedAt: new Date().toISOString(),
     rawStatus: {
       ...(await pageStatus(page)),
       publishOutcome,
+      publishIdentity,
+      networkCapturePath,
+      networkCandidates: publishIdentity.candidates,
     },
   }));
 } catch (error) {
@@ -373,12 +383,199 @@ async function saveScreenshot(page, prefix) {
   return file;
 }
 
+async function saveNetworkCapture(events, identity) {
+  const file = path.join(screenshotDir, `xhs-publish-network-${Date.now()}.json`);
+  await writeFile(file, JSON.stringify({ identity, events }, null, 2), 'utf8');
+  return file;
+}
+
 async function pageStatus(page) {
   return {
     title: await page.title().catch(() => ''),
     pageUrl: page.url(),
     bodyText: await page.locator('body').innerText({ timeout: 3000 }).catch(() => ''),
   };
+}
+
+function createNetworkCapture(page) {
+  const events = [];
+  const pending = new Set();
+  page.on('response', (response) => {
+    const task = captureNetworkResponse(response, events).catch(() => undefined);
+    pending.add(task);
+    task.finally(() => pending.delete(task));
+  });
+  return {
+    async flush() {
+      const deadline = Date.now() + 3000;
+      while (pending.size > 0 && Date.now() < deadline) {
+        await Promise.race([
+          Promise.allSettled([...pending]),
+          new Promise((resolve) => setTimeout(resolve, 250)),
+        ]);
+      }
+      return [...events];
+    },
+  };
+}
+
+async function captureNetworkResponse(response, events) {
+  const url = response.url();
+  if (!isXiaohongshuResponse(url)) {
+    return;
+  }
+  const request = response.request();
+  const method = request.method();
+  const status = response.status();
+  const contentType = response.headers()['content-type'] || '';
+  const urlInteresting = /api|note|publish|post|item|creator|edith|sns|submit|create|web\/v/i.test(url);
+  if (!urlInteresting && !/json/i.test(contentType)) {
+    return;
+  }
+
+  const bodyText = await response.text().catch(() => '');
+  if (!bodyText || bodyText.length > 250000) {
+    return;
+  }
+
+  let parsed = null;
+  if (/^\s*[\[{]/.test(bodyText)) {
+    parsed = JSON.parse(bodyText);
+  }
+  const idCandidates = parsed ? extractIDCandidates(parsed) : [];
+  if (!urlInteresting && idCandidates.length === 0) {
+    return;
+  }
+
+  const requestPostData = method !== 'GET' && urlInteresting ? request.postData() || '' : '';
+  events.push({
+    at: new Date().toISOString(),
+    url,
+    method,
+    status,
+    resourceType: request.resourceType(),
+    contentType: contentType.split(';')[0],
+    idCandidates: idCandidates.slice(0, 30),
+    requestPostDataSample: requestPostData ? requestPostData.slice(0, 2000) : '',
+    bodySample: bodyText.slice(0, 3000),
+  });
+  if (events.length > 120) {
+    events.splice(0, events.length - 120);
+  }
+}
+
+function isXiaohongshuResponse(value) {
+  try {
+    const host = new URL(value).hostname;
+    return /(^|\.)xiaohongshu\.com$|(^|\.)xhscdn\.com$/.test(host);
+  } catch {
+    return false;
+  }
+}
+
+function extractIDCandidates(value, pathParts = []) {
+  const result = [];
+  const seen = new Set();
+
+  const visit = (node, path) => {
+    if (result.length >= 120 || node == null) {
+      return;
+    }
+    if (Array.isArray(node)) {
+      node.slice(0, 30).forEach((item, index) => visit(item, [...path, String(index)]));
+      return;
+    }
+    if (typeof node === 'object') {
+      for (const [key, child] of Object.entries(node)) {
+        visit(child, [...path, key]);
+      }
+      return;
+    }
+
+    const key = path[path.length - 1] || '';
+    const text = String(node).trim();
+    if (!isCandidateIDKey(key, path) || !isCandidateIDValue(text)) {
+      return;
+    }
+    const signature = `${path.join('.')}:${text}`;
+    if (seen.has(signature)) {
+      return;
+    }
+    seen.add(signature);
+    result.push({
+      path: path.join('.'),
+      key,
+      value: text,
+    });
+  };
+
+  visit(value, pathParts);
+  return result;
+}
+
+function isCandidateIDKey(key, pathParts) {
+  const normalized = key.replace(/[-_]/g, '').toLowerCase();
+  if (/^(noteid|itemid|publishid|postid|opusid|objectid|contentid|taskid|noteids|itemids)$/.test(normalized)) {
+    return true;
+  }
+  if (normalized === 'id') {
+    return pathParts.some((item) => /note|item|publish|post|opus|object|content|task|data/i.test(item));
+  }
+  return false;
+}
+
+function isCandidateIDValue(value) {
+  if (value.length < 6 || value.length > 80) {
+    return false;
+  }
+  return /^[A-Za-z0-9_-]+$/.test(value);
+}
+
+function inferPublishIdentity(events, publishOutcome, pageUrl) {
+  const deduped = new Map();
+  for (const event of events) {
+    for (const candidate of event.idCandidates || []) {
+      const key = `${candidate.path}:${candidate.value}`;
+      if (!deduped.has(key)) {
+        deduped.set(key, {
+          ...candidate,
+          url: event.url,
+          method: event.method,
+          status: event.status,
+          score: scoreIDCandidate(candidate, event.url),
+        });
+      }
+    }
+  }
+  const candidates = [...deduped.values()].sort((left, right) => right.score - left.score).slice(0, 20);
+  const best = candidates[0] || null;
+  const note = candidates.find((candidate) => /note/i.test(`${candidate.key}.${candidate.path}.${candidate.url}`)) || null;
+  const externalId = best?.value || '';
+  const externalUrl = note?.value ? `https://www.xiaohongshu.com/explore/${note.value}` : '';
+  return {
+    externalId,
+    externalUrl,
+    inferredFrom: best ? { key: best.key, path: best.path, url: best.url, score: best.score } : null,
+    noteIdCandidate: note ? { key: note.key, path: note.path, value: note.value, url: note.url, score: note.score } : null,
+    pageUrl,
+    publishOutcomeStatus: publishOutcome.status,
+    candidates,
+  };
+}
+
+function scoreIDCandidate(candidate, url) {
+  const target = `${candidate.key}.${candidate.path}.${url}`.toLowerCase();
+  let score = 0;
+  if (/note[_-]?id|noteid/.test(target)) score += 100;
+  if (/item[_-]?id|itemid/.test(target)) score += 75;
+  if (/publish[_-]?id|publishid/.test(target)) score += 60;
+  if (/post[_-]?id|postid|opus[_-]?id|opusid/.test(target)) score += 55;
+  if (/task[_-]?id|taskid/.test(target)) score += 35;
+  if (/\/web_api\/sns\/v2\/note/i.test(url) && candidate.path === 'data.id') score += 120;
+  if (/publish|note|post|item|submit|create/.test(url)) score += 20;
+  if (candidate.key.toLowerCase() === 'id') score -= 15;
+  if (/user|avatar|image|file|upload|material|template/.test(target)) score -= 40;
+  return score;
 }
 
 function shortCaption(value) {

@@ -71,16 +71,21 @@ docs/
 scripts/
   build-native.sh                  Builds frontend assets into backend/internal/web/dist and emits dist/geopress-api
   migrate.sh                       Migration runner
+  browser-platform-metadata-probe.mjs
+                                      Observation-only browser probe for logged-in media account pages and sanitized matrix/network evidence
   lib/geopress-browser-login.mjs   Shared QR browser login worker helper
   lib/geopress-browser-publish.mjs Shared browser article publishing worker helper
   xiaohongshu-browser-login.mjs    Playwright worker for Xiaohongshu QR login
   xiaohongshu-account-metadata.mjs Playwright worker for Xiaohongshu creator-home account metadata and overview metric snapshots
+  xiaohongshu-content-metadata.mjs Playwright worker for Xiaohongshu published-content metric reconciliation
   xiaohongshu-browser-publish.mjs  Playwright worker for Xiaohongshu browser publishing
   netease-browser-login.mjs        Playwright worker for NetEase/网易号 QR login
   netease-browser-publish.mjs      Playwright worker for NetEase/网易号 publishing
   toutiao-browser-login.mjs        Playwright worker for Toutiao/头条号 QR login
+  toutiao-account-metadata.mjs     Playwright worker for Toutiao/头条号 account metadata and account metric snapshots
   toutiao-browser-publish.mjs      Playwright worker for Toutiao/头条号 publishing
   sohu-browser-phone-login.mjs     Playwright worker for Sohu/搜狐号 phone/SMS login
+  sohu-account-metadata.mjs        Playwright worker for Sohu/搜狐号 account metadata and onboarding/health state
   sohu-browser-publish.mjs         Playwright worker for Sohu/搜狐号 publishing
 
 deploy/
@@ -113,7 +118,10 @@ deploy/
 - Media account authorization is strategy-based. QR browser strategies use `qr_login`; interactive phone/SMS browser strategies use `phone_sms`; future platforms should add or select a strategy instead of forcing all login flows through the shared QR script.
 - Xiaohongshu, NetEase, and Toutiao media account QR binding use server-managed Playwright persistent browser contexts.
 - Xiaohongshu account metadata sync has a minimum browser-assisted chain: `scripts/xiaohongshu-account-metadata.mjs` reads the creator home page from the saved browser profile, `internal/integration/xiaohongshu.PlaywrightAccountMetadataCollector` parses the worker output, and `go run ./cmd/sync-xhs-metadata` updates `media_accounts.matrix_metadata`, marks account health/sync state, writes `media_account_metric_snapshots`, and records a completed `media_account_sync_jobs` row.
+- Xiaohongshu content metadata sync has a minimum browser-assisted reconciliation chain: `scripts/xiaohongshu-content-metadata.mjs` opens the creator notes management/detail surfaces from the saved profile, `internal/integration/xiaohongshu.PlaywrightContentMetadataCollector` parses matched content metrics, and `go run ./cmd/sync-xhs-content-metadata` writes `content_metrics` and sync job state for a publish job with a known `externalContentId`/URL.
 - Sohu media account binding uses an interactive phone/SMS Playwright flow: switch to phone login, collect phone number in the right drawer, screenshot the graphical captcha, send the SMS code request, collect SMS code, check agreements, and confirm login state.
+- Toutiao account metadata sync has a minimum browser-assisted chain: `scripts/toutiao-account-metadata.mjs` observes the logged-in creator center endpoints `creator_center/user_info` and `home/merge_v2`, `internal/integration/toutiao.PlaywrightAccountMetadataCollector` parses the worker output, and `go run ./cmd/sync-toutiao-metadata` updates `media_accounts.matrix_metadata`, writes an account snapshot, and stores `media_account_sync_jobs` provenance. The observed stable fields include display name, avatar URL, Toutiao user ID, media ID, follower count, content count, and total read/play count when the account exposes them.
+- Sohu account metadata sync has a minimum browser-assisted chain: `scripts/sohu-account-metadata.mjs` observes logged-in `account/info`, `account/register-info`, and `account/listV2` responses, `internal/integration/sohu.PlaywrightAccountMetadataCollector` parses the worker output, and `go run ./cmd/sync-sohu-metadata` updates account identity, health notes, platform metadata, snapshots, and sync jobs. Current observed Sohu accounts may expose onboarding states such as `账号新手期`; these should be represented as warning health state instead of treated as a login failure.
 - Media account browser login sessions are persisted in PostgreSQL, not only process memory. Watchers write `geopress-login-state.json` and, for interactive flows, read `geopress-login-command.json` inside the account profile directory.
 - Browser login watchers report structured state for QR waiting, phone/captcha/SMS steps, manual intervention, profile-in-use, action failure, expiration, and connected states.
 - Manual content create.
@@ -276,6 +284,29 @@ go run ./cmd/sync-xhs-metadata \
 
 This command reuses `runtime/browser-profiles/{workspaceId}/{accountId}`. It is intended as the first local chain for account metadata and account-level metrics before the same collector is wired into a durable scheduler or worker.
 
+Manual media metadata sync validation:
+
+```bash
+cd backend
+GEOPRESS_PROJECT_ROOT=/path/to/Geopress \
+GEOPRESS_CHROME_PATH=/usr/bin/google-chrome \
+go run ./cmd/sync-xhs-metadata --workspace-id wks_personal --account-id acc_xhs_personal --timeout 120s
+
+GEOPRESS_PROJECT_ROOT=/path/to/Geopress \
+GEOPRESS_CHROME_PATH=/usr/bin/google-chrome \
+go run ./cmd/sync-toutiao-metadata --workspace-id wks_personal --account-id <toutiao-account-id> --timeout 120s
+
+GEOPRESS_PROJECT_ROOT=/path/to/Geopress \
+GEOPRESS_CHROME_PATH=/usr/bin/google-chrome \
+go run ./cmd/sync-sohu-metadata --workspace-id wks_personal --account-id <sohu-account-id> --timeout 120s
+
+GEOPRESS_PROJECT_ROOT=/path/to/Geopress \
+GEOPRESS_CHROME_PATH=/usr/bin/google-chrome \
+go run ./cmd/sync-xhs-content-metadata --workspace-id wks_personal --account-id <xiaohongshu-account-id> --publish-job-id <publish-job-id> --timeout 120s
+```
+
+These commands reuse `runtime/browser-profiles/{workspaceId}/{accountId}` and write through existing media matrix entities. Do not run a metadata collector while a login or publish worker is actively using the same profile.
+
 The backend defaults to `http://localhost:18080`. The frontend dev server defaults to `http://localhost:5173` and proxies `/api` to `http://localhost:18080`.
 
 Relevant environment variables:
@@ -291,13 +322,20 @@ Relevant environment variables:
 - `GEOPRESS_XHS_BROWSER_LOGIN_SCRIPT`: override path for the Xiaohongshu browser login script.
 - `GEOPRESS_XHS_ACCOUNT_METADATA_SCRIPT`: override path for the Xiaohongshu account metadata script.
 - `GEOPRESS_XHS_METADATA_TIMEOUT_SECONDS`: Xiaohongshu account metadata collector timeout.
+- `GEOPRESS_XHS_CONTENT_METADATA_SCRIPT`: override path for the Xiaohongshu content metadata script.
+- `GEOPRESS_XHS_CONTENT_METADATA_TIMEOUT_SECONDS`: Xiaohongshu content metadata collector timeout.
 - `GEOPRESS_XHS_BROWSER_PUBLISH_SCRIPT`: override path for the Xiaohongshu browser publish script.
 - `GEOPRESS_NETEASE_LOGIN_URL`, `GEOPRESS_NETEASE_PUBLISH_URL`: override NetEase/网易号 browser login and publish URLs.
 - `GEOPRESS_NETEASE_BROWSER_LOGIN_SCRIPT`, `GEOPRESS_NETEASE_BROWSER_PUBLISH_SCRIPT`: override NetEase/网易号 Playwright worker scripts.
 - `GEOPRESS_TOUTIAO_LOGIN_URL`, `GEOPRESS_TOUTIAO_PUBLISH_URL`: override Toutiao/头条号 browser login and publish URLs. The default login URL is `https://mp.toutiao.com/auth/page/login/`.
 - `GEOPRESS_TOUTIAO_BROWSER_LOGIN_SCRIPT`, `GEOPRESS_TOUTIAO_BROWSER_PUBLISH_SCRIPT`: override Toutiao/头条号 Playwright worker scripts.
+- `GEOPRESS_TOUTIAO_ACCOUNT_METADATA_SCRIPT`: override path for the Toutiao/头条号 account metadata script.
+- `GEOPRESS_TOUTIAO_METADATA_TIMEOUT_SECONDS`: Toutiao/头条号 account metadata collector timeout.
 - `GEOPRESS_SOHU_LOGIN_URL`, `GEOPRESS_SOHU_PUBLISH_URL`: override Sohu/搜狐号 browser login and publish URLs. The default phone login URL is `https://mp.sohu.com/mpfe/v4/login`.
 - `GEOPRESS_SOHU_BROWSER_LOGIN_SCRIPT`, `GEOPRESS_SOHU_BROWSER_PUBLISH_SCRIPT`: override Sohu/搜狐号 Playwright worker scripts.
+- `GEOPRESS_SOHU_ACCOUNT_METADATA_SCRIPT`: override path for the Sohu/搜狐号 account metadata script.
+- `GEOPRESS_SOHU_METADATA_TIMEOUT_SECONDS`: Sohu/搜狐号 account metadata collector timeout.
+- `GEOPRESS_SOHU_USER_AGENT`: override the Sohu browser user agent. The default pins a full Chrome version because Sohu CDN may return HTML 403 for generic `Chrome/<major>.0.0.0` user agents, causing Chrome ORB to block JS/CSS and show a blank login page.
 - `GEOPRESS_BROWSER_HEADLESS`: set to `false` for visible local Playwright debugging.
 - `GEOPRESS_CHROMIUM_NO_SANDBOX`: set to `true` only when the runtime requires no-sandbox Chromium launch flags.
 
@@ -373,8 +411,9 @@ Platform-specific login notes:
 
 - Xiaohongshu uses QR browser login and still must not model or persist dynamic web headers such as `x-s`, `x-s-common`, or `x-t`; those should be generated naturally by the platform page running inside the managed browser.
 - NetEase/网易号 uses the shared QR browser login helper through `scripts/netease-browser-login.mjs`.
+- NetEase/网易号 can produce a transient cookie-present state that does not survive reopening the creator console. Treat a later creator-console login page as `needs_authorization`/not stable rather than assuming the QR session is connected.
 - Toutiao/头条号 uses the shared QR browser login helper through `scripts/toutiao-browser-login.mjs`; the default login URL is `https://mp.toutiao.com/auth/page/login/`.
-- Sohu/搜狐号 uses `scripts/sohu-browser-phone-login.mjs`, not the QR helper. It switches to phone login, accepts `submit_phone`, returns `captchaScreenshotData`, accepts `submit_captcha`, requests SMS, accepts `submit_sms_code`, checks agreements, and then confirms login.
+- Sohu/搜狐号 uses `scripts/sohu-browser-phone-login.mjs`, not the QR helper. It switches to phone login, accepts `submit_phone`, returns `captchaScreenshotData`, accepts `submit_captcha`, requests SMS, accepts `submit_sms_code`, checks agreements, and then confirms login. The script also reports `blank_page` with console/request diagnostics and supports `reload_page` because Sohu CDN static JS/CSS can be blocked by Chrome ORB when the wrong user agent receives HTML 403 responses.
 
 ## Browser Media Publish Notes
 
@@ -386,6 +425,8 @@ Platform-specific login notes:
 - `POST /api/publish-jobs/:jobId/confirm` lets an operator paste a manually published URL and mark the job/content as published.
 - The Playwright publish worker records `publishOutcome.leftEditor=true` when the page leaves the Xiaohongshu editor/settings surface after clicking publish. The backend treats that signal as successful submission/publish instead of leaving the job as manual pending.
 - NetEase, Toutiao, and Sohu browser article publishing use `internal/integration/browserplatform.Publisher` plus `scripts/{platform}-browser-publish.mjs`; they should reuse the saved browser profile instead of calling private web APIs directly.
+- The shared browser article publish helper attaches network listeners before the final publish click, stores sanitized publish-response captures under runtime, infers a content `externalId` only from strong observed content ID candidates, and returns `publishIdentity`, `networkCapturePath`, and `networkCandidates` in the Go `PublishResult.RawResponse`. If no strong content ID is observed, keep the publish as submitted and rely on manual confirmation or later content reconciliation.
+- Sohu browser publishing uses the same pinned Sohu user agent as login so the creator console JS/CSS is not blocked by Sohu CDN/Chrome ORB behavior.
 - Robust cross-platform queueing, retries, and result reconciliation are still planned; current browser publishing keeps the manual confirmation fallback.
 
 ## Media Matrix Product Notes
@@ -431,6 +472,8 @@ Collection strategy:
 - Direct browser-context requests can be used inside a platform adapter when they are observed to be stable and share the logged-in browser state, but they should have a fallback to visible page reading or manual snapshot entry.
 - Do not build the product around private reverse-engineered web APIs as the primary contract. Logged-in cookies may make some requests work, but private endpoints often depend on dynamic headers, signatures, CSRF tokens, risk controls, and page version changes.
 - If a platform shows slider verification, risk review, or manual confirmation, the adapter should report `manual_intervention_required`; operators complete the challenge in the visible browser and then continue the sync.
+- For a new platform or a new data surface, first run `scripts/browser-platform-metadata-probe.mjs` against the existing persistent profile and archive screenshots plus sanitized `network-capture.json` under `runtime/<platform>-metadata-probe/...`. Do not implement selectors or endpoint parsing from search results or guesses.
+- When a browser page is blank, collect screenshot, page text, console messages, and failed requests before changing selectors. A blank page may be a platform/CDN resource issue rather than a login or selector issue.
 
 Planned backend model alignment:
 

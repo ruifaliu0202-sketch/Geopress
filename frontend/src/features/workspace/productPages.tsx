@@ -640,7 +640,6 @@ function PlatformOverviewTab({
         <MetricCard label="矩阵账号" value={totalSummary.accountCount} helper="个人/工作区纳管账号" />
         <MetricCard label="已连接" value={totalSummary.connectedCount} helper="账号状态为已连接" />
         <MetricCard label="平台总粉丝" value={totalSummary.followerCount} helper={`账号快照汇总，约 ${compactNumber(totalSummary.followerCount)}`} />
-        <MetricCard label="发布阅读量" value={totalSummary.readCount} helper={`单篇发布数据汇总，约 ${compactNumber(totalSummary.readCount)}`} />
         <MetricCard label="单篇数据" value={totalSummary.publishMetricCount} helper="已回流的单篇内容指标" />
         <MetricCard label="待处理" value={totalSummary.issueCount} helper="授权、数据过期或告警" tone={totalSummary.issueCount > 0 ? 'error' : 'primary'} />
       </Grid>
@@ -829,13 +828,12 @@ export function MediaMatrixView({ token, workspaceId, data, onChanged }: Product
         <MetricCard label={`${activePlatform.label}账号`} value={activeSummary.accountCount} helper="平台账号资产" />
         <MetricCard label="已连接" value={activeSummary.connectedCount} helper="账号授权状态正常" />
         <MetricCard label="平台粉丝" value={activeSummary.followerCount} helper={`账号快照汇总，约 ${compactNumber(activeSummary.followerCount)}`} />
-        <MetricCard label="发布阅读" value={activeSummary.readCount} helper={`单篇发布数据汇总，约 ${compactNumber(activeSummary.readCount)}`} />
         <MetricCard label="单篇数据" value={activeSummary.publishMetricCount} helper="已回流的单篇内容指标" />
         <MetricCard label="待处理" value={activeSummary.issueCount} helper="授权、同步或快照问题" tone={activeSummary.issueCount > 0 ? 'error' : 'primary'} />
       </Grid>
 
       <Grid container spacing={2}>
-        <Grid size={{ xs: 12, xl: 8 }}>
+        <Grid size={{ xs: 12, xl: activePlatform.key === 'xiaohongshu' ? 12 : 8 }}>
           <Section
             title={`${activePlatform.label}账号资产`}
             action={
@@ -954,9 +952,11 @@ export function MediaMatrixView({ token, workspaceId, data, onChanged }: Product
                     </TableCell>
                     <TableCell align="right" sx={{ minWidth: 190 }}>
                       <Stack direction="row" spacing={0.75} justifyContent="flex-end" flexWrap="wrap" useFlexGap>
-                        <Button size="small" startIcon={<VisibilityOutlinedIcon />} onClick={() => setSelectedAccountId(account.id)}>
-                          详情
-                        </Button>
+                        {activePlatform.key !== 'xiaohongshu' && (
+                          <Button size="small" startIcon={<VisibilityOutlinedIcon />} onClick={() => setSelectedAccountId(account.id)}>
+                            详情
+                          </Button>
+                        )}
                         <Button size="small" startIcon={<AutorenewIcon />} onClick={() => void runSync(account.id)} disabled={syncingId === account.id}>
                           同步
                         </Button>
@@ -970,39 +970,41 @@ export function MediaMatrixView({ token, workspaceId, data, onChanged }: Product
           </Section>
         </Grid>
 
-        <Grid size={{ xs: 12, xl: 4 }}>
-          <Section title="账号详情">
-            {selectedAccount ? (
-              <Stack spacing={2}>
-                <Stack direction="row" spacing={1} flexWrap="wrap" useFlexGap>
-                  <Chip label={selectedAccount.platformName} color="primary" />
-                  <Chip label={selectedAccount.group} color="primary" variant="outlined" />
-                  <Chip label={sohuStatusLabel(selectedAccount.healthStatus)} color={sohuStatusColor(selectedAccount.healthStatus)} />
-                  <Chip label={loginMethodLabel(selectedAccount.loginMethod)} variant="outlined" />
+        {activePlatform.key !== 'xiaohongshu' && (
+          <Grid size={{ xs: 12, xl: 4 }}>
+            <Section title="账号详情">
+              {selectedAccount ? (
+                <Stack spacing={2}>
+                  <Stack direction="row" spacing={1} flexWrap="wrap" useFlexGap>
+                    <Chip label={selectedAccount.platformName} color="primary" />
+                    <Chip label={selectedAccount.group} color="primary" variant="outlined" />
+                    <Chip label={sohuStatusLabel(selectedAccount.healthStatus)} color={sohuStatusColor(selectedAccount.healthStatus)} />
+                    <Chip label={loginMethodLabel(selectedAccount.loginMethod)} variant="outlined" />
+                  </Stack>
+                  <Stack spacing={1}>
+                    <InfoRow label="账号" value={`${selectedAccount.name} / ${selectedAccount.externalId || selectedAccount.id}`} />
+                    <InfoRow label="粉丝" value={compactNumber(selectedAccount.followerCount)} />
+                    <InfoRow label="发布阅读" value={compactNumber(selectedAccount.readCount)} />
+                    <InfoRow label="互动率" value={percentValue(selectedAccount.engagementRate)} />
+                    <InfoRow label="最近主页同步" value={selectedAccount.lastProfileSyncedAt} />
+                    <InfoRow label="最近指标同步" value={selectedAccount.lastMetricsSyncedAt} />
+                    <InfoRow label="同步状态" value={selectedAccount.lastSyncStatus ? sohuStatusLabel(selectedAccount.lastSyncStatus) : '-'} />
+                  </Stack>
+                  {selectedAccount.warnings.length > 0 && (
+                    <Alert severity="warning">
+                      {selectedAccount.warnings.join('；')}
+                    </Alert>
+                  )}
+                  <Button startIcon={<AutorenewIcon />} variant="contained" onClick={() => void runSync(selectedAccount.id)} disabled={syncingId === selectedAccount.id}>
+                    创建数据同步任务
+                  </Button>
                 </Stack>
-                <Stack spacing={1}>
-                  <InfoRow label="账号" value={`${selectedAccount.name} / ${selectedAccount.externalId || selectedAccount.id}`} />
-                  <InfoRow label="粉丝" value={compactNumber(selectedAccount.followerCount)} />
-                  <InfoRow label="发布阅读" value={compactNumber(selectedAccount.readCount)} />
-                  <InfoRow label="互动率" value={percentValue(selectedAccount.engagementRate)} />
-                  <InfoRow label="最近主页同步" value={selectedAccount.lastProfileSyncedAt} />
-                  <InfoRow label="最近指标同步" value={selectedAccount.lastMetricsSyncedAt} />
-                  <InfoRow label="同步状态" value={selectedAccount.lastSyncStatus ? sohuStatusLabel(selectedAccount.lastSyncStatus) : '-'} />
-                </Stack>
-                {selectedAccount.warnings.length > 0 && (
-                  <Alert severity="warning">
-                    {selectedAccount.warnings.join('；')}
-                  </Alert>
-                )}
-                <Button startIcon={<AutorenewIcon />} variant="contained" onClick={() => void runSync(selectedAccount.id)} disabled={syncingId === selectedAccount.id}>
-                  创建数据同步任务
-                </Button>
-              </Stack>
-            ) : (
-              <EmptyText>请选择一个媒体号账号</EmptyText>
-            )}
-          </Section>
-        </Grid>
+              ) : (
+                <EmptyText>请选择一个媒体号账号</EmptyText>
+              )}
+            </Section>
+          </Grid>
+        )}
       </Grid>
 
       <Grid container spacing={2}>

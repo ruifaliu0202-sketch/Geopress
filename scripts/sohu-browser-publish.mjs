@@ -6,6 +6,7 @@ await runBrowserPublish({
   platform: 'sohu',
   platformName: '搜狐号',
   publishUrl: process.env.GEOPRESS_SOHU_PUBLISH_URL || 'https://mp.sohu.com/mpfe/v4/',
+  userAgent: process.env.GEOPRESS_SOHU_USER_AGENT || 'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/149.0.7827.102 Safari/537.36',
   loginTextPattern: /登录|扫码|二维码|验证码|手机验证码|账号密码|搜狐/,
   creatorShellPattern: /发布|发文|创作|内容管理|文章管理|作品管理|数据|搜狐号/,
   editorEntryTexts: ['发布', '发文', '写文章', '发布文章', '新建文章', '创作'],

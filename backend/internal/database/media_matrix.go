@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"time"
 
@@ -291,6 +292,106 @@ func (db *DB) ListContentMetrics(ctx context.Context, workspaceID string, accoun
 	return items, rows.Err()
 }
 
+func (db *DB) GetPublishJobForMetrics(ctx context.Context, workspaceID string, jobID string) (model.PublishJob, bool, error) {
+	if db == nil || db.conn == nil {
+		return model.PublishJob{}, false, nil
+	}
+
+	row := db.conn.QueryRowContext(ctx, `
+		SELECT
+			id,
+			workspace_id,
+			COALESCE(schedule_id, ''),
+			COALESCE(content_id, ''),
+			media_account_id,
+			status,
+			scheduled_at,
+			external_url,
+			last_message,
+			attribution_metadata::text
+		FROM publish_jobs
+		WHERE workspace_id = $1
+		  AND id = $2
+	`, workspaceID, jobID)
+
+	var item model.PublishJob
+	var status string
+	var attributionMetadata string
+	if err := row.Scan(
+		&item.ID,
+		&item.WorkspaceID,
+		&item.ScheduleID,
+		&item.ContentID,
+		&item.MediaAccountID,
+		&status,
+		&item.ScheduledAt,
+		&item.ExternalURL,
+		&item.LastMessage,
+		&attributionMetadata,
+	); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return model.PublishJob{}, false, nil
+		}
+		return model.PublishJob{}, false, err
+	}
+	item.Status = model.PublishJobStatus(status)
+	item.AttributionMetadata = decodeAnyMap(attributionMetadata)
+	return item, true, nil
+}
+
+func (db *DB) GetContentForMetrics(ctx context.Context, workspaceID string, contentID string) (model.Content, bool, error) {
+	if db == nil || db.conn == nil {
+		return model.Content{}, false, nil
+	}
+
+	row := db.conn.QueryRowContext(ctx, `
+		SELECT
+			id,
+			workspace_id,
+			COALESCE(knowledge_base_id, ''),
+			COALESCE(attributed_media_account_id, ''),
+			title,
+			summary,
+			body,
+			to_json(keywords)::text,
+			status,
+			author_name,
+			source,
+			metadata::text,
+			updated_at
+		FROM contents
+		WHERE workspace_id = $1
+		  AND id = $2
+	`, workspaceID, contentID)
+
+	var item model.Content
+	var keywords, status, metadata string
+	if err := row.Scan(
+		&item.ID,
+		&item.WorkspaceID,
+		&item.KnowledgeBaseID,
+		&item.AttributedMediaAccountID,
+		&item.Title,
+		&item.Summary,
+		&item.Body,
+		&keywords,
+		&status,
+		&item.Author,
+		&item.Source,
+		&metadata,
+		&item.UpdatedAt,
+	); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return model.Content{}, false, nil
+		}
+		return model.Content{}, false, err
+	}
+	item.Keywords = decodeStringSlice(keywords)
+	item.Status = model.ContentStatus(status)
+	item.AttributionMetadata = decodeAnyMap(metadata)
+	return item, true, nil
+}
+
 func (db *DB) CreateMediaAccountSyncJob(ctx context.Context, item model.MediaAccountSyncJob) (model.MediaAccountSyncJob, error) {
 	if db == nil || db.conn == nil {
 		return item, nil
@@ -431,6 +532,38 @@ func (db *DB) SaveMediaAccountMetricsSyncResult(ctx context.Context, account mod
 	}
 	if err = updateMediaAccountSyncStateTx(ctx, tx, job); err != nil {
 		return err
+	}
+	return tx.Commit()
+}
+
+func (db *DB) SaveContentMetricsSyncResult(ctx context.Context, item model.ContentMetric, job model.MediaAccountSyncJob) error {
+	if db == nil || db.conn == nil {
+		return nil
+	}
+
+	tx, err := db.conn.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer func() {
+		_ = tx.Rollback()
+	}()
+
+	if item.ID != "" {
+		if err = saveContentMetricTx(ctx, tx, item); err != nil {
+			return err
+		}
+	}
+	if err = saveMediaAccountSyncJobTx(ctx, tx, job); err != nil {
+		return err
+	}
+	if err = updateMediaAccountSyncStateTx(ctx, tx, job); err != nil {
+		return err
+	}
+	if item.ID != "" && job.Status == "completed" {
+		if err = updateMediaAccountMetricsSyncedAtTx(ctx, tx, job.WorkspaceID, job.MediaAccountID, item.CapturedAt); err != nil {
+			return err
+		}
 	}
 	return tx.Commit()
 }
@@ -699,6 +832,12 @@ func (db *DB) SaveContentMetric(ctx context.Context, item model.ContentMetric) e
 		return nil
 	}
 
+	return saveContentMetricTx(ctx, db.conn, item)
+}
+
+func saveContentMetricTx(ctx context.Context, execer interface {
+	ExecContext(context.Context, string, ...any) (sql.Result, error)
+}, item model.ContentMetric) error {
 	attributionMetadata, err := json.Marshal(nonNilAnyMap(item.AttributionMetadata))
 	if err != nil {
 		return err
@@ -720,7 +859,7 @@ func (db *DB) SaveContentMetric(ctx context.Context, item model.ContentMetric) e
 		createdAt = capturedAt
 	}
 
-	_, err = db.conn.ExecContext(ctx, `
+	_, err = execer.ExecContext(ctx, `
 		INSERT INTO content_metrics (
 			id,
 			workspace_id,
@@ -763,6 +902,18 @@ func (db *DB) SaveContentMetric(ctx context.Context, item model.ContentMetric) e
 			attribution_metadata = EXCLUDED.attribution_metadata,
 			raw_metrics = EXCLUDED.raw_metrics,
 			updated_at = EXCLUDED.updated_at
+		WHERE
+			CASE content_metrics.attribution_metadata->>'confidence'
+				WHEN 'high' THEN 3
+				WHEN 'medium' THEN 2
+				WHEN 'low' THEN 1
+				ELSE 0
+			END <= CASE EXCLUDED.attribution_metadata->>'confidence'
+				WHEN 'high' THEN 3
+				WHEN 'medium' THEN 2
+				WHEN 'low' THEN 1
+				ELSE 0
+			END
 	`, item.ID,
 		item.WorkspaceID,
 		item.ContentID,
@@ -786,6 +937,23 @@ func (db *DB) SaveContentMetric(ctx context.Context, item model.ContentMetric) e
 		createdAt,
 		time.Now().UTC(),
 	)
+	return err
+}
+
+func updateMediaAccountMetricsSyncedAtTx(ctx context.Context, execer interface {
+	ExecContext(context.Context, string, ...any) (sql.Result, error)
+}, workspaceID string, accountID string, capturedAt time.Time) error {
+	if capturedAt.IsZero() {
+		capturedAt = time.Now().UTC()
+	}
+	_, err := execer.ExecContext(ctx, `
+		UPDATE media_accounts
+		SET
+			last_metrics_synced_at = $3,
+			updated_at = $4
+		WHERE workspace_id = $1
+		  AND id = $2
+	`, workspaceID, accountID, capturedAt, time.Now().UTC())
 	return err
 }
 
